@@ -1,0 +1,118 @@
+@page "/quick-test"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+
+<PageTitle>Quick Test — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Quick Test <span class="text-muted fs-5">/ @(SelectedSource?.Label ?? "no source selected")</span></h1>
+
+@if (SelectedSource is null)
+{
+    <div class="card"><div class="card-body">
+        <p class="text-muted mb-0">No source selected. Add one on the <a href="settings">Settings</a> page.</p>
+    </div></div>
+}
+
+@if (SelectedSource is { } src)
+{
+    <div class="card">
+        <div class="card-body">
+            <div class="card-title mb-3">Probe <code>@(src.InferenceUrl)/v1/completions</code></div>
+            <form @onsubmit="@OnSubmit" @onsubmit:preventDefault="true" class="row g-3">
+                <div class="col-md-8">
+                    <label class="form-label">Prompt</label>
+                    <textarea class="form-control" rows="3" @bind="_prompt">Say hello in one short sentence.</textarea>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Max tokens</label>
+                    <input class="form-control" type="number" min="1" @bind="_maxTokens" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Model (optional)</label>
+                    <input class="form-control" @bind="_model" placeholder="default" />
+                </div>
+                <div class="col-md-12">
+                    <button type="submit" class="btn btn-primary btn-sm" disabled="@_busy">
+                        @(_busy ? "Running…" : "Run probe")
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    @if (_result is not null)
+    {
+        <div class="card mt-3 @( _result.Success ? "status-card" : "status-card status-down" )" style="@(_result.Success ? "border-left-color: var(--green);" : "")">
+            <div class="card-body">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <span class="dot @(_result.Success ? "dot-up" : "dot-down")"></span>
+                    <strong>@(_result.Success ? "Success" : "Failed")</strong>
+                    @if (_result.LatencyMs is { } ms)
+                    {
+                        <span class="text-muted">— @ms ms</span>
+                    }
+                    @if (_result.TokensUsed is { } t)
+                    {
+                        <span class="text-muted">— @t tokens</span>
+                    }
+                </div>
+                @if (!string.IsNullOrEmpty(_result.Text))
+                {
+                    <pre class="probe-output">@_result.Text</pre>
+                }
+                @if (!string.IsNullOrEmpty(_result.Error))
+                {
+                    <div class="text-danger">@_result.Error</div>
+                }
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Inject] private ISourceCatalog Sources { get; set; } = default!;
+    [Inject] private IInferenceProbe Probe { get; set; } = default!;
+    [Inject] private SourceSelection Selection { get; set; } = default!;
+
+    private List<SourceInfo> _all = new();
+    private string _prompt = "Say hello in one short sentence.";
+    private int _maxTokens = 128;
+    private string _model = "";
+    private bool _busy;
+    private InferenceResult? _result;
+
+    private SourceInfo? SelectedSource =>
+        _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _all = (await Sources.GetAllAsync()).ToList();
+    }
+
+    private async Task OnSubmit()
+    {
+        var src = SelectedSource;
+        if (src is null || _busy) return;
+        _busy = true;
+        _result = null;
+        StateHasChanged();
+        try
+        {
+            var req = new InferenceRequest
+            {
+                Prompt = _prompt,
+                MaxTokens = Math.Max(1, _maxTokens),
+                Model = string.IsNullOrWhiteSpace(_model) ? null : _model.Trim(),
+            };
+            _result = await Probe.ProbeAsync(src, req);
+        }
+        catch (Exception ex)
+        {
+            _result = new InferenceResult { Success = false, Error = ex.Message };
+        }
+        _busy = false;
+        StateHasChanged();
+    }
+}

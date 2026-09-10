@@ -1,0 +1,348 @@
+@page "/settings"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+
+<PageTitle>Settings — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Settings</h1>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="card status-card status-down mb-3">
+        <div class="card-body py-2"><span class="dot dot-down"></span> <span class="text-danger">@_error</span></div>
+    </div>
+}
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="card status-card mb-3" style="border-left-color: var(--green);">
+        <div class="card-body py-2"><span class="dot dot-up"></span> @_message</div>
+    </div>
+}
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <div class="card-title">Sources</div>
+            <button class="btn btn-primary btn-sm" @onclick="@StartNewSource">+ Add source</button>
+        </div>
+
+        <table class="table table-sm sources-table">
+            <thead>
+                <tr>
+                    <th>Label</th>
+                    <th>Type</th>
+                    <th>Metrics URL</th>
+                    <th>Interval</th>
+                    <th>Active</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in _sources)
+                {
+                    <tr>
+                        <td>@s.Label</td>
+                        <td>@s.Type</td>
+                        <td class="url-cell">@s.MetricsUrl</td>
+                        <td>@s.ScrapeIntervalSeconds s</td>
+                        <td>
+                            <input type="checkbox" checked="@s.Active" onchange="@(() => ToggleActiveAsync(s))" title="Enable/disable polling" />
+                        </td>
+                        <td class="text-end">
+                            <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditSource(s))">Edit</button>
+                            <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteAsync(s))">Delete</button>
+                        </td>
+                    </tr>
+                }
+                @if (_sources.Count == 0)
+                {
+                    <tr><td colspan="6" class="text-muted">No sources configured.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@if (_editing is not null)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="card-title mb-3">@(_isCreating ? "New source" : "Edit source")</div>
+            <form @onsubmit="@OnSourceSubmit" @onsubmit:preventDefault="true" class="source-form">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Label</label>
+                        <input class="form-control" @bind="_fLabel" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Type</label>
+                        <select class="form-select" @bind="_fType">
+                            <option value="vllm">vLLM (Prometheus)</option>
+                            <option value="ollama">Ollama</option>
+                            <option value="mock">Mock</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Scrape interval (s)</label>
+                        <input class="form-control" type="number" min="1" @bind="_fInterval" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Metrics URL @(TypeIsVllm ? "(/metrics endpoint)" : "ignored")</label>
+                        <input class="form-control" @bind="_fMetricsUrl" placeholder="http://host:9999" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Inference URL (vLLM /v1 or Ollama base)</label>
+                        <input class="form-control" @bind="_fInferenceUrl" placeholder="http://host:9999" />
+                    </div>
+                    @if (TypeIsVllm)
+                    {
+                        <div class="col-md-6">
+                            <label class="form-label">Docker host (optional, for hot-swap)</label>
+                            <input class="form-control" @bind="_fDockerHost" placeholder="tcp://host:2375" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Container name (optional)</label>
+                            <input class="form-control" @bind="_fContainerName" />
+                        </div>
+                    }
+                    <div class="col-md-6">
+                        <label class="form-label">Active</label>
+                        <input type="checkbox" class="form-check-input" @bind="_fActive" />
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button type="submit" class="btn btn-primary btn-sm" disabled="@_busy">@(_busy ? "Saving…" : "Save")</button>
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@CancelEdit">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+<div class="card">
+    <div class="card-body">
+        <div class="card-title mb-3">Preferences</div>
+        <form @onsubmit="@OnConfigSubmit" @onsubmit:preventDefault="true" class="row g-3 config-form">
+            <div class="col-md-3">
+                <label class="form-label">Retention (days)</label>
+                <input class="form-control" type="number" min="1" @bind="_fRetentionDays" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">UI update rate (ms)</label>
+                <input class="form-control" type="number" min="200" step="100" @bind="_fUiRate" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Default history window (min)</label>
+                <input class="form-control" type="number" min="5" @bind="_fHistWindow" />
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="rollups" @bind="_fRollups" />
+                    <label class="form-check-label" for="rollups">Rollups enabled</label>
+                </div>
+            </div>
+            <div class="col-md-12">
+                <button type="submit" class="btn btn-primary btn-sm">Save preferences</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@code {
+    [Inject] private ISourceCatalog Sources { get; set; } = default!;
+    [Inject] private IConfigStore Config { get; set; } = default!;
+
+    private List<SourceInfo> _sources = new();
+    private SourceInfo? _editing;
+    private bool _isCreating;
+    private bool _busy;
+    private string? _error;
+    private string? _message;
+
+    // Source form fields.
+    private string _fLabel = "";
+    private string _fType = "vllm";
+    private string _fMetricsUrl = "";
+    private string _fInferenceUrl = "";
+    private string _fDockerHost = "";
+    private string _fContainerName = "";
+    private int _fInterval = 5;
+    private bool _fActive = true;
+
+    // Config form fields.
+    private int _fRetentionDays = 30;
+    private int _fUiRate = 1000;
+    private int _fHistWindow = 60;
+    private bool _fRollups = true;
+
+    private bool TypeIsVllm => _fType == "vllm";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _fRetentionDays = Config.RetentionDays;
+        _fUiRate = Config.UiUpdateRateMs;
+        _fHistWindow = Config.DefaultHistoryWindowMinutes;
+        _fRollups = Config.RollupsEnabled;
+        await ReloadSourcesAsync();
+    }
+
+    private async Task ReloadSourcesAsync()
+    {
+        try
+        {
+            _sources = (await Sources.GetAllAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not load sources: " + ex.Message;
+        }
+    }
+
+    private void StartNewSource()
+    {
+        _isCreating = true;
+        _editing = new SourceInfo
+        {
+            Id = Guid.NewGuid().ToString(),
+            Type = SourceType.Vllm,
+            ScrapeIntervalSeconds = 5,
+            Active = true,
+            SortOrder = _sources.Count,
+        };
+        _fLabel = "";
+        _fType = "vllm";
+        _fMetricsUrl = "";
+        _fInferenceUrl = "";
+        _fDockerHost = "";
+        _fContainerName = "";
+        _fInterval = 5;
+        _fActive = true;
+        _error = null;
+    }
+
+    private void StartEditSource(SourceInfo s)
+    {
+        _isCreating = false;
+        _editing = s;
+        _fLabel = s.Label;
+        _fType = s.Type.ToStorage();
+        _fMetricsUrl = s.MetricsUrl;
+        _fInferenceUrl = s.InferenceUrl;
+        _fDockerHost = s.DockerHost ?? "";
+        _fContainerName = s.ContainerName ?? "";
+        _fInterval = s.ScrapeIntervalSeconds;
+        _fActive = s.Active;
+        _error = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = null;
+    }
+
+    private SourceType ParsedType => SourceTypeExtensions.FromStorage(_fType);
+
+    private async Task OnSourceSubmit()
+    {
+        await SubmitAsync();
+    }
+
+    private async Task OnConfigSubmit()
+    {
+        await SaveConfigAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_editing is null || _busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_fLabel))
+            {
+                _error = "Label is required.";
+                return;
+            }
+            var info = _editing with
+            {
+                Label = _fLabel.Trim(),
+                Type = ParsedType,
+                MetricsUrl = _fMetricsUrl.Trim(),
+                InferenceUrl = _fInferenceUrl.Trim(),
+                DockerHost = string.IsNullOrWhiteSpace(_fDockerHost) ? null : _fDockerHost.Trim(),
+                ContainerName = string.IsNullOrWhiteSpace(_fContainerName) ? null : _fContainerName.Trim(),
+                ScrapeIntervalSeconds = Math.Max(1, _fInterval),
+                Active = _fActive,
+            };
+
+            if (_isCreating)
+                await Sources.CreateAsync(info);
+            else
+                await Sources.UpdateAsync(info);
+
+            _message = (_isCreating ? "Created " : "Updated ") + info.Label;
+            _editing = null;
+            await ReloadSourcesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleActiveAsync(SourceInfo s)
+    {
+        try
+        {
+            await Sources.UpdateAsync(s with { Active = !s.Active });
+            _message = (s.Active ? "Disabled " : "Enabled ") + s.Label;
+            await ReloadSourcesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "Toggle failed: " + ex.Message;
+        }
+    }
+
+    private async Task DeleteAsync(SourceInfo s)
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm", $"Delete source '{s.Label}'? This removes its settings (history is kept).");
+        if (!ok) return;
+        try
+        {
+            await Sources.DeleteAsync(s.Id);
+            _message = "Deleted " + s.Label;
+            await ReloadSourcesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "Delete failed: " + ex.Message;
+        }
+    }
+
+    private async Task SaveConfigAsync()
+    {
+        _error = null;
+        try
+        {
+            await Config.SetAsync("retention.days", Math.Max(1, _fRetentionDays).ToString());
+            await Config.SetAsync("ui.updateRateMs", Math.Max(200, _fUiRate).ToString());
+            await Config.SetAsync("default.history.windowMinutes", Math.Max(5, _fHistWindow).ToString());
+            await Config.SetAsync("rollups.enabled", _fRollups ? "true" : "false");
+            _message = "Preferences saved.";
+        }
+        catch (Exception ex)
+        {
+            _error = "Saving preferences failed: " + ex.Message;
+        }
+    }
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+}

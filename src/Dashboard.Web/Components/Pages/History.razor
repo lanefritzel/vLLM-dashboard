@@ -1,0 +1,167 @@
+@page "/history"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@implements IDisposable
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+@using Microsoft.JSInterop
+
+<PageTitle>History — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">History</h1>
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    <select class="form-select window-select" onchange="@OnWindowChanged">
+        <option value="1" @selected="@((WindowHours == 1) ? "selected" : null)">Last 1 hour</option>
+        <option value="24" @selected="@((WindowHours == 24) ? "selected" : null)">Last 24 hours</option>
+        <option value="72" @selected="@((WindowHours == 72) ? "selected" : null)">Last 3 days</option>
+        <option value="168" @selected="@((WindowHours == 168) ? "selected" : null)">Last 7 days</option>
+    </select>
+    <span class="text-muted small" id="hist-range">@(RangeText)</span>
+    @if (_loading)
+    {
+        <span class="text-muted">loading…</span>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="card status-card status-down mb-3">
+        <div class="card-body py-2"><span class="dot dot-down"></span> @_error</div>
+    </div>
+}
+
+@if (_summaries.Count > 0)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="card-title mb-3">Summary by model</div>
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Up samples</th>
+                        <th>Total samples</th>
+                        <th>Gen tokens (approx)</th>
+                        <th>Avg TTFT (s)</th>
+                        <th>Avg E2E (s)</th>
+                        <th>Peak KV (%)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in _summaries)
+                    {
+                        <tr>
+                            <td>@s.ModelName</td>
+                            <td>@s.Requests</td>
+                            <td>@s.Samples</td>
+                            <td>@s.TokensGenerated</td>
+                            <td>@(s.AvgTtftSec?.ToString("0.000") ?? "—")</td>
+                            <td>@(s.AvgE2eSec?.ToString("0.000") ?? "—")</td>
+                            <td>@(s.PeakKvPct?.ToString("0.#") ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+<div class="card">
+    <div class="card-body">
+        <div class="card-title">Generation throughput (tok/s)</div>
+        <div class="chart-wrap"><canvas id="hist-gen"></canvas></div>
+        @if (_samples.Count == 0)
+        {
+            <p class="text-muted mt-2">No samples in this window yet — data appears once the live loop has been running.</p>
+        }
+    </div>
+</div>
+
+@code {
+    [Inject] private IMetricsHistory HistoryService { get; set; } = default!;
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    private int _windowHours = 24;
+    private bool _loading = true;
+    private bool _chartReady;
+    private string? _error;
+    private List<HistorySummary> _summaries = new();
+    private List<MetricsSample> _samples = new();
+    private bool _disposed;
+
+    private int WindowHours => _windowHours;
+    private string RangeText
+    {
+        get
+        {
+            var from = DateTime.UtcNow.AddHours(-_windowHours).ToLocalTime();
+            return from.ToString("yyyy-MM-dd HH:mm") + " → now (local)";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _disposed) return;
+        try
+        {
+            await JS.InvokeVoidAsync("chart_create", "hist-gen", new List<Dictionary<string, string>>
+            {
+                new() { ["key"] = "gen", ["label"] = "generation tok/s", ["color"] = "#4c8dff" },
+            }, new { });
+            _chartReady = true;
+        }
+        catch { /* JS not ready; will retry on next render */ }
+        await ReloadAsync();
+    }
+
+    private async Task OnWindowChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var h) && h is 1 or 24 or 72 or 168)
+            _windowHours = h;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (_disposed) return;
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var to = DateTime.UtcNow;
+            var from = to.AddHours(-_windowHours);
+
+            var samplesTask = HistoryService.GetAsync(from, to, null, null);
+            var summariesTask = HistoryService.SummarizeAsync(from, to, null, null);
+
+            _samples = (await samplesTask).ToList();
+            _summaries = (await summariesTask).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not load history: " + ex.Message;
+        }
+        _loading = false;
+        if (_chartReady)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("chart_reset", "hist-gen");
+                var cap = 1000;
+                var points = _samples.Count > cap ? _samples.Skip(_samples.Count - cap) : _samples;
+                foreach (var s in points)
+                {
+                    await JS.InvokeVoidAsync("chart_push", "hist-gen",
+                        s.Ts.ToLocalTime().ToString("MM-dd HH:mm"),
+                        new Dictionary<string, double?> { ["gen"] = s.GenTps }, cap);
+                }
+            }
+            catch { /* chart may not exist yet */ }
+        }
+        StateHasChanged();
+    }
+
+    public void Dispose() => _disposed = true;
+}

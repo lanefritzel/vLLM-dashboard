@@ -1,0 +1,13 @@
+<div class="user-menu">
+    <span class="user-email" title="@Email">@Email</span>
+    <form method="post" action="Account/Logout" class="d-inline">
+        <AntiforgeryToken />
+        <input type="hidden" name="ReturnUrl" value="/" />
+        <button type="submit" class="btn btn-sm btn-outline">Sign out</button>
+    </form>
+</div>
+
+@code {
+    [Parameter]
+    public string? Email { get; set; }
+}

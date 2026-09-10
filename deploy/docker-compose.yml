@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-dashboard}
+      POSTGRES_USER: ${DB_USER:-dashboard}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dashboard}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dashboard} -d ${DB_NAME:-dashboard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Internal only: not published.
+    expose:
+      - "5432"
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${DB_NAME:-dashboard};Username=${DB_USER:-dashboard};Password=${DB_PASSWORD:-dashboard}"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      ASPNETCORE_URLS: "http://+:8080"
+      DATAPROTECTION_KEYS_DIR: /data/dataprotection
+      DOCKER_HOST: ${DOCKER_HOST:-}
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    volumes:
+      - dataprotection:/data
+
+volumes:
+  pgdata:
+  dataprotection:

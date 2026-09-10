@@ -1,0 +1,56 @@
+@rendermode InteractiveServer
+@inject IJSRuntime JS
+@inject UserManager<ApplicationUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<select id="theme-switcher" class="theme-switcher" onchange="@OnThemeChanged" title="Theme">
+    <option value="dark" @selected="@Selected("dark")">Dark</option>
+    <option value="light" @selected="@Selected("light")">Light</option>
+    <option value="system" @selected="@Selected("system")">System</option>
+</select>
+
+@code {
+    private string Current { get; set; } = "dark";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = await UserManager.GetUserAsync(state.User);
+        if (user is not null && !string.IsNullOrEmpty(user.ThemeMode))
+            Current = user.ThemeMode;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            await JS.InvokeAsync<string>("window.applyTheme", Current);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task OnThemeChanged(ChangeEventArgs e)
+    {
+        var mode = e.Value?.ToString() ?? "dark";
+        Current = mode;
+        try
+        {
+            await JS.InvokeAsync<string>("window.applyTheme", mode);
+            var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var user = await UserManager.GetUserAsync(state.User);
+            if (user is not null)
+            {
+                user.ThemeMode = mode;
+                await UserManager.UpdateAsync(user);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private string? Selected(string mode) => Current == mode ? "selected" : null;
+}

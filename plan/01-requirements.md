@@ -28,6 +28,7 @@ llama-swap's routing role. This is an MVP; llama-swap stays for now.
   isolation of metrics, models, launch spec.
 
 ### F2. Historical usage (PostgreSQL)
+- Should be hosted in its own container, not filesystem
 - Persist every raw sample with timestamp, source, model.
 - History page: date-range, per source/model, throughput + latency percentiles.
 - Retention: raw samples 30 days (configurable), then permanent hourly rollups.

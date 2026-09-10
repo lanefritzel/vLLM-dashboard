@@ -1,0 +1,26 @@
+using Dashboard.Core.Models;
+
+namespace Dashboard.Core.Abstractions;
+
+public sealed record SwapStep
+{
+    public string Step { get; init; } = "";
+    public bool Complete { get; init; }
+    public string? Message { get; init; }
+}
+
+/// <summary>Hot-swap the backend container for a source to a different model.</summary>
+public interface IDockerOrchestrator
+{
+    Task<InferenceResult> SwapModelAsync(
+        SourceInfo source, ModelInfo model, LaunchSpec spec,
+        IAsyncActionProgress progress, CancellationToken ct = default);
+
+    Task<bool> IsDockerHostConfiguredAsync(SourceInfo source, CancellationToken ct = default);
+}
+
+/// <summary>Per-step progress reporting for hot-swap.</summary>
+public interface IAsyncActionProgress
+{
+    Task ReportAsync(SwapStep step);
+}

@@ -7,7 +7,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ---
 
-## M1 — Skeleton: solution, auth, theming, nav  `[ ]`
+## M1 — Skeleton: solution, auth, theming, nav  `[x]`
 
 Tasks:
 1. `dotnet new sln -n Dashboard`; projects: `src/Dashboard.Core` (classlib,
@@ -40,7 +40,7 @@ theme persists after refresh; `docker compose up` from clean volumes).
 
 ---
 
-## M2 — vLLM live: scrape → aggregate → SignalR → charts  `[ ]`
+## M2 — vLLM live: scrape → aggregate → SignalR → charts  `[x]`
 
 Tasks:
 1. `PrometheusParser` (Core or Infrastructure? → **Infrastructure/Scrapers**,
@@ -74,7 +74,7 @@ switch to a bad URL → red state, no crash; `dotnet test` passes.
 
 ---
 
-## M3 — Persistence: Postgres samples, History page, retention  `[ ]`
+## M3 — Persistence: Postgres samples, History page, retention  `[x]`
 
 Tasks:
 1. EF models + migrations: `Sources`, `Models`, `LaunchSpecs`, `MetricsSamples`
@@ -105,7 +105,7 @@ polling rebinds without restart; `dotnet test` green (repository tests, rollup m
 
 ---
 
-## M4 — Models + hot-swap (Docker)  `[ ]`
+## M4 — Models + hot-swap (Docker)  `[x]`
 
 Tasks:
 1. `ModelCatalogService` (registry CRUD + single-active invariant) + Models page
@@ -133,7 +133,7 @@ recorded HTTP fixtures; swap UI shows steps. `dotnet test` green.
 
 ---
 
-## M5 — Ollama scaffold  `[ ]`
+## M5 — Ollama scaffold  `[x]`
 
 Tasks:
 1. `OllamaSource` (`/api/version`, `/api/tags`, `/api/ps`) → Ollama-shaped
@@ -150,7 +150,7 @@ probe returns text; `dotnet test` green (Ollama parser with fixtures).
 
 ---
 
-## M6 — Packaging, polish, handoff  `[ ]`
+## M6 — Packaging, polish, handoff  `[~]`
 
 Tasks:
 1. `Dockerfile` hardening: non-root, healthcheck (`/healthz` app endpoint),

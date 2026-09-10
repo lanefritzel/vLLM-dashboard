@@ -1,0 +1,116 @@
+﻿@page "/Account/Register"
+
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Identity
+@using Dashboard.Infrastructure.Identity
+
+@inject UserManager<ApplicationUser> UserManager
+@inject RoleManager<IdentityRole> RoleManager
+@inject SignInManager<ApplicationUser> SignInManager
+@inject ILogger<Register> Logger
+@inject IdentityRedirectManager RedirectManager
+
+<PageTitle>Register</PageTitle>
+
+<div class="auth-page">
+    <div class="auth-card">
+        <h1 class="auth-title">vLLM Dashboard</h1>
+        <h2>Create your account</h2>
+        <StatusMessage Message="@Message" />
+        <EditForm Model="Input" method="post" OnValidSubmit="RegisterUser" FormName="register">
+            <DataAnnotationsValidator />
+            <ValidationSummary class="text-danger" role="alert" />
+            <div class="form-floating mb-3">
+                <InputText @bind-Value="Input.Email" id="Input.Email" class="form-control" autocomplete="username" aria-required="true" placeholder="name@example.com" />
+                <label for="Input.Email">Email</label>
+                <ValidationMessage For="() => Input.Email" class="text-danger" />
+            </div>
+            <div class="form-floating mb-3">
+                <InputText type="password" @bind-Value="Input.Password" id="Input.Password" class="form-control" autocomplete="new-password" aria-required="true" placeholder="password" />
+                <label for="Input.Password">Password</label>
+                <ValidationMessage For="() => Input.Password" class="text-danger" />
+            </div>
+            <div class="form-floating mb-3">
+                <InputText type="password" @bind-Value="Input.ConfirmPassword" id="Input.ConfirmPassword" class="form-control" autocomplete="new-password" aria-required="true" placeholder="password" />
+                <label for="Input.ConfirmPassword">Confirm Password</label>
+                <ValidationMessage For="() => Input.ConfirmPassword" class="text-danger" />
+            </div>
+            <button type="submit" class="w-100 btn btn-lg btn-primary">Register</button>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private IEnumerable<IdentityError>? identityErrors;
+
+    [SupplyParameterFromForm]
+    private InputModel Input { get; set; } = default!;
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private string? Message => identityErrors is null ? null : $"Error: {string.Join(", ", identityErrors.Select(error => error.Description))}";
+
+    protected override void OnInitialized()
+    {
+        Input ??= new();
+    }
+
+    public async Task RegisterUser(EditContext editContext)
+    {
+        var existingCount = await UserManager.Users.CountAsync();
+        var isFirstUser = existingCount == 0;
+
+        var user = new ApplicationUser
+        {
+            UserName = Input.Email,
+            Email = Input.Email,
+            Status = UserStatus.Pending,
+            ThemeMode = "dark"
+        };
+
+        var result = await UserManager.CreateAsync(user, Input.Password);
+
+        if (!result.Succeeded)
+        {
+            identityErrors = result.Errors;
+            return;
+        }
+
+        Logger.LogInformation("User created a new account with password.");
+
+        if (isFirstUser)
+        {
+            var roleExists = await RoleManager.FindByNameAsync("admin") is not null;
+            if (!roleExists)
+                await RoleManager.CreateAsync(new IdentityRole("admin"));
+
+            user.Status = UserStatus.Active;
+            await UserManager.AddToRoleAsync(user, "admin");
+        }
+
+        await UserManager.UpdateAsync(user);
+
+        await SignInManager.SignInAsync(user, isPersistent: false);
+        RedirectManager.RedirectTo(ReturnUrl);
+    }
+
+    private sealed class InputModel
+    {
+        [Required]
+        [EmailAddress]
+        [Display(Name = "Email")]
+        public string Email { get; set; } = "";
+
+        [Required]
+        [StringLength(100, ErrorMessage = "The {0} must be at least {2} and at max {1} characters long.", MinimumLength = 6)]
+        [DataType(DataType.Password)]
+        [Display(Name = "Password")]
+        public string Password { get; set; } = "";
+
+        [DataType(DataType.Password)]
+        [Display(Name = "Confirm password")]
+        [Compare("Password", ErrorMessage = "The password and confirmation password do not match.")]
+        public string ConfirmPassword { get; set; } = "";
+    }
+}

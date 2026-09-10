@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "http://localhost:8080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ConnectionStrings__DefaultConnection": "Host=localhost;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
+      }
+    }
+  }
+}

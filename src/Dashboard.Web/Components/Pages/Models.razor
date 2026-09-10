@@ -1,0 +1,400 @@
+@page "/models"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@implements IDisposable
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+
+<PageTitle>Models — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Models <span class="text-muted fs-5">/ @(SelectedSource?.Label ?? "no source selected")</span></h1>
+
+@if (SelectedSource is null)
+{
+    <div class="card"><div class="card-body">
+        <p class="text-muted mb-0">No source selected. Add one on the <a href="settings">Settings</a> page.</p>
+    </div></div>
+}
+
+@if (SelectedSource is { } src)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+                <div class="card-title">Model registry</div>
+                <button class="btn btn-primary btn-sm" @onclick="@StartNewModel">+ Add model</button>
+            </div>
+            <table class="table table-sm">
+                <thead>
+                    <tr><th>Name</th><th>Display name</th><th>Swap args</th><th>Active</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var m in _models)
+                    {
+                        <tr>
+                            <td>@m.Name</td>
+                            <td>@(m.DisplayName ?? "—")</td>
+                            <td>@(m.SwapArgs ?? m.Name)</td>
+                            <td>
+                                @if (m.IsActive)
+                                {
+                                    <span class="chip chip-active">active</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditModel(m))">Edit</button>
+                                @if (!m.IsActive)
+                                {
+                                    <button class="btn btn-outline btn-sm" disabled="@(_busyModelId != null)"
+                                            @onclick="@(() => ActivateAsync(m))">Activate</button>
+                                    <button class="btn btn-primary btn-sm" disabled="@(_busyModelId != null)"
+                                            @onclick="@(() => SwapAsync(m))">Hot-swap</button>
+                                }
+                                <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteModelAsync(m))">Delete</button>
+                            </td>
+                        </tr>
+                    }
+                    @if (_models.Count == 0)
+                    {
+                        <tr><td colspan="5" class="text-muted">No models registered for this source.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @if (_editingModel is not null)
+    {
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="card-title mb-3">@(_isCreatingModel ? "New model" : "Edit model")</div>
+                <form @onsubmit="@OnModelSubmit" @onsubmit:preventDefault="true" class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Name (served name / id)</label>
+                        <input class="form-control" @bind="_fModelName" placeholder="qwen3.8-vllm" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Display name</label>
+                        <input class="form-control" @bind="_fModelDisplay" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Swap args (optional override)</label>
+                        <input class="form-control" @bind="_fModelSwapArgs" placeholder="(default: same as name)" />
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label">
+                            <input type="checkbox" class="form-check-input" @bind="_fModelActive" /> set active on save
+                        </label>
+                    </div>
+                    <div class="col-md-12">
+                        <button type="submit" class="btn btn-primary btn-sm" disabled="@(_busyModelId != null)">Save</button>
+                        <button type="button" class="btn btn-secondary btn-sm" @onclick="@CancelEditModel">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    }
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="card-title mb-1">Docker launch spec</div>
+            <p class="text-muted small">
+                Used for hot-swap: the container is recreated from this spec with the model substituted into
+                the <code>{model}</code> placeholder.
+            </p>
+            <form @onsubmit="@OnLaunchSubmit" @onsubmit:preventDefault="true" class="row g-3">
+                <div class="col-md-5">
+                    <label class="form-label">Docker host (from source: @(src.DockerHost ?? "not set"))</label>
+                    <input class="form-control" @bind="_fLaunchHost" placeholder="tcp://host:2375" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Container name</label>
+                    <input class="form-control" @bind="_fLaunchContainer" placeholder="(default: source label)" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Image</label>
+                    <input class="form-control" @bind="_fLaunchImage" placeholder="vllm/vllm-openai:latest" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Model arg template</label>
+                    <input class="form-control" @bind="_fLaunchTemplate" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Extra run args</label>
+                    <input class="form-control" @bind="_fLaunchExtra" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">GPU options</label>
+                    <input class="form-control" @bind="_fLaunchGpu" placeholder="all" />
+                </div>
+                <div class="col-md-12">
+                    <button type="submit" class="btn btn-primary btn-sm" disabled="@(_busyLaunch)">Save launch spec</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    @if (_swapTarget is not null)
+    {
+        <div class="card mb-4 status-card" style="border-left-color: var(--warn);">
+            <div class="card-body">
+                <div class="card-title mb-2">Hot-swap → @_swapTarget.Name</div>
+                @foreach (var step in _swapSteps)
+                {
+                    <div class="swap-step">
+                        <span class="@(step.Complete ? "dot dot-up" : "dot dot-off")"></span>
+                        <strong>@step.Step</strong>
+                        <span class="text-muted">@step.Message</span>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Inject] private ISourceCatalog Sources { get; set; } = default!;
+    [Inject] private IModelCatalog ModelCatalog { get; set; } = default!;
+    [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
+    [Inject] private IDockerOrchestrator Orchestrator { get; set; } = default!;
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+    [Inject] private SourceSelection Selection { get; set; } = default!;
+
+    private List<SourceInfo> _all = new();
+    private List<ModelInfo> _models = new();
+    private ModelInfo? _editingModel;
+    private bool _isCreatingModel;
+    private string? _busyModelId;
+    private ModelInfo? _swapTarget;
+    private List<SwapStep> _swapSteps = new();
+    private LaunchSpec? _launch;
+    private bool _busyLaunch;
+    private bool _disposed;
+
+    // Model form.
+    private string _fModelName = "";
+    private string _fModelDisplay = "";
+    private string _fModelSwapArgs = "";
+    private bool _fModelActive;
+
+    // Launch spec form.
+    private string _fLaunchHost = "";
+    private string _fLaunchContainer = "";
+    private string _fLaunchImage = "";
+    private string _fLaunchTemplate = "--model {model}";
+    private string _fLaunchExtra = "";
+    private string _fLaunchGpu = "";
+
+    private SourceInfo? SelectedSource =>
+        _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Selection.Changed += OnSelectionChanged;
+        await ReloadAsync();
+    }
+
+    private void OnSelectionChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await ReloadAsync();
+        });
+
+    private async Task ReloadAsync()
+    {
+        try
+        {
+            _all = (await Sources.GetAllAsync()).ToList();
+            var src = SelectedSource;
+            _models = src is null ? new List<ModelInfo>() : (await ModelCatalog.GetBySourceAsync(src.Id)).ToList();
+            if (src is not null)
+            {
+                var spec = await LaunchSpecs.GetBySourceAsync(src.Id);
+                _launch = spec;
+                _fLaunchHost = src.DockerHost ?? "";
+                _fLaunchContainer = src.ContainerName ?? "";
+                _fLaunchImage = spec?.Image ?? "";
+                _fLaunchTemplate = spec?.ModelArgTemplate ?? "--model {model}";
+                _fLaunchExtra = spec?.ExtraRunArgs ?? "";
+                _fLaunchGpu = spec?.GpuOptions ?? "";
+            }
+        }
+        catch
+        {
+            // leave whatever we have; next selection change retries
+        }
+        StateHasChanged();
+    }
+
+    private void StartNewModel()
+    {
+        _isCreatingModel = true;
+        _editingModel = new ModelInfo { SourceId = SelectedSource!.Id, SortOrder = _models.Count };
+        _fModelName = "";
+        _fModelDisplay = "";
+        _fModelSwapArgs = "";
+        _fModelActive = _models.Count == 0;
+    }
+
+    private void StartEditModel(ModelInfo m)
+    {
+        _isCreatingModel = false;
+        _editingModel = m;
+        _fModelName = m.Name;
+        _fModelDisplay = m.DisplayName ?? "";
+        _fModelSwapArgs = m.SwapArgs ?? "";
+        _fModelActive = m.IsActive;
+    }
+
+    private void CancelEditModel() => _editingModel = null;
+
+    private async Task OnModelSubmit()
+    {
+        if (_editingModel is null) return;
+        if (string.IsNullOrWhiteSpace(_fModelName)) return;
+        try
+        {
+            var model = _editingModel with
+            {
+                Name = _fModelName.Trim(),
+                DisplayName = string.IsNullOrWhiteSpace(_fModelDisplay) ? null : _fModelDisplay.Trim(),
+                SwapArgs = string.IsNullOrWhiteSpace(_fModelSwapArgs) ? null : _fModelSwapArgs.Trim(),
+            };
+            if (_isCreatingModel)
+                await ModelCatalog.CreateAsync(model with { IsActive = _fModelActive });
+            else
+                await ModelCatalog.UpdateAsync(model with { IsActive = _fModelActive });
+            _editingModel = null;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            await AlertAsync("Save failed: " + ex.Message);
+        }
+    }
+
+    private async Task ActivateAsync(ModelInfo m)
+    {
+        try
+        {
+            await ModelCatalog.ActivateAsync(m.Id);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            await AlertAsync("Activate failed: " + ex.Message);
+        }
+    }
+
+    private async Task DeleteModelAsync(ModelInfo m)
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm", $"Delete model '{m.Name}'?");
+        if (!ok) return;
+        try
+        {
+            await ModelCatalog.DeleteAsync(m.Id);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            await AlertAsync("Delete failed: " + ex.Message);
+        }
+    }
+
+    private async Task OnLaunchSubmit()
+    {
+        var selectedSource = SelectedSource;
+        if (selectedSource is null || _busyLaunch) return;
+        _busyLaunch = true;
+        try
+        {
+            // Persist docker host / container name on the source, and the spec fields.
+            var src = selectedSource with
+            {
+                DockerHost = string.IsNullOrWhiteSpace(_fLaunchHost) ? null : _fLaunchHost.Trim(),
+                ContainerName = string.IsNullOrWhiteSpace(_fLaunchContainer) ? null : _fLaunchContainer.Trim(),
+            };
+            await Sources.UpdateAsync(src);
+
+            var baseLaunch = _launch ?? new LaunchSpec();
+            var spec = baseLaunch with
+            {
+                Id = string.IsNullOrWhiteSpace(baseLaunch.Id) ? Guid.NewGuid().ToString() : baseLaunch.Id,
+                SourceId = selectedSource.Id,
+                Image = _fLaunchImage.Trim(),
+                ModelArgTemplate = string.IsNullOrWhiteSpace(_fLaunchTemplate) ? "--model {model}" : _fLaunchTemplate.Trim(),
+                ExtraRunArgs = string.IsNullOrWhiteSpace(_fLaunchExtra) ? null : _fLaunchExtra.Trim(),
+                GpuOptions = string.IsNullOrWhiteSpace(_fLaunchGpu) ? null : _fLaunchGpu.Trim(),
+            };
+            await LaunchSpecs.SaveAsync(spec);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            await AlertAsync("Save launch spec failed: " + ex.Message);
+        }
+        finally
+        {
+            _busyLaunch = false;
+        }
+    }
+
+    private async Task SwapAsync(ModelInfo m)
+    {
+        var src = SelectedSource;
+        if (src is null || _busyModelId is not null) return;
+        var spec = await LaunchSpecs.GetBySourceAsync(src.Id);
+        if (spec is null || string.IsNullOrWhiteSpace(spec.Image))
+        {
+            await AlertAsync("Save the Docker launch spec (image) before hot-swapping.");
+            return;
+        }
+        var ok = await JS.InvokeAsync<bool>("confirm",
+            $"Hot-swap '{src.Label}' to model '{m.Name}'? The backend container will be recreated.");
+        if (!ok) return;
+
+        _busyModelId = m.Id;
+        _swapTarget = m;
+        _swapSteps = new List<SwapStep>();
+        StateHasChanged();
+
+        var progress = new SwapProgress(ReportSwapStep);
+        var result = await Orchestrator.SwapModelAsync(src, m, spec, progress);
+
+        if (!result.Success)
+            await AlertAsync("Hot-swap failed: " + result.Error);
+
+        _busyModelId = null;
+        await ReloadAsync();
+    }
+
+    private async Task AlertAsync(string message)
+    {
+        try { await JS.InvokeVoidAsync("alert", message); } catch { }
+    }
+
+    private Task ReportSwapStep(SwapStep step) => InvokeAsync(() =>
+    {
+        _swapSteps.Add(step);
+        StateHasChanged();
+    });
+
+    private sealed class SwapProgress : IAsyncActionProgress
+    {
+        private readonly Func<SwapStep, Task> _report;
+        public SwapProgress(Func<SwapStep, Task> report) => _report = report;
+        public Task ReportAsync(SwapStep step) => _report(step);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Selection.Changed -= OnSelectionChanged;
+    }
+}

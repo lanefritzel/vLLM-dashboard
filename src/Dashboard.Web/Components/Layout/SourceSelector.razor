@@ -1,0 +1,85 @@
+@rendermode InteractiveServer
+@implements IDisposable
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+@inject ISourceCatalog Sources
+@inject IConfigStore Config
+@inject SourceSelection Selection
+
+<select class="source-selector"
+        onchange="@OnSourceChanged"
+        title="Select which source to monitor"
+        @disabled="Items.Count == 0">
+    @if (Loading)
+    {
+        <option>Loading…</option>
+    }
+    else if (Items.Count == 0)
+    {
+        <option>No sources — add one in Settings</option>
+    }
+    else
+    {
+        @foreach (var s in Items)
+        {
+            <option value="@s.Id" @selected="@((s.Id == Selection.CurrentSourceId) ? "selected" : null)">@s.Label</option>
+        }
+    }
+</select>
+
+@code {
+    private bool _loading = true;
+    private List<SourceInfo> _items = new();
+    private bool _disposed;
+
+    private bool Loading => _loading;
+    private IReadOnlyList<SourceInfo> Items => _items;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Config.Changed += OnChanged;
+        Selection.Changed += OnChanged;
+        await RefreshAsync();
+    }
+
+    private void OnChanged(object? sender, EventArgs e)
+    {
+        if (!_disposed)
+            _ = RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            var all = (await Sources.GetAllAsync()).ToList();
+            _items = all;
+            var current = Selection.CurrentSourceId;
+            var active = all.Where(s => s.Active).ToList();
+            if (current is null || !all.Any(s => s.Id == current))
+            {
+                var def = active.FirstOrDefault() ?? all.FirstOrDefault();
+                Selection.SetCurrent(def?.Id);
+            }
+        }
+        catch
+        {
+            _items = new List<SourceInfo>();
+        }
+        _loading = false;
+        try { await InvokeAsync(StateHasChanged); } catch { }
+    }
+
+    private Task OnSourceChanged(ChangeEventArgs e)
+    {
+        Selection.SetCurrent(e.Value?.ToString());
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Config.Changed -= OnChanged;
+        Selection.Changed -= OnChanged;
+    }
+}

@@ -1,0 +1,54 @@
+﻿@inherits LayoutComponentBase
+
+<AuthorizeView>
+    <Authorized Context="user">
+        <div class="app-shell">
+            <header class="app-header">
+                <div class="brand">
+                    <span class="brand-logo">◆</span>
+                    <span class="brand-name">vLLM Dashboard</span>
+                </div>
+                <div class="header-right">
+                    <SourceSelector />
+                    <ThemeSwitcher />
+                    <UserMenu Email="@(user.User.Identity?.Name)" />
+                </div>
+            </header>
+            <div class="app-body">
+                <nav class="app-nav">
+                    <NavMenu />
+                </nav>
+                <main class="app-main">
+                    <article class="content">
+                        @Body
+                    </article>
+                </main>
+            </div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="app-shell">
+            <header class="app-header">
+                <div class="brand">
+                    <span class="brand-logo">◆</span>
+                    <span class="brand-name">vLLM Dashboard</span>
+                </div>
+            </header>
+            <div class="app-body">
+                <main class="app-main">
+                    <article class="content">
+                        @Body
+                    </article>
+                </main>
+            </div>
+        </div>
+    </NotAuthorized>
+</AuthorizeView>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">✕</span>
+</div>
+
+
