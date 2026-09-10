@@ -10,6 +10,11 @@ your tools (OpenWebUI, opencode, any OpenAI SDK client) talk to directly, which 
 the backend container to the right model on demand, unloads it when idle to free the
 GPU, and brings it back automatically when the dashboard restarts.
 
+> **GPU support:** hot-swap has been built and live-tested against an **Intel GPU**
+> host (raw `--device` passthrough, e.g. `/dev/dri`). An NVIDIA code path exists
+> (device requests via the `nvidia-container-runtime`) but hasn't been exercised
+> against real NVIDIA hardware yet — treat it as untested, not verified.
+
 ## Features
 
 - **Live monitoring** — requests running/waiting, KV cache usage, throughput,
@@ -127,7 +132,3 @@ given source, that source's Docker host needs its Engine API reachable from the
 dashboard container (e.g. `tcp://<host>:2375`, or `2376` with TLS). This is
 configured per-source in the Settings page, not globally. Sources you only want to
 monitor (no swapping) don't need this at all.
-
-## Source
-
-[github.com/lanefritzel/vLLM-dashboard](https://github.com/lanefritzel/vLLM-dashboard)
