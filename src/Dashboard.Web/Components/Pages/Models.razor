@@ -21,12 +21,12 @@
     <div class="card mb-4">
         <div class="card-body">
             <div class="d-flex align-items-center justify-content-between mb-3">
-                <div class="card-title">Model registry</div>
+                <div class="card-title">Models</div>
                 <button class="btn btn-primary btn-sm" @onclick="@StartNewModel">+ Add model</button>
             </div>
             <table class="table table-sm">
                 <thead>
-                    <tr><th>Name</th><th>Display name</th><th>Swap args</th><th>Active</th><th></th></tr>
+                    <tr><th>Name</th><th>Display name</th><th>Source</th><th>Path / repo</th><th>Active</th><th></th></tr>
                 </thead>
                 <tbody>
                     @foreach (var m in _models)
@@ -34,7 +34,8 @@
                         <tr>
                             <td>@m.Name</td>
                             <td>@(m.DisplayName ?? "—")</td>
-                            <td>@(m.SwapArgs ?? m.Name)</td>
+                            <td>@(m.ModelSource == ModelSource.HuggingFace ? "Hugging Face" : "Local path")</td>
+                            <td class="url-cell">@m.ModelPathOrRepoId</td>
                             <td>
                                 @if (m.IsActive)
                                 {
@@ -60,7 +61,7 @@
                     }
                     @if (_models.Count == 0)
                     {
-                        <tr><td colspan="5" class="text-muted">No models registered for this source.</td></tr>
+                        <tr><td colspan="6" class="text-muted">No models registered for this source.</td></tr>
                     }
                 </tbody>
             </table>
@@ -69,10 +70,28 @@
 
     @if (_editingModel is not null)
     {
-        <div class="card mb-4">
-            <div class="card-body">
-                <div class="card-title mb-3">@(_isCreatingModel ? "New model" : "Edit model")</div>
+        <div class="modal-overlay" @onclick="@CancelEditModel">
+            <div class="modal-dialog-custom" @onclick:stopPropagation="true">
+                <div class="d-flex align-items-center justify-content-between mb-1">
+                    <div class="card-title mb-0">@(_isCreatingModel ? "New model" : "Edit model")</div>
+                    <button type="button" class="modal-close-btn" @onclick="@CancelEditModel" aria-label="Close">✕</button>
+                </div>
+                <p class="text-muted small">
+                    Model path/repo id must be in Hugging Face format. Models downloaded via
+                    <strong>Ollama</strong> are stored in a different, incompatible format (content-addressed
+                    GGUF blobs, not a Hugging Face-style repo) and can't be run through this feature —
+                    use <code>llama-swap</code> for those instead.
+                </p>
                 <form @onsubmit="@OnModelSubmit" @onsubmit:preventDefault="true" class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Server</label>
+                        <select class="form-select" @bind="_fModelSourceId">
+                            @foreach (var s in _all)
+                            {
+                                <option value="@s.Id">@s.Label</option>
+                            }
+                        </select>
+                    </div>
                     <div class="col-md-4">
                         <label class="form-label">Name (served name / id)</label>
                         <input class="form-control" @bind="_fModelName" placeholder="qwen3.8-vllm" />
@@ -82,14 +101,65 @@
                         <input class="form-control" @bind="_fModelDisplay" />
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">Swap args (optional override)</label>
-                        <input class="form-control" @bind="_fModelSwapArgs" placeholder="(default: same as name)" />
+                        <label class="form-label">Image override <span class="text-muted">(optional)</span></label>
+                        <input class="form-control" @bind="_fModelImageOverride" placeholder="(use server default)" />
                     </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Model source</label>
+                        <select class="form-select" @bind="_fModelSource">
+                            <option value="@ModelSource.HuggingFace">Hugging Face repo</option>
+                            <option value="@ModelSource.LocalPath">Local path</option>
+                        </select>
+                    </div>
+                    @if (_fModelSource == ModelSource.HuggingFace)
+                    {
+                        <div class="col-md-9">
+                            <label class="form-label">Hugging Face repo id</label>
+                            <input class="form-control" @bind="_fModelPathOrRepoId" placeholder="Qwen/Qwen2.5-7B-Instruct" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="col-md-9">
+                            <label class="form-label">Weights folder (on the Docker host)</label>
+                            <input class="form-control" @bind="_fModelPathOrRepoId" placeholder="/media/external6tb/llm-models/hf-cache/Qwen3.8-27B-INT4" />
+                            <div class="form-text">Mounted automatically — the container path and --model value are derived for you.</div>
+                        </div>
+                    }
                     <div class="col-md-12">
                         <label class="form-label">
                             <input type="checkbox" class="form-check-input" @bind="_fModelActive" /> set active on save
                         </label>
                     </div>
+
+                    <div class="col-md-12">
+                        <div class="card-title mb-2">Model options</div>
+                        @foreach (var group in VllmOptionCatalog.ByGroup())
+                        {
+                            <details class="mb-2" open>
+                                <summary style="cursor:pointer">@GroupLabel(group.Key)</summary>
+                                <div class="row g-2 mt-1">
+                                    @foreach (var opt in group.Where(o => o.Tier == VllmOptionTier.Common))
+                                    {
+                                        @RenderOption(opt)
+                                    }
+                                </div>
+                                @if (group.Any(o => o.Tier == VllmOptionTier.Advanced))
+                                {
+                                    <details class="mt-1">
+                                        <summary class="text-muted" style="cursor:pointer">Advanced</summary>
+                                        <div class="row g-2 mt-1">
+                                            @foreach (var opt in group.Where(o => o.Tier == VllmOptionTier.Advanced))
+                                            {
+                                                @RenderOption(opt)
+                                            }
+                                        </div>
+                                    </details>
+                                }
+                            </details>
+                        }
+                    </div>
+
                     <div class="col-md-12">
                         <button type="submit" class="btn btn-primary btn-sm" disabled="@(_busyModelId != null)">Save</button>
                         <button type="button" class="btn btn-secondary btn-sm" @onclick="@CancelEditModel">Cancel</button>
@@ -98,45 +168,6 @@
             </div>
         </div>
     }
-
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="card-title mb-1">Docker launch spec</div>
-            <p class="text-muted small">
-                Used for hot-swap: the container is recreated from this spec with the model substituted into
-                the <code>{model}</code> placeholder.
-            </p>
-            <form @onsubmit="@OnLaunchSubmit" @onsubmit:preventDefault="true" class="row g-3">
-                <div class="col-md-5">
-                    <label class="form-label">Docker host (from source: @(src.DockerHost ?? "not set"))</label>
-                    <input class="form-control" @bind="_fLaunchHost" placeholder="tcp://host:2375" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Container name</label>
-                    <input class="form-control" @bind="_fLaunchContainer" placeholder="(default: source label)" />
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">Image</label>
-                    <input class="form-control" @bind="_fLaunchImage" placeholder="vllm/vllm-openai:latest" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Model arg template</label>
-                    <input class="form-control" @bind="_fLaunchTemplate" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Extra run args</label>
-                    <input class="form-control" @bind="_fLaunchExtra" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">GPU options</label>
-                    <input class="form-control" @bind="_fLaunchGpu" placeholder="all" />
-                </div>
-                <div class="col-md-12">
-                    <button type="submit" class="btn btn-primary btn-sm" disabled="@(_busyLaunch)">Save launch spec</button>
-                </div>
-            </form>
-        </div>
-    </div>
 
     @if (_swapTarget is not null)
     {
@@ -171,23 +202,91 @@
     private string? _busyModelId;
     private ModelInfo? _swapTarget;
     private List<SwapStep> _swapSteps = new();
-    private LaunchSpec? _launch;
-    private bool _busyLaunch;
     private bool _disposed;
 
     // Model form.
+    private string _fModelSourceId = "";
     private string _fModelName = "";
     private string _fModelDisplay = "";
-    private string _fModelSwapArgs = "";
+    private string _fModelImageOverride = "";
+    private ModelSource _fModelSource = ModelSource.HuggingFace;
+    private string _fModelPathOrRepoId = "";
     private bool _fModelActive;
+    private Dictionary<string, string> _fOptions = new();
 
-    // Launch spec form.
-    private string _fLaunchHost = "";
-    private string _fLaunchContainer = "";
-    private string _fLaunchImage = "";
-    private string _fLaunchTemplate = "--model {model}";
-    private string _fLaunchExtra = "";
-    private string _fLaunchGpu = "";
+    private static string GroupLabel(VllmOptionGroup g) => g switch
+    {
+        VllmOptionGroup.ModelAndWeights => "Model & weights",
+        VllmOptionGroup.MemoryAndCache => "Memory & cache",
+        VllmOptionGroup.Parallelism => "Parallelism",
+        VllmOptionGroup.ToolAndReasoning => "Tool & reasoning calling",
+        VllmOptionGroup.Multimodal => "Multimodal",
+        VllmOptionGroup.LoRA => "LoRA",
+        VllmOptionGroup.Scheduler => "Scheduler",
+        VllmOptionGroup.Observability => "Observability",
+        _ => g.ToString(),
+    };
+
+    private bool IsOptionEnabled(string key) => _fOptions.ContainsKey(key);
+
+    private void SetOptionEnabled(string key, bool enabled, VllmOptionDefinition def)
+    {
+        if (enabled)
+        {
+            _fOptions[key] = def.ControlType == VllmOptionControlType.Toggle
+                ? "true"
+                : (def.AllowedValues?.FirstOrDefault() ?? "");
+        }
+        else
+        {
+            _fOptions.Remove(key);
+        }
+    }
+
+    private RenderFragment RenderOption(VllmOptionDefinition opt) =>
+        @<div class="col-md-6">
+            <div class="form-check d-flex align-items-center gap-2">
+                <input type="checkbox" class="form-check-input" id="@("opt-" + opt.Key)"
+                       checked="@IsOptionEnabled(opt.Key)"
+                       @onchange="@(e => SetOptionEnabled(opt.Key, e.Value is bool b && b, opt))" />
+                <label class="form-check-label" for="@("opt-" + opt.Key)">
+                    @opt.Label <code class="text-muted">@opt.CliFlag</code>
+                </label>
+            </div>
+            @if (!string.IsNullOrEmpty(opt.Description))
+            {
+                <div class="form-text">@opt.Description</div>
+            }
+            @if (IsOptionEnabled(opt.Key) && opt.ControlType != VllmOptionControlType.Toggle)
+            {
+                @if (opt.ControlType == VllmOptionControlType.Enum)
+                {
+                    <select class="form-select form-select-sm mt-1" @bind="_fOptions[opt.Key]">
+                        @foreach (var v in opt.AllowedValues ?? Array.Empty<string>())
+                        {
+                            <option value="@v">@v</option>
+                        }
+                    </select>
+                }
+                else if (opt.ControlType is VllmOptionControlType.Integer or VllmOptionControlType.Float)
+                {
+                    <div class="input-group input-group-sm mt-1">
+                        <input class="form-control" type="number"
+                               step="@(opt.ControlType == VllmOptionControlType.Float ? "any" : "1")"
+                               min="@opt.Min" max="@opt.Max"
+                               @bind="_fOptions[opt.Key]" />
+                        @if (!string.IsNullOrEmpty(opt.Unit))
+                        {
+                            <span class="input-group-text">@opt.Unit</span>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <input class="form-control form-control-sm mt-1" @bind="_fOptions[opt.Key]" />
+                }
+            }
+        </div>;
 
     private SourceInfo? SelectedSource =>
         _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
@@ -212,17 +311,6 @@
             _all = (await Sources.GetAllAsync()).ToList();
             var src = SelectedSource;
             _models = src is null ? new List<ModelInfo>() : (await ModelCatalog.GetBySourceAsync(src.Id)).ToList();
-            if (src is not null)
-            {
-                var spec = await LaunchSpecs.GetBySourceAsync(src.Id);
-                _launch = spec;
-                _fLaunchHost = src.DockerHost ?? "";
-                _fLaunchContainer = src.ContainerName ?? "";
-                _fLaunchImage = spec?.Image ?? "";
-                _fLaunchTemplate = spec?.ModelArgTemplate ?? "--model {model}";
-                _fLaunchExtra = spec?.ExtraRunArgs ?? "";
-                _fLaunchGpu = spec?.GpuOptions ?? "";
-            }
         }
         catch
         {
@@ -235,20 +323,28 @@
     {
         _isCreatingModel = true;
         _editingModel = new ModelInfo { SourceId = SelectedSource!.Id, SortOrder = _models.Count };
+        _fModelSourceId = SelectedSource!.Id;
         _fModelName = "";
         _fModelDisplay = "";
-        _fModelSwapArgs = "";
+        _fModelImageOverride = "";
+        _fModelSource = ModelSource.HuggingFace;
+        _fModelPathOrRepoId = "";
         _fModelActive = _models.Count == 0;
+        _fOptions = new();
     }
 
     private void StartEditModel(ModelInfo m)
     {
         _isCreatingModel = false;
         _editingModel = m;
+        _fModelSourceId = m.SourceId;
         _fModelName = m.Name;
         _fModelDisplay = m.DisplayName ?? "";
-        _fModelSwapArgs = m.SwapArgs ?? "";
+        _fModelImageOverride = m.ImageOverride ?? "";
+        _fModelSource = m.ModelSource;
+        _fModelPathOrRepoId = m.ModelPathOrRepoId;
         _fModelActive = m.IsActive;
+        _fOptions = new Dictionary<string, string>(m.Options);
     }
 
     private void CancelEditModel() => _editingModel = null;
@@ -261,15 +357,27 @@
         {
             var model = _editingModel with
             {
+                SourceId = _fModelSourceId,
                 Name = _fModelName.Trim(),
                 DisplayName = string.IsNullOrWhiteSpace(_fModelDisplay) ? null : _fModelDisplay.Trim(),
-                SwapArgs = string.IsNullOrWhiteSpace(_fModelSwapArgs) ? null : _fModelSwapArgs.Trim(),
+                ImageOverride = string.IsNullOrWhiteSpace(_fModelImageOverride) ? null : _fModelImageOverride.Trim(),
+                ModelSource = _fModelSource,
+                ModelPathOrRepoId = _fModelPathOrRepoId.Trim(),
+                Options = _fOptions.Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value),
             };
             if (_isCreatingModel)
                 await ModelCatalog.CreateAsync(model with { IsActive = _fModelActive });
             else
                 await ModelCatalog.UpdateAsync(model with { IsActive = _fModelActive });
             _editingModel = null;
+
+            // If the model was saved against a different server than the one currently
+            // shown, jump to that server so the table actually reflects what just
+            // happened, instead of the model silently not appearing in the visible list.
+            if (_fModelSourceId != SelectedSource?.Id)
+                Selection.SetCurrent(_fModelSourceId);
+
             await ReloadAsync();
         }
         catch (Exception ex)
@@ -306,44 +414,6 @@
         }
     }
 
-    private async Task OnLaunchSubmit()
-    {
-        var selectedSource = SelectedSource;
-        if (selectedSource is null || _busyLaunch) return;
-        _busyLaunch = true;
-        try
-        {
-            // Persist docker host / container name on the source, and the spec fields.
-            var src = selectedSource with
-            {
-                DockerHost = string.IsNullOrWhiteSpace(_fLaunchHost) ? null : _fLaunchHost.Trim(),
-                ContainerName = string.IsNullOrWhiteSpace(_fLaunchContainer) ? null : _fLaunchContainer.Trim(),
-            };
-            await Sources.UpdateAsync(src);
-
-            var baseLaunch = _launch ?? new LaunchSpec();
-            var spec = baseLaunch with
-            {
-                Id = string.IsNullOrWhiteSpace(baseLaunch.Id) ? Guid.NewGuid().ToString() : baseLaunch.Id,
-                SourceId = selectedSource.Id,
-                Image = _fLaunchImage.Trim(),
-                ModelArgTemplate = string.IsNullOrWhiteSpace(_fLaunchTemplate) ? "--model {model}" : _fLaunchTemplate.Trim(),
-                ExtraRunArgs = string.IsNullOrWhiteSpace(_fLaunchExtra) ? null : _fLaunchExtra.Trim(),
-                GpuOptions = string.IsNullOrWhiteSpace(_fLaunchGpu) ? null : _fLaunchGpu.Trim(),
-            };
-            await LaunchSpecs.SaveAsync(spec);
-            await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            await AlertAsync("Save launch spec failed: " + ex.Message);
-        }
-        finally
-        {
-            _busyLaunch = false;
-        }
-    }
-
     private async Task SwapAsync(ModelInfo m)
     {
         var src = SelectedSource;
@@ -351,7 +421,7 @@
         var spec = await LaunchSpecs.GetBySourceAsync(src.Id);
         if (spec is null || string.IsNullOrWhiteSpace(spec.Image))
         {
-            await AlertAsync("Save the Docker launch spec (image) before hot-swapping.");
+            await AlertAsync("Set up this server's hot-swap/Docker settings on the Settings page (image is required) before hot-swapping.");
             return;
         }
         var ok = await JS.InvokeAsync<bool>("confirm",

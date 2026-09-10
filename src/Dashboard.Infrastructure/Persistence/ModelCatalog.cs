@@ -51,7 +51,10 @@ public sealed class ModelCatalog : IModelCatalog
             SourceId = Guid.Parse(model.SourceId),
             Name = model.Name,
             DisplayName = model.DisplayName,
-            SwapArgs = model.SwapArgs,
+            ModelSource = model.ModelSource.ToStorage(),
+            ModelPathOrRepoId = model.ModelPathOrRepoId,
+            ImageOverride = model.ImageOverride,
+            OptionsJson = System.Text.Json.JsonSerializer.Serialize(model.Options),
             IsActive = model.IsActive || !anyActive,
             SortOrder = model.SortOrder,
         };
@@ -68,9 +71,16 @@ public sealed class ModelCatalog : IModelCatalog
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var entity = await db.Models.SingleAsync(x => x.Id == Guid.Parse(model.Id), ct);
+        // Re-parenting: a model can be moved to a different server via the modal's
+        // Server dropdown, so this must be reassigned before the deactivate-others
+        // check below runs against the (possibly new) source.
+        entity.SourceId = Guid.Parse(model.SourceId);
         entity.Name = model.Name;
         entity.DisplayName = model.DisplayName;
-        entity.SwapArgs = model.SwapArgs;
+        entity.ModelSource = model.ModelSource.ToStorage();
+        entity.ModelPathOrRepoId = model.ModelPathOrRepoId;
+        entity.ImageOverride = model.ImageOverride;
+        entity.OptionsJson = System.Text.Json.JsonSerializer.Serialize(model.Options);
         entity.SortOrder = model.SortOrder;
         if (model.IsActive)
         {

@@ -123,6 +123,13 @@ namespace Dashboard.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("DevicesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Entrypoint")
+                        .HasColumnType("text");
+
                     b.Property<string>("EnvJson")
                         .IsRequired()
                         .HasColumnType("text");
@@ -135,24 +142,50 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<string>("GpuVendor")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("HealthWaitTimeoutSeconds")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("HfCacheHostPath")
+                        .HasColumnType("text");
+
+                    b.Property<string>("HfToken")
+                        .HasColumnType("text");
+
                     b.Property<string>("Image")
                         .IsRequired()
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
+
+                    b.Property<string>("IpcMode")
+                        .HasColumnType("text");
 
                     b.Property<string>("ModelArgTemplate")
                         .IsRequired()
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
 
+                    b.Property<string>("NetworkMode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("PortsJson")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<bool>("Privileged")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("RestartPolicy")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
+
+                    b.Property<int?>("ServingPort")
+                        .HasColumnType("integer");
 
                     b.Property<Guid>("SourceId")
                         .HasColumnType("uuid");
@@ -331,13 +364,28 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)");
 
+                    b.Property<string>("ImageOverride")
+                        .HasColumnType("text");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("ModelPathOrRepoId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ModelSource")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)");
+
+                    b.Property<string>("OptionsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<int>("SortOrder")
                         .HasColumnType("integer");

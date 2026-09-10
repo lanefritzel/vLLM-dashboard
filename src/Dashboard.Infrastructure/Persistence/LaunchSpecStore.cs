@@ -57,10 +57,20 @@ public sealed class LaunchSpecStore : ILaunchSpecStore
         entity.Image = spec.Image;
         entity.ModelArgTemplate = spec.ModelArgTemplate;
         entity.PortsJson = System.Text.Json.JsonSerializer.Serialize(spec.Ports);
+        entity.ServingPort = spec.ServingPort;
         entity.EnvJson = System.Text.Json.JsonSerializer.Serialize(spec.Env);
         entity.VolumesJson = System.Text.Json.JsonSerializer.Serialize(spec.Volumes);
         entity.RestartPolicy = spec.RestartPolicy;
         entity.ExtraRunArgs = spec.ExtraRunArgs;
+        entity.Entrypoint = spec.Entrypoint;
+        entity.HfCacheHostPath = spec.HfCacheHostPath;
+        entity.HfToken = spec.HfToken;
+        entity.HealthWaitTimeoutSeconds = spec.HealthWaitTimeoutSeconds > 0 ? spec.HealthWaitTimeoutSeconds : 600;
         entity.GpuOptions = spec.GpuOptions;
+        entity.GpuVendor = spec.GpuVendor.ToStorage();
+        entity.DevicesJson = System.Text.Json.JsonSerializer.Serialize(spec.Devices);
+        entity.NetworkMode = string.IsNullOrWhiteSpace(spec.NetworkMode) ? "bridge" : spec.NetworkMode;
+        entity.Privileged = spec.Privileged;
+        entity.IpcMode = spec.IpcMode;
     }
 }

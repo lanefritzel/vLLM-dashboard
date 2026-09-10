@@ -66,6 +66,7 @@ builder.Services.AddSingleton<IBroadcastThrottler, Dashboard.Application.Metrics
 builder.Services.AddSingleton<IMetricsService, Dashboard.Application.Metrics.MetricsService>();
 builder.Services.AddSingleton<IMetricsSourceFactory, Dashboard.Infrastructure.Scrapers.MetricsSourceFactory>();
 builder.Services.AddSingleton<IInferenceProbe, Dashboard.Application.Metrics.InferenceProbeService>();
+builder.Services.AddSingleton<IGpuProvisionerFactory, Dashboard.Infrastructure.Docker.GpuProvisionerFactory>();
 builder.Services.AddSingleton<IDockerOrchestrator, Dashboard.Infrastructure.Docker.DockerOrchestrator>();
 
 // Singleton; each opens a fresh AppDbContext per operation via IServiceScopeFactory

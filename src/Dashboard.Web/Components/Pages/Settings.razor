@@ -51,7 +51,7 @@
                             <input type="checkbox" checked="@s.Active" onchange="@(() => ToggleActiveAsync(s))" title="Enable/disable polling" />
                         </td>
                         <td class="text-end">
-                            <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditSource(s))">Edit</button>
+                            <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditSourceAsync(s))">Edit</button>
                             <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteAsync(s))">Delete</button>
                         </td>
                     </tr>
@@ -67,9 +67,12 @@
 
 @if (_editing is not null)
 {
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="card-title mb-3">@(_isCreating ? "New source" : "Edit source")</div>
+    <div class="modal-overlay" @onclick="@CancelEdit">
+        <div class="modal-dialog-custom" @onclick:stopPropagation="true">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+                <div class="card-title mb-0">@(_isCreating ? "New source" : "Edit source")</div>
+                <button type="button" class="modal-close-btn" @onclick="@CancelEdit" aria-label="Close">✕</button>
+            </div>
             <form @onsubmit="@OnSourceSubmit" @onsubmit:preventDefault="true" class="source-form">
                 <div class="row g-3">
                     <div class="col-md-6">
@@ -96,22 +99,169 @@
                         <label class="form-label">Inference URL (vLLM /v1 or Ollama base)</label>
                         <input class="form-control" @bind="_fInferenceUrl" placeholder="http://host:9999" />
                     </div>
-                    @if (TypeIsVllm)
-                    {
-                        <div class="col-md-6">
-                            <label class="form-label">Docker host (optional, for hot-swap)</label>
-                            <input class="form-control" @bind="_fDockerHost" placeholder="tcp://host:2375" />
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Container name (optional)</label>
-                            <input class="form-control" @bind="_fContainerName" />
-                        </div>
-                    }
                     <div class="col-md-6">
                         <label class="form-label">Active</label>
                         <input type="checkbox" class="form-check-input" @bind="_fActive" />
                     </div>
                 </div>
+
+                @if (TypeIsVllm)
+                {
+                    <hr class="my-3" />
+                    <div class="card-title mb-1">Hot-swap / Docker settings</div>
+                    <p class="text-muted small">
+                        Things true of this physical box/Docker host regardless of which model runs on it —
+                        GPU access, networking, and where shared caches live. Set this up once per server;
+                        each model on the Models page picks its own weights and flags on top of it.
+                    </p>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Docker host <span class="text-muted">(optional, for hot-swap)</span></label>
+                            <input class="form-control" @bind="_fDockerHost" placeholder="tcp://host:2375" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Container name <span class="text-muted">(optional)</span></label>
+                            <input class="form-control" @bind="_fContainerName" placeholder="(default: label)" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Default image</label>
+                            <input class="form-control" @bind="_fImage" placeholder="vllm/vllm-openai:latest" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Entrypoint override</label>
+                            <input class="form-control" @bind="_fEntrypoint" placeholder="(image default)" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Serving port</label>
+                            <input class="form-control" type="number" min="1" @bind="_fServingPort" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Restart policy</label>
+                            <select class="form-select" @bind="_fRestartPolicy">
+                                <option value="unless-stopped">unless-stopped</option>
+                                <option value="always">always</option>
+                                <option value="on-failure">on-failure</option>
+                                <option value="no">no</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Health-check timeout (s)</label>
+                            <input class="form-control" type="number" min="30" @bind="_fHealthTimeout" />
+                            <div class="form-text">First-time swap to an uncached Hugging Face model has to download it first — allow enough time.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Network mode</label>
+                            <select class="form-select" @bind="_fNetworkMode">
+                                <option value="bridge">bridge</option>
+                                <option value="host">host</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">IPC mode</label>
+                            <select class="form-select" @bind="_fIpcMode">
+                                <option value="">(default)</option>
+                                <option value="host">host</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="privileged" @bind="_fPrivileged" />
+                                <label class="form-check-label" for="privileged">Privileged</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">GPU vendor</label>
+                            <select class="form-select" @bind="_fGpuVendor">
+                                <option value="@GpuVendor.None">None</option>
+                                <option value="@GpuVendor.Nvidia">NVIDIA</option>
+                                <option value="@GpuVendor.Intel">Intel (raw device passthrough)</option>
+                            </select>
+                        </div>
+                        @if (_fGpuVendor == GpuVendor.Nvidia)
+                        {
+                            <div class="col-md-8">
+                                <label class="form-label">GPU device ids</label>
+                                <input class="form-control" @bind="_fGpuOptions" placeholder="all, or e.g. 0,1" />
+                            </div>
+                        }
+
+                        @if (_fGpuVendor == GpuVendor.Intel)
+                        {
+                            <div class="col-md-12">
+                                <label class="form-label">Devices (raw --device passthrough, e.g. /dev/dri)</label>
+                                @for (var i = 0; i < _fDevices.Count; i++)
+                                {
+                                    var row = _fDevices[i];
+                                    <div class="row g-2 mb-2 align-items-center">
+                                        <div class="col-md-5"><input class="form-control form-control-sm" placeholder="Host path" @bind="row.HostPath" /></div>
+                                        <div class="col-md-5"><input class="form-control form-control-sm" placeholder="Container path" @bind="row.ContainerPath" /></div>
+                                        <div class="col-md-2 text-end">
+                                            <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _fDevices.Remove(row))">Remove</button>
+                                        </div>
+                                    </div>
+                                }
+                                <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _fDevices.Add(new DeviceMapping()))">+ Add device</button>
+                            </div>
+                        }
+
+                        <div class="col-md-6">
+                            <label class="form-label">Hugging Face cache directory <span class="text-muted">(optional)</span></label>
+                            <input class="form-control" @bind="_fHfCache" placeholder="/home/you/.cache/huggingface" />
+                            <div class="form-text">Persists downloaded weights across hot-swaps so re-selecting a model doesn't re-download it.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Hugging Face token <span class="text-muted">(optional)</span></label>
+                            <input class="form-control" type="password" autocomplete="off" @bind="_fHfToken" placeholder="hf_…" />
+                            <div class="form-text">Only needed for gated or private Hugging Face repos.</div>
+                        </div>
+
+                        <div class="col-md-12">
+                            <details>
+                                <summary class="text-muted" style="cursor:pointer">Advanced: custom volumes &amp; environment variables</summary>
+                                <div class="row g-3 mt-1">
+                                    <div class="col-md-12">
+                                        <label class="form-label">Volumes</label>
+                                        @for (var i = 0; i < _fVolumes.Count; i++)
+                                        {
+                                            var row = _fVolumes[i];
+                                            <div class="row g-2 mb-2 align-items-center">
+                                                <div class="col-md-5"><input class="form-control form-control-sm" placeholder="Host path" @bind="row.Host" /></div>
+                                                <div class="col-md-4"><input class="form-control form-control-sm" placeholder="Container path" @bind="row.Container" /></div>
+                                                <div class="col-md-1 form-check">
+                                                    <input type="checkbox" class="form-check-input" title="Read-only" @bind="row.ReadOnly" />
+                                                </div>
+                                                <div class="col-md-2 text-end">
+                                                    <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _fVolumes.Remove(row))">Remove</button>
+                                                </div>
+                                            </div>
+                                        }
+                                        <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _fVolumes.Add(new VolumeMapping()))">+ Add volume</button>
+                                    </div>
+                                    <div class="col-md-12">
+                                        <label class="form-label">Environment variables</label>
+                                        @for (var i = 0; i < _fEnv.Count; i++)
+                                        {
+                                            var row = _fEnv[i];
+                                            <div class="row g-2 mb-2 align-items-center">
+                                                <div class="col-md-5"><input class="form-control form-control-sm" placeholder="KEY" @bind="row.Key" /></div>
+                                                <div class="col-md-5"><input class="form-control form-control-sm" placeholder="value" @bind="row.Value" /></div>
+                                                <div class="col-md-2 text-end">
+                                                    <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _fEnv.Remove(row))">Remove</button>
+                                                </div>
+                                            </div>
+                                        }
+                                        <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _fEnv.Add(new EnvRow()))">+ Add env var</button>
+                                    </div>
+                                    <div class="col-md-12">
+                                        <label class="form-label">Extra run args <span class="text-muted">(shared by every model on this server)</span></label>
+                                        <input class="form-control" @bind="_fExtraRunArgs" />
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                }
+
                 <div class="mt-3">
                     <button type="submit" class="btn btn-primary btn-sm" disabled="@_busy">@(_busy ? "Saving…" : "Save")</button>
                     <button type="button" class="btn btn-secondary btn-sm" @onclick="@CancelEdit">Cancel</button>
@@ -153,9 +303,12 @@
 @code {
     [Inject] private ISourceCatalog Sources { get; set; } = default!;
     [Inject] private IConfigStore Config { get; set; } = default!;
+    [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
+    [Inject] private IJSRuntime JS { get; set; } = default!;
 
     private List<SourceInfo> _sources = new();
     private SourceInfo? _editing;
+    private LaunchSpec? _launch;
     private bool _isCreating;
     private bool _busy;
     private string? _error;
@@ -170,6 +323,30 @@
     private string _fContainerName = "";
     private int _fInterval = 5;
     private bool _fActive = true;
+
+    // Hot-swap / Docker settings fields (vLLM sources only).
+    private string _fImage = "";
+    private string _fEntrypoint = "";
+    private int? _fServingPort;
+    private string _fRestartPolicy = "unless-stopped";
+    private int _fHealthTimeout = 600;
+    private string _fNetworkMode = "bridge";
+    private string _fIpcMode = "";
+    private bool _fPrivileged;
+    private GpuVendor _fGpuVendor = GpuVendor.None;
+    private string _fGpuOptions = "";
+    private List<DeviceMapping> _fDevices = new();
+    private string _fHfCache = "";
+    private string _fHfToken = "";
+    private List<VolumeMapping> _fVolumes = new();
+    private List<EnvRow> _fEnv = new();
+    private string _fExtraRunArgs = "";
+
+    private sealed class EnvRow
+    {
+        public string Key { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
 
     // Config form fields.
     private int _fRetentionDays = 30;
@@ -200,6 +377,27 @@
         }
     }
 
+    private void ResetLaunchFields(LaunchSpec? spec)
+    {
+        _launch = spec;
+        _fImage = spec?.Image ?? "";
+        _fEntrypoint = spec?.Entrypoint ?? "";
+        _fServingPort = spec?.ServingPort;
+        _fRestartPolicy = string.IsNullOrWhiteSpace(spec?.RestartPolicy) ? "unless-stopped" : spec!.RestartPolicy;
+        _fHealthTimeout = spec?.HealthWaitTimeoutSeconds is > 0 ? spec!.HealthWaitTimeoutSeconds : 600;
+        _fNetworkMode = string.IsNullOrWhiteSpace(spec?.NetworkMode) ? "bridge" : spec!.NetworkMode;
+        _fIpcMode = spec?.IpcMode ?? "";
+        _fPrivileged = spec?.Privileged ?? false;
+        _fGpuVendor = spec?.GpuVendor ?? GpuVendor.None;
+        _fGpuOptions = spec?.GpuOptions ?? "";
+        _fDevices = spec?.Devices.Select(d => new DeviceMapping { HostPath = d.HostPath, ContainerPath = d.ContainerPath }).ToList() ?? new();
+        _fHfCache = spec?.HfCacheHostPath ?? "";
+        _fHfToken = spec?.HfToken ?? "";
+        _fVolumes = spec?.Volumes.Select(v => new VolumeMapping { Host = v.Host, Container = v.Container, ReadOnly = v.ReadOnly }).ToList() ?? new();
+        _fEnv = spec?.Env.Select(kv => new EnvRow { Key = kv.Key, Value = kv.Value }).ToList() ?? new();
+        _fExtraRunArgs = spec?.ExtraRunArgs ?? "";
+    }
+
     private void StartNewSource()
     {
         _isCreating = true;
@@ -219,10 +417,11 @@
         _fContainerName = "";
         _fInterval = 5;
         _fActive = true;
+        ResetLaunchFields(null);
         _error = null;
     }
 
-    private void StartEditSource(SourceInfo s)
+    private async Task StartEditSourceAsync(SourceInfo s)
     {
         _isCreating = false;
         _editing = s;
@@ -235,6 +434,11 @@
         _fInterval = s.ScrapeIntervalSeconds;
         _fActive = s.Active;
         _error = null;
+
+        LaunchSpec? spec = null;
+        try { spec = await LaunchSpecs.GetBySourceAsync(s.Id); }
+        catch { /* leave defaults; edit form still usable */ }
+        ResetLaunchFields(spec);
     }
 
     private void CancelEdit()
@@ -278,10 +482,37 @@
                 Active = _fActive,
             };
 
-            if (_isCreating)
-                await Sources.CreateAsync(info);
-            else
-                await Sources.UpdateAsync(info);
+            var saved = _isCreating ? await Sources.CreateAsync(info) : await Sources.UpdateAsync(info);
+
+            if (ParsedType == SourceType.Vllm)
+            {
+                var baseLaunch = _launch ?? new LaunchSpec();
+                var spec = baseLaunch with
+                {
+                    Id = string.IsNullOrWhiteSpace(baseLaunch.Id) ? Guid.NewGuid().ToString() : baseLaunch.Id,
+                    SourceId = saved.Id,
+                    Image = _fImage.Trim(),
+                    Entrypoint = string.IsNullOrWhiteSpace(_fEntrypoint) ? null : _fEntrypoint.Trim(),
+                    ServingPort = _fServingPort,
+                    RestartPolicy = string.IsNullOrWhiteSpace(_fRestartPolicy) ? "unless-stopped" : _fRestartPolicy,
+                    HealthWaitTimeoutSeconds = _fHealthTimeout > 0 ? _fHealthTimeout : 600,
+                    NetworkMode = string.IsNullOrWhiteSpace(_fNetworkMode) ? "bridge" : _fNetworkMode,
+                    IpcMode = string.IsNullOrWhiteSpace(_fIpcMode) ? null : _fIpcMode,
+                    Privileged = _fPrivileged,
+                    GpuVendor = _fGpuVendor,
+                    GpuOptions = string.IsNullOrWhiteSpace(_fGpuOptions) ? null : _fGpuOptions.Trim(),
+                    Devices = _fDevices.Where(d => !string.IsNullOrWhiteSpace(d.HostPath))
+                        .Select(d => new DeviceMapping { HostPath = d.HostPath.Trim(), ContainerPath = string.IsNullOrWhiteSpace(d.ContainerPath) ? d.HostPath.Trim() : d.ContainerPath.Trim() }).ToList(),
+                    HfCacheHostPath = string.IsNullOrWhiteSpace(_fHfCache) ? null : _fHfCache.Trim(),
+                    HfToken = string.IsNullOrWhiteSpace(_fHfToken) ? null : _fHfToken.Trim(),
+                    Volumes = _fVolumes.Where(v => !string.IsNullOrWhiteSpace(v.Host) && !string.IsNullOrWhiteSpace(v.Container))
+                        .Select(v => new VolumeMapping { Host = v.Host.Trim(), Container = v.Container.Trim(), ReadOnly = v.ReadOnly }).ToList(),
+                    Env = _fEnv.Where(e => !string.IsNullOrWhiteSpace(e.Key))
+                        .ToDictionary(e => e.Key.Trim(), e => e.Value),
+                    ExtraRunArgs = string.IsNullOrWhiteSpace(_fExtraRunArgs) ? null : _fExtraRunArgs.Trim(),
+                };
+                await LaunchSpecs.SaveAsync(spec);
+            }
 
             _message = (_isCreating ? "Created " : "Updated ") + info.Label;
             _editing = null;
@@ -343,6 +574,4 @@
             _error = "Saving preferences failed: " + ex.Message;
         }
     }
-
-    [Inject] private IJSRuntime JS { get; set; } = default!;
 }

@@ -26,6 +26,11 @@
   --bs-body-bg: var(--bg);
   --bs-secondary-color: var(--muted);
   --bs-border-color: var(--border);
+  /* --bs-emphasis-color feeds .table's own --bs-table-color (tables don't read
+     --bs-body-color directly), and defaults to near-black regardless of theme.
+     Without this, table text is unreadable in dark mode even though everything
+     else picks up --bs-body-color correctly. */
+  --bs-emphasis-color: var(--text);
 }
 
 :root[data-theme="light"] {
@@ -51,6 +56,11 @@
   --bs-body-bg: var(--bg);
   --bs-secondary-color: var(--muted);
   --bs-border-color: var(--border);
+  /* --bs-emphasis-color feeds .table's own --bs-table-color (tables don't read
+     --bs-body-color directly), and defaults to near-black regardless of theme.
+     Without this, table text is unreadable in dark mode even though everything
+     else picks up --bs-body-color correctly. */
+  --bs-emphasis-color: var(--text);
 }
 
 html, body {
@@ -181,6 +191,27 @@ a:hover { color: var(--accent-2); }
 .series-toggle input[type="checkbox"] { margin: 0; cursor: pointer; }
 .series-toggle .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 .series-toggle.off { opacity: 0.45; text-decoration: line-through; }
+
+/* Lightweight custom modal (no Bootstrap JS — only its CSS is loaded here) */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 3rem 1rem;
+  overflow-y: auto;
+}
+.modal-dialog-custom {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 20px 50px var(--shadow);
+  width: 100%; max-width: 900px;
+  padding: 1.25rem 1.5rem;
+}
+.modal-close-btn {
+  background: transparent; border: none; color: var(--muted);
+  font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 0.25rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+.modal-close-btn:hover { color: var(--text); background: var(--bg-2); }
 
 /* Ollama info cards */
 .model-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
