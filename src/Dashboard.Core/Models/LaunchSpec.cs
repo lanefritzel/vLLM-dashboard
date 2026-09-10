@@ -122,6 +122,14 @@ public sealed record LaunchSpec
     public bool Privileged { get; init; }
     public string? IpcMode { get; init; }
 
+    /// <summary>The Compose project/service labels (com.docker.compose.project/service)
+    /// last observed on a real container for this source, so they can be stamped back
+    /// onto a replacement even when there's no existing container left to inspect —
+    /// e.g. after idle-unload deletes it, before the next request creates a fresh one.
+    /// Discovered and persisted automatically by DockerOrchestrator; never set by the UI.</summary>
+    public string? ComposeProject { get; init; }
+    public string? ComposeService { get; init; }
+
     /// <summary>Substitutes <c>{model}</c> in the template with the given value.</summary>
     public string SubstituteModel(string modelValue) =>
         ModelArgTemplate.Replace("{model}", modelValue);

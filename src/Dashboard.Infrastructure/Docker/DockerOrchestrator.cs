@@ -19,15 +19,18 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
 {
     private readonly IHttpClientFactory _httpFactory;
     private readonly IGpuProvisionerFactory _gpuProvisionerFactory;
+    private readonly ILaunchSpecStore _launchSpecs;
     private readonly ILogger<DockerOrchestrator> _logger;
 
     public DockerOrchestrator(
         IHttpClientFactory httpFactory,
         IGpuProvisionerFactory gpuProvisionerFactory,
+        ILaunchSpecStore launchSpecs,
         ILogger<DockerOrchestrator> logger)
     {
         _httpFactory = httpFactory;
         _gpuProvisionerFactory = gpuProvisionerFactory;
+        _launchSpecs = launchSpecs;
         _logger = logger;
     }
 
@@ -49,12 +52,19 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         {
             await progress.ReportAsync(new SwapStep { Step = "stop", Message = "Stopping existing container" });
             var (composeProject, composeService) = await StopAndRemoveAsync(dockerBase, containerName, ct);
+            await PersistComposeLabelsIfObservedAsync(source.Id, spec, composeProject, composeService, ct);
 
             await progress.ReportAsync(new SwapStep { Step = "pull", Message = "Ensuring image is present" });
             await EnsureImageAsync(dockerBase, image, ct);
 
             await progress.ReportAsync(new SwapStep { Step = "start", Message = "Creating and starting container" });
-            await CreateAndStartAsync(dockerBase, containerName, spec, model, composeProject, composeService, ct);
+            // The container we just stopped might not have existed at all (e.g. it was
+            // idle-unloaded earlier, so there was nothing left to inspect) — fall back to
+            // whatever labels were last observed and persisted for this source, so a
+            // container recreated after idle-unload still rejoins its Compose stack.
+            var effectiveProject = composeProject ?? spec.ComposeProject;
+            var effectiveService = composeService ?? spec.ComposeService;
+            await CreateAndStartAsync(dockerBase, containerName, spec, model, effectiveProject, effectiveService, ct);
 
             await progress.ReportAsync(new SwapStep
             {
@@ -87,7 +97,14 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         var containerName = ResolveContainerName(source);
         try
         {
-            await StopAndRemoveAsync(dockerBase, containerName, ct);
+            // Idle-unload deletes the container outright (no replacement gets created
+            // here), so this is the ONLY chance to capture its Compose labels before
+            // they're gone for good — the next swap-triggered recreate will have no
+            // container left to inspect. Previously this result was discarded entirely,
+            // which is exactly what caused a container recreated after idle-unload to
+            // come back without its Compose labels and drop out of the stack view.
+            var (composeProject, composeService) = await StopAndRemoveAsync(dockerBase, containerName, ct);
+            await PersistComposeLabelsIfObservedAsync(source.Id, composeProject, composeService, ct);
             return new InferenceResult { Success = true };
         }
         catch (Exception ex)
@@ -99,6 +116,47 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
 
     private static string ResolveContainerName(SourceInfo source) =>
         source.ContainerName ?? source.Label.Replace(" ", "-").ToLowerInvariant();
+
+    /// <summary>Persists freshly observed Compose labels onto this source's LaunchSpec,
+    /// if they're new — a one-time write per label change, not on every swap. No-op
+    /// when nothing was observed (container didn't exist, or had no such labels), or
+    /// when the spec already has these exact values, or when there's no spec to update
+    /// yet at all.</summary>
+    private async Task PersistComposeLabelsIfObservedAsync(string sourceId, string? composeProject, string? composeService, CancellationToken ct)
+    {
+        if (composeProject is null && composeService is null)
+            return;
+        try
+        {
+            var spec = await _launchSpecs.GetBySourceAsync(sourceId, ct);
+            if (spec is null) return;
+            await PersistComposeLabelsIfObservedAsync(sourceId, spec, composeProject, composeService, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not persist Compose labels for source {SourceId}.", sourceId);
+        }
+    }
+
+    private async Task PersistComposeLabelsIfObservedAsync(string sourceId, LaunchSpec spec, string? composeProject, string? composeService, CancellationToken ct)
+    {
+        if (composeProject is null && composeService is null)
+            return;
+        if (spec.ComposeProject == composeProject && spec.ComposeService == composeService)
+            return;
+        try
+        {
+            await _launchSpecs.SaveAsync(spec with
+            {
+                ComposeProject = composeProject ?? spec.ComposeProject,
+                ComposeService = composeService ?? spec.ComposeService,
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not persist Compose labels for source {SourceId}.", sourceId);
+        }
+    }
 
     private static string NormalizeDockerBase(string dockerHost)
     {

@@ -72,5 +72,7 @@ public sealed class LaunchSpecStore : ILaunchSpecStore
         entity.NetworkMode = string.IsNullOrWhiteSpace(spec.NetworkMode) ? "bridge" : spec.NetworkMode;
         entity.Privileged = spec.Privileged;
         entity.IpcMode = spec.IpcMode;
+        entity.ComposeProject = spec.ComposeProject;
+        entity.ComposeService = spec.ComposeService;
     }
 }

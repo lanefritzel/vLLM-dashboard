@@ -24,6 +24,8 @@ public class LaunchSpecEntity
     public string NetworkMode { get; set; } = "bridge";
     public bool Privileged { get; set; }
     public string? IpcMode { get; set; }
+    public string? ComposeProject { get; set; }
+    public string? ComposeService { get; set; }
 
     public Source? Source { get; set; }
 
@@ -47,6 +49,8 @@ public class LaunchSpecEntity
             NetworkMode = string.IsNullOrWhiteSpace(NetworkMode) ? "bridge" : NetworkMode,
             Privileged = Privileged,
             IpcMode = IpcMode,
+            ComposeProject = ComposeProject,
+            ComposeService = ComposeService,
         };
 
         try
@@ -86,5 +90,7 @@ public class LaunchSpecEntity
         NetworkMode = string.IsNullOrWhiteSpace(spec.NetworkMode) ? "bridge" : spec.NetworkMode,
         Privileged = spec.Privileged,
         IpcMode = spec.IpcMode,
+        ComposeProject = spec.ComposeProject,
+        ComposeService = spec.ComposeService,
     };
 }

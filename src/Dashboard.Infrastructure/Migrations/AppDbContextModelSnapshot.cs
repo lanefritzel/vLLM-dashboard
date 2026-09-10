@@ -123,6 +123,12 @@ namespace Dashboard.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ComposeProject")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ComposeService")
+                        .HasColumnType("text");
+
                     b.Property<string>("DevicesJson")
                         .IsRequired()
                         .HasColumnType("text");
