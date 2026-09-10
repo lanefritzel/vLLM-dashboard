@@ -106,6 +106,53 @@ public class DockerOrchestratorPayloadTests
     }
 
     [Fact]
+    public void BuildCreatePayload_ComposeLabels_AppliedWhenProvided()
+    {
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(
+            new LaunchSpec(), HfModel(), new NoneGpuProvisioner(),
+            composeProject: "docker-compose", composeService: "vllm-scaler"));
+
+        var labels = json.GetProperty("Labels");
+        Assert.Equal("docker-compose", labels.GetProperty("com.docker.compose.project").GetString());
+        Assert.Equal("vllm-scaler", labels.GetProperty("com.docker.compose.service").GetString());
+        Assert.Equal("vllm-dashboard", labels.GetProperty("created").GetString());
+    }
+
+    [Fact]
+    public void BuildCreatePayload_ComposeLabels_OmittedWhenNotProvided()
+    {
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), new NoneGpuProvisioner()));
+
+        var labels = json.GetProperty("Labels");
+        Assert.False(labels.TryGetProperty("com.docker.compose.project", out _));
+        Assert.False(labels.TryGetProperty("com.docker.compose.service", out _));
+    }
+
+    [Fact]
+    public void BuildCreatePayload_ServingPort_PassesPortFlagToProcess()
+    {
+        // Docker's PortBindings alone doesn't make the process bind to the right port —
+        // under host networking it does nothing at all, and even under bridge mode the
+        // process itself must be told to bind here or it falls back to vLLM's own
+        // default port regardless of what Docker maps.
+        var spec = new LaunchSpec { ServingPort = 9999 };
+        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()))
+            .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
+
+        Assert.Contains("--port", cmd);
+        Assert.Equal("9999", cmd[Array.IndexOf(cmd, "--port") + 1]);
+    }
+
+    [Fact]
+    public void BuildCreatePayload_OmitsPortFlagWhenServingPortNotSet()
+    {
+        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), new NoneGpuProvisioner()))
+            .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
+
+        Assert.DoesNotContain("--port", cmd);
+    }
+
+    [Fact]
     public void BuildCreatePayload_AppendsExtraRunArgsAfterOptions()
     {
         var spec = new LaunchSpec { ExtraRunArgs = "--foo bar" };

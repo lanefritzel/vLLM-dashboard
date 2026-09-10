@@ -50,6 +50,14 @@ public sealed record VllmOptionDefinition
     public VllmOptionTier Tier { get; init; } = VllmOptionTier.Common;
     public string? Description { get; init; }
     public string[]? AllowedValues { get; init; }
+
+    /// <summary>For Text-type entries only: known common values offered as
+    /// autocomplete suggestions (HTML datalist) without blocking a custom value —
+    /// unlike AllowedValues, this never restricts what can be typed. Vendor-forked
+    /// images (e.g. Intel's vLLM build) sometimes register parser names that don't
+    /// exist in upstream vLLM's own docs, so these fields can never be a strict Enum.</summary>
+    public string[]? Suggestions { get; init; }
+
     public double? Min { get; init; }
     public double? Max { get; init; }
     public string? Unit { get; init; }
@@ -153,13 +161,26 @@ public static class VllmOptionCatalog
         {
             Key = "tool-call-parser", CliFlag = "--tool-call-parser", Label = "Tool call parser",
             Group = VllmOptionGroup.ToolAndReasoning, ControlType = VllmOptionControlType.Text,
-            Description = "Parser name for this model's tool-call format (e.g. qwen3_coder, hermes).",
+            Description = "The parser NAME for this model's tool-call format — not the flag itself. " +
+                "Pick a suggestion or type a vendor-specific one your image supports (e.g. qwen3_coder).",
+            Suggestions = new[]
+            {
+                "hermes", "mistral", "llama3_json", "llama4_pythonic", "granite4", "granite",
+                "granite-20b-fc", "internlm", "jamba", "xlam", "deepseek_v3", "deepseek_v31",
+                "openai", "kimi_k2", "hunyuan_a13b", "cohere_command3", "longcat", "glm45",
+                "glm47", "functiongemma", "qwen3_xml", "olmo3", "gigachat3", "apertus", "pythonic",
+            },
         },
         new()
         {
             Key = "reasoning-parser", CliFlag = "--reasoning-parser", Label = "Reasoning parser",
             Group = VllmOptionGroup.ToolAndReasoning, ControlType = VllmOptionControlType.Text,
-            Description = "Parser name for this model's reasoning/thinking output format.",
+            Description = "The parser NAME for this model's reasoning/thinking output format — not the flag itself.",
+            Suggestions = new[]
+            {
+                "cohere_command3", "deepseek_r1", "gemma4", "deepseek_v3", "ernie45",
+                "glm45", "holo2", "hunyuan_a13b", "granite", "minimax_m2_append_think", "qwen3",
+            },
         },
 
         // Multimodal

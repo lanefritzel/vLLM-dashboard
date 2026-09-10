@@ -48,13 +48,13 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         try
         {
             await progress.ReportAsync(new SwapStep { Step = "stop", Message = "Stopping existing container" });
-            await StopAndRemoveAsync(dockerBase, containerName, ct);
+            var (composeProject, composeService) = await StopAndRemoveAsync(dockerBase, containerName, ct);
 
             await progress.ReportAsync(new SwapStep { Step = "pull", Message = "Ensuring image is present" });
             await EnsureImageAsync(dockerBase, image, ct);
 
             await progress.ReportAsync(new SwapStep { Step = "start", Message = "Creating and starting container" });
-            await CreateAndStartAsync(dockerBase, containerName, spec, model, ct);
+            await CreateAndStartAsync(dockerBase, containerName, spec, model, composeProject, composeService, ct);
 
             await progress.ReportAsync(new SwapStep
             {
@@ -95,16 +95,45 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         return h.TrimEnd('/');
     }
 
-    private async Task StopAndRemoveAsync(string dockerBase, string name, CancellationToken ct)
+    /// <summary>Stops and removes the existing container, returning its Compose
+    /// project/service labels (if any) so the replacement can be stamped with the same
+    /// ones — otherwise a container that was originally created by `docker compose up`
+    /// becomes invisible to Compose/Portainer's stack view after the first hot-swap,
+    /// even though it's running fine. Best-effort: a container with no such labels (or
+    /// that doesn't exist yet) just yields (null, null), same as today's behavior.</summary>
+    private async Task<(string? Project, string? Service)> StopAndRemoveAsync(string dockerBase, string name, CancellationToken ct)
     {
         using var client = _httpFactory.CreateClient("docker");
         using var inspect = await client.GetAsync($"{dockerBase}/v1.43/containers/{name}/json", ct);
         if (inspect.StatusCode == HttpStatusCode.NotFound)
-            return; // nothing to stop
+            return (null, null); // nothing to stop, nothing to inherit
+
+        string? project = null;
+        string? service = null;
+        try
+        {
+            var body = await inspect.Content.ReadAsStringAsync(ct);
+            var doc = JsonSerializer.Deserialize<JsonElement>(body);
+            if (doc.TryGetProperty("Config", out var config) &&
+                config.TryGetProperty("Labels", out var labels) &&
+                labels.ValueKind == JsonValueKind.Object)
+            {
+                if (labels.TryGetProperty("com.docker.compose.project", out var p) && p.ValueKind == JsonValueKind.String)
+                    project = p.GetString();
+                if (labels.TryGetProperty("com.docker.compose.service", out var s) && s.ValueKind == JsonValueKind.String)
+                    service = s.GetString();
+            }
+        }
+        catch
+        {
+            // Reading the old container's labels is a nice-to-have, not something that
+            // should ever block a swap — fall through with (null, null).
+        }
 
         await client.PostAsync($"{dockerBase}/v1.43/containers/{name}/stop?t=10", null, ct);
         await Task.Delay(500, ct);
         await client.DeleteAsync($"{dockerBase}/v1.43/containers/{name}?v=true&force=true", ct);
+        return (project, service);
     }
 
     private async Task EnsureImageAsync(string dockerBase, string image, CancellationToken ct)
@@ -145,11 +174,13 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         return (image[..lastColon], image[(lastColon + 1)..]);
     }
 
-    private async Task CreateAndStartAsync(string dockerBase, string name, LaunchSpec spec, ModelInfo model, CancellationToken ct)
+    private async Task CreateAndStartAsync(
+        string dockerBase, string name, LaunchSpec spec, ModelInfo model,
+        string? composeProject, string? composeService, CancellationToken ct)
     {
         using var client = _httpFactory.CreateClient("docker");
 
-        var payload = BuildCreatePayload(spec, model, _gpuProvisionerFactory.Create(spec.GpuVendor));
+        var payload = BuildCreatePayload(spec, model, _gpuProvisionerFactory.Create(spec.GpuVendor), composeProject, composeService);
 
         var json = JsonSerializer.Serialize(payload);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -192,11 +223,24 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
     /// the GPU provisioner picked for the spec's vendor), this is everything the
     /// orchestrator sends.
     /// </summary>
-    internal static object BuildCreatePayload(LaunchSpec spec, ModelInfo model, IGpuProvisioner gpuProvisioner)
+    internal static object BuildCreatePayload(
+        LaunchSpec spec, ModelInfo model, IGpuProvisioner gpuProvisioner,
+        string? composeProject = null, string? composeService = null)
     {
         var (modelValue, impliedVolume) = ResolveModel(model);
 
         var cmd = new List<string> { "serve", modelValue };
+        if (spec.ServingPort is { } servingPort)
+        {
+            // ServingPort also drives HostConfig.PortBindings below, but that alone
+            // only affects bridge-mode Docker port mapping — it does nothing under
+            // host networking, and even under bridge mode the process itself still
+            // needs to be told to bind here, or it falls back to vLLM's own default
+            // port regardless of what Docker maps. Must pass this to the process
+            // directly in both cases.
+            cmd.Add("--port");
+            cmd.Add(servingPort.ToString());
+        }
         foreach (var (key, value) in model.Options)
         {
             var def = VllmOptionCatalog.Find(key);
@@ -219,11 +263,23 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
 
         var image = string.IsNullOrWhiteSpace(model.ImageOverride) ? spec.Image : model.ImageOverride;
 
+        // Compose project/service labels, when the container being replaced had them,
+        // are carried forward automatically (read from the old container by
+        // StopAndRemoveAsync) so tools that read Compose labels — Portainer's stack
+        // view, `docker compose ps`, etc. — still recognize the recreated container
+        // instead of showing it as orphaned. No configuration needed for this; a
+        // container that was never part of a Compose stack simply has neither.
+        var labels = new Dictionary<string, string> { ["created"] = "vllm-dashboard" };
+        if (!string.IsNullOrWhiteSpace(composeProject))
+            labels["com.docker.compose.project"] = composeProject;
+        if (!string.IsNullOrWhiteSpace(composeService))
+            labels["com.docker.compose.service"] = composeService;
+
         var config = new Dictionary<string, object>
         {
             ["Image"] = image,
             ["Cmd"] = cmd,
-            ["Labels"] = new { created = "vllm-dashboard" },
+            ["Labels"] = labels,
         };
         if (!string.IsNullOrWhiteSpace(spec.Entrypoint))
             config["Entrypoint"] = spec.Entrypoint.Split(' ', StringSplitOptions.RemoveEmptyEntries);

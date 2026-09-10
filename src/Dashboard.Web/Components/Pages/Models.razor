@@ -243,47 +243,89 @@
         }
     }
 
+    // Text-type options skip the override checkbox entirely: an empty value already
+    // means "flag not emitted" (see DockerOrchestrator.BuildCreatePayload), so the
+    // checkbox added an extra click without adding any safety — unlike Toggle/Enum/
+    // numeric fields, where it genuinely prevents an accidental value slipping in.
+    private string GetOptionValue(string key) => _fOptions.TryGetValue(key, out var v) ? v : "";
+
+    private void SetOptionValue(string key, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            _fOptions.Remove(key);
+        else
+            _fOptions[key] = value;
+    }
+
     private RenderFragment RenderOption(VllmOptionDefinition opt) =>
         @<div class="col-md-6">
-            <div class="form-check d-flex align-items-center gap-2">
-                <input type="checkbox" class="form-check-input" id="@("opt-" + opt.Key)"
-                       checked="@IsOptionEnabled(opt.Key)"
-                       @onchange="@(e => SetOptionEnabled(opt.Key, e.Value is bool b && b, opt))" />
-                <label class="form-check-label" for="@("opt-" + opt.Key)">
+            @if (opt.ControlType == VllmOptionControlType.Text)
+            {
+                <label class="form-label mb-1" for="@("opt-" + opt.Key)">
                     @opt.Label <code class="text-muted">@opt.CliFlag</code>
                 </label>
-            </div>
-            @if (!string.IsNullOrEmpty(opt.Description))
-            {
-                <div class="form-text">@opt.Description</div>
-            }
-            @if (IsOptionEnabled(opt.Key) && opt.ControlType != VllmOptionControlType.Toggle)
-            {
-                @if (opt.ControlType == VllmOptionControlType.Enum)
+                @if (opt.Suggestions is { Length: > 0 })
                 {
-                    <select class="form-select form-select-sm mt-1" @bind="_fOptions[opt.Key]">
-                        @foreach (var v in opt.AllowedValues ?? Array.Empty<string>())
+                    <input class="form-control form-control-sm" id="@("opt-" + opt.Key)"
+                           list="@("opt-dl-" + opt.Key)"
+                           placeholder="leave blank to use vLLM's default"
+                           @bind:get="GetOptionValue(opt.Key)" @bind:set="v => SetOptionValue(opt.Key, v)" />
+                    <datalist id="@("opt-dl-" + opt.Key)">
+                        @foreach (var s in opt.Suggestions)
                         {
-                            <option value="@v">@v</option>
+                            <option value="@s"></option>
                         }
-                    </select>
-                }
-                else if (opt.ControlType is VllmOptionControlType.Integer or VllmOptionControlType.Float)
-                {
-                    <div class="input-group input-group-sm mt-1">
-                        <input class="form-control" type="number"
-                               step="@(opt.ControlType == VllmOptionControlType.Float ? "any" : "1")"
-                               min="@opt.Min" max="@opt.Max"
-                               @bind="_fOptions[opt.Key]" />
-                        @if (!string.IsNullOrEmpty(opt.Unit))
-                        {
-                            <span class="input-group-text">@opt.Unit</span>
-                        }
-                    </div>
+                    </datalist>
                 }
                 else
                 {
-                    <input class="form-control form-control-sm mt-1" @bind="_fOptions[opt.Key]" />
+                    <input class="form-control form-control-sm" id="@("opt-" + opt.Key)"
+                           placeholder="leave blank to use vLLM's default"
+                           @bind:get="GetOptionValue(opt.Key)" @bind:set="v => SetOptionValue(opt.Key, v)" />
+                }
+                @if (!string.IsNullOrEmpty(opt.Description))
+                {
+                    <div class="form-text">@opt.Description</div>
+                }
+            }
+            else
+            {
+                <div class="form-check d-flex align-items-center gap-2">
+                    <input type="checkbox" class="form-check-input" id="@("opt-" + opt.Key)"
+                           checked="@IsOptionEnabled(opt.Key)"
+                           @onchange="@(e => SetOptionEnabled(opt.Key, e.Value is bool b && b, opt))" />
+                    <label class="form-check-label" for="@("opt-" + opt.Key)">
+                        @opt.Label <code class="text-muted">@opt.CliFlag</code>
+                    </label>
+                </div>
+                @if (!string.IsNullOrEmpty(opt.Description))
+                {
+                    <div class="form-text">@opt.Description</div>
+                }
+                @if (IsOptionEnabled(opt.Key) && opt.ControlType != VllmOptionControlType.Toggle)
+                {
+                    @if (opt.ControlType == VllmOptionControlType.Enum)
+                    {
+                        <select class="form-select form-select-sm mt-1" @bind="_fOptions[opt.Key]">
+                            @foreach (var v in opt.AllowedValues ?? Array.Empty<string>())
+                            {
+                                <option value="@v">@v</option>
+                            }
+                        </select>
+                    }
+                    else if (opt.ControlType is VllmOptionControlType.Integer or VllmOptionControlType.Float)
+                    {
+                        <div class="input-group input-group-sm mt-1">
+                            <input class="form-control" type="number"
+                                   step="@(opt.ControlType == VllmOptionControlType.Float ? "any" : "1")"
+                                   min="@opt.Min" max="@opt.Max"
+                                   @bind="_fOptions[opt.Key]" />
+                            @if (!string.IsNullOrEmpty(opt.Unit))
+                            {
+                                <span class="input-group-text">@opt.Unit</span>
+                            }
+                        </div>
+                    }
                 }
             }
         </div>;
