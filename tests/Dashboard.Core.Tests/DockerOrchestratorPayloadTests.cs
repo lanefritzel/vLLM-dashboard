@@ -350,4 +350,15 @@ public class DockerOrchestratorPayloadTests
         Assert.Equal(expectedRepo, repo);
         Assert.Equal(expectedTag, tag);
     }
+
+    [Theory]
+    [InlineData(new byte[] { 1, 0, 0, 0, 0, 0, 0, 0 }, 0)]
+    [InlineData(new byte[] { 1, 0, 0, 0, 0, 0, 0, 1 }, 1)]
+    [InlineData(new byte[] { 1, 0, 0, 0, 0, 0, 1, 0 }, 256)]
+    [InlineData(new byte[] { 2, 0, 0, 0, 0, 1, 0, 0 }, 65536)]
+    [InlineData(new byte[] { 1, 0, 0, 0, 0x00, 0x01, 0x00, 0x00 }, 65536)]
+    public void ParseFrameSize_ReadsBigEndianSizeFromBytesFourToSeven(byte[] header, int expected)
+    {
+        Assert.Equal(expected, DockerOrchestrator.ParseFrameSize(header));
+    }
 }

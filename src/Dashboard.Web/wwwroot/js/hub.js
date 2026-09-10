@@ -71,4 +71,43 @@
   window.traffichub_stop = function () {
     if (trafficConn) { try { trafficConn.stop(); } catch (e) {} trafficConn = null; }
   };
+
+  // Separate connection for live container log streaming — its own hub, its own
+  // group membership, independent of the metrics and traffic connections above.
+  var logsConn = null;
+  var logsCurrentSourceId = null;
+
+  window.logshub_start = function (receiver) {
+    if (logsConn) { try { logsConn.stop(); } catch (e) {} logsConn = null; }
+    var c = new signalR.HubConnectionBuilder()
+      .withUrl('/logs-hub')
+      .withAutomaticReconnect([0, 250, 1000, 5000, 10000])
+      .build();
+
+    c.on('logLine', function (line) { receiver.invokeMethodAsync('OnLogLine', line); });
+    c.onreconnected(function () { if (logsCurrentSourceId) c.invoke('JoinSource', logsCurrentSourceId).catch(function () {}); });
+
+    logsConn = c;
+    return c.start();
+  };
+
+  window.logshub_join = function (sourceId) {
+    logsCurrentSourceId = sourceId;
+    if (logsConn && sourceId) return logsConn.invoke('JoinSource', sourceId).catch(function () {});
+    return Promise.resolve();
+  };
+
+  window.logshub_leave = function (sourceId) {
+    if (logsConn && sourceId) return logsConn.invoke('LeaveSource', sourceId).catch(function () {});
+    return Promise.resolve();
+  };
+
+  window.logshub_stop = function () {
+    if (logsConn) { try { logsConn.stop(); } catch (e) {} logsConn = null; }
+  };
+
+  window.logs_scroll_bottom = function (elId) {
+    var el = document.getElementById(elId);
+    if (el) el.scrollTop = el.scrollHeight;
+  };
 })();

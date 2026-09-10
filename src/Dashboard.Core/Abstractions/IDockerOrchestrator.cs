@@ -29,6 +29,13 @@ public interface IDockerOrchestrator
     /// a host reboot). Returns null on any failure (unreachable, malformed, no models
     /// reported) — callers treat that as "unknown," not "definitely nothing."</summary>
     Task<string?> GetActuallyRunningModelNameAsync(SourceInfo source, CancellationToken ct = default);
+
+    /// <summary>Follows the source's container logs (Docker's own <c>?follow=true</c>
+    /// streaming endpoint), invoking <paramref name="onLine"/> for each line as it
+    /// arrives (seeded with the last 200 lines of prior output). Runs until the
+    /// container's log stream ends or <paramref name="ct"/> is cancelled — callers that
+    /// want to keep watching across a container recreate should re-invoke on return.</summary>
+    Task StreamLogsAsync(SourceInfo source, Func<string, Task> onLine, CancellationToken ct = default);
 }
 
 /// <summary>Per-step progress reporting for hot-swap.</summary>

@@ -1,0 +1,133 @@
+@page "/logs"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@implements IDisposable
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
+@inject ISourceCatalog Sources
+@inject SourceSelection Selection
+
+<PageTitle>Logs — vLLM Dashboard</PageTitle>
+
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <h1 class="page-title mb-0">Logs <span class="text-muted fs-5">/ @(SelectedSource?.Label ?? "no source selected")</span></h1>
+    @if (SelectedSource is not null)
+    {
+        <button class="btn btn-outline-secondary btn-sm" @onclick="ClearLines">Clear</button>
+    }
+</div>
+
+@if (SelectedSource is null)
+{
+    <div class="card"><div class="card-body">
+        <p class="text-muted mb-0">No source selected. Add one on the <a href="settings">Settings</a> page.</p>
+    </div></div>
+}
+else
+{
+    <p class="text-muted small">
+        Live stdout/stderr from this source's backend container. Streaming starts while this page is open and
+        stops when you leave — no background load when nobody's watching.
+    </p>
+
+    <div class="card">
+        <div class="card-body">
+            <pre id="logs-console" class="probe-output logs-console">@(_lines.Count == 0 ? "Waiting for log output…" : string.Join("\n", _lines))</pre>
+        </div>
+    </div>
+}
+
+@code {
+    private const int MaxLines = 500;
+
+    private DotNetObjectReference<Logs>? _receiver;
+    private List<SourceInfo> _all = new();
+    private readonly LinkedList<string> _lines = new();
+    private bool _hubStarted;
+    private bool _jsReady;
+    private bool _disposed;
+    private string? _hubJoinedId;
+
+    private SourceInfo? SelectedSource =>
+        _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _receiver = DotNetObjectReference.Create(this);
+        Selection.Changed += OnSelectionChanged;
+        _all = (await Sources.GetAllAsync()).ToList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_disposed || SelectedSource is null) return;
+        try
+        {
+            if (!_hubStarted)
+            {
+                await JS.InvokeVoidAsync("logshub_start", _receiver!);
+                _hubStarted = true;
+            }
+            _jsReady = true;
+            await EnsureJoinedAsync();
+        }
+        catch (Exception)
+        {
+            // JS not ready yet (static prerender pass) — retry on the next render.
+        }
+    }
+
+    private void OnSelectionChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            ClearLinesInternal();
+            await EnsureJoinedAsync();
+            StateHasChanged();
+        });
+
+    private async Task EnsureJoinedAsync()
+    {
+        var src = SelectedSource;
+        if (src is null || !_jsReady) return;
+        if (_hubJoinedId == src.Id) return;
+
+        if (_hubJoinedId is not null)
+            await JS.InvokeVoidAsync("logshub_leave", _hubJoinedId);
+        await JS.InvokeVoidAsync("logshub_join", src.Id);
+        _hubJoinedId = src.Id;
+    }
+
+    [JSInvokable]
+    public Task OnLogLine(string line) => InvokeAsync(async () =>
+    {
+        if (_disposed) return;
+        _lines.AddLast(line);
+        while (_lines.Count > MaxLines)
+            _lines.RemoveFirst();
+        StateHasChanged();
+        await JS.InvokeVoidAsync("logs_scroll_bottom", "logs-console");
+    });
+
+    private void ClearLines()
+    {
+        ClearLinesInternal();
+        StateHasChanged();
+    }
+
+    private void ClearLinesInternal() => _lines.Clear();
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Selection.Changed -= OnSelectionChanged;
+        // No explicit logshub_leave here: LogsHub.OnDisconnectedAsync cleans up the
+        // server-side ref-count once this circuit's connection actually closes, which
+        // works even on an abrupt tab close where Dispose might not get a chance to
+        // run a JS interop call at all.
+        _receiver?.Dispose();
+    }
+}

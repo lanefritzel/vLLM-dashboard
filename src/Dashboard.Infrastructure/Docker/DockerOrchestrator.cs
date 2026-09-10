@@ -88,6 +88,60 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         }
     }
 
+    public async Task StreamLogsAsync(SourceInfo source, Func<string, Task> onLine, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(source.DockerHost))
+            throw new InvalidOperationException("No Docker host configured for this source.");
+
+        var dockerBase = NormalizeDockerBase(source.DockerHost);
+        var containerName = ResolveContainerName(source);
+        var url = $"{dockerBase}/v1.43/containers/{containerName}/logs?stdout=1&stderr=1&follow=1&tail=200";
+
+        var client = _httpFactory.CreateClient("docker-logs");
+        using var resp = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        resp.EnsureSuccessStatusCode();
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+
+        // Docker multiplexes stdout/stderr over one connection (when the container
+        // wasn't created with a TTY, which none of ours are): each frame is an 8-byte
+        // header — [stream type][3 unused bytes][4-byte big-endian payload size] —
+        // followed by that many bytes of the actual log text. Reading it as plain text
+        // would corrupt lines with these binary headers mixed in.
+        var header = new byte[8];
+        while (true)
+        {
+            if (!await ReadExactAsync(stream, header, 8, ct))
+                return;
+            var size = ParseFrameSize(header);
+            if (size == 0)
+                continue;
+            var payload = new byte[size];
+            if (!await ReadExactAsync(stream, payload, size, ct))
+                return;
+            var text = Encoding.UTF8.GetString(payload);
+            foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                await onLine(line);
+        }
+    }
+
+    /// <summary>Big-endian uint32 payload size from a Docker log stream frame header
+    /// (bytes 4-7; bytes 0-3 are the stream type + padding). Pure/no I/O.</summary>
+    internal static int ParseFrameSize(byte[] header) =>
+        (header[4] << 24) | (header[5] << 16) | (header[6] << 8) | header[7];
+
+    private static async Task<bool> ReadExactAsync(Stream stream, byte[] buffer, int count, CancellationToken ct)
+    {
+        var offset = 0;
+        while (offset < count)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset, count - offset), ct);
+            if (read == 0)
+                return false;
+            offset += read;
+        }
+        return true;
+    }
+
     public async Task<string?> GetActuallyRunningModelNameAsync(SourceInfo source, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(source.InferenceUrl))

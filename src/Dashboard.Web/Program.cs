@@ -53,6 +53,9 @@ builder.Services.AddSignalR();
 
 builder.Services.AddHttpClient("metrics", c => c.Timeout = TimeSpan.FromSeconds(5));
 builder.Services.AddHttpClient("docker", c => c.Timeout = TimeSpan.FromSeconds(30));
+// Docker's log-follow endpoint is a long-lived streaming connection, not a normal
+// request/response call — needs the same infinite timeout as the "proxy" client.
+builder.Services.AddHttpClient("docker-logs", c => c.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient("inference", c => c.Timeout = TimeSpan.FromSeconds(30));
 // No client-side timeout: a proxied inference request (in particular a streaming SSE
 // chat completion) has no natural fixed duration. Cancellation comes from the actual
@@ -74,6 +77,7 @@ builder.Services.AddSingleton<IGpuProvisionerFactory, Dashboard.Infrastructure.D
 builder.Services.AddSingleton<IDockerOrchestrator, Dashboard.Infrastructure.Docker.DockerOrchestrator>();
 builder.Services.AddSingleton<Dashboard.Application.Proxy.IModelProxyService, Dashboard.Application.Proxy.ModelProxyService>();
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IActivityTracker, Dashboard.Application.Idle.ActivityTracker>();
+builder.Services.AddSingleton<Dashboard.Application.Logs.ILogStreamManager, Dashboard.Application.Logs.LogStreamManager>();
 
 // Singleton; each opens a fresh AppDbContext per operation via IServiceScopeFactory
 // (same pattern as ConfigStore/SampleStore) so concurrent calls from different
@@ -131,6 +135,7 @@ app.MapRazorComponents<App>()
 
 app.MapHub<MetricsHub>("/metrics-hub").RequireAuthorization();
 app.MapHub<Dashboard.Application.Proxy.TrafficHub>("/traffic-hub").RequireAuthorization();
+app.MapHub<Dashboard.Application.Logs.LogsHub>("/logs-hub").RequireAuthorization();
 app.MapAdditionalIdentityEndpoints();
 
 // Transparent proxy: inference clients hit this stable URL instead of a source's own

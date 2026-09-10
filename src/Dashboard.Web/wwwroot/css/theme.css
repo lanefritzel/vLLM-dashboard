@@ -259,6 +259,11 @@ code { background: var(--bg-2); border: 1px solid var(--border); border-radius: 
 }
 .traffic-message-text { white-space: pre-wrap; word-break: break-word; color: var(--text); }
 
+/* Logs */
+.logs-console {
+  max-height: 70vh; overflow-y: auto; font-size: 0.8rem; line-height: 1.4;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .app-nav { width: 64px; flex-basis: 64px; }
