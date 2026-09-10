@@ -364,6 +364,9 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)");
 
+                    b.Property<int?>("IdleTtlSeconds")
+                        .HasColumnType("integer");
+
                     b.Property<string>("ImageOverride")
                         .HasColumnType("text");
 

@@ -31,6 +31,7 @@ public sealed class ModelProxyService : IModelProxyService
     private readonly IDockerOrchestrator _orchestrator;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IHubContext<TrafficHub> _traffic;
+    private readonly IActivityTracker _activity;
     private readonly ILogger<ModelProxyService> _logger;
 
     // One swap-in-flight lock per source, so two concurrent requests for the same
@@ -57,6 +58,7 @@ public sealed class ModelProxyService : IModelProxyService
         IDockerOrchestrator orchestrator,
         IHttpClientFactory httpFactory,
         IHubContext<TrafficHub> traffic,
+        IActivityTracker activity,
         ILogger<ModelProxyService> logger)
     {
         _sources = sources;
@@ -65,6 +67,7 @@ public sealed class ModelProxyService : IModelProxyService
         _orchestrator = orchestrator;
         _httpFactory = httpFactory;
         _traffic = traffic;
+        _activity = activity;
         _logger = logger;
     }
 
@@ -326,6 +329,7 @@ public sealed class ModelProxyService : IModelProxyService
 
             await StreamWithTeeAsync(context, upstreamResponse, source.Id, requestId, ct);
         }
+        _activity.Touch(source.Id);
         BroadcastFinished(source.Id, requestId, context.Response.StatusCode, sw.ElapsedMilliseconds, null);
     }
 

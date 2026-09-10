@@ -54,4 +54,9 @@ public sealed record ModelInfo
 
     public bool IsActive { get; init; }
     public int SortOrder { get; init; }
+
+    /// <summary>How long this model may sit idle (no proxied requests) before
+    /// <c>IdleUnloadService</c> stops its container to free the GPU. Null/0 disables
+    /// idle-unload for this model — it stays loaded until something else swaps it out.</summary>
+    public int? IdleTtlSeconds { get; init; }
 }

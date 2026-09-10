@@ -42,7 +42,7 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
             return new InferenceResult { Success = false, Error = "No Docker host configured for this source." };
 
         var dockerBase = NormalizeDockerBase(source.DockerHost);
-        var containerName = source.ContainerName ?? source.Label.Replace(" ", "-").ToLowerInvariant();
+        var containerName = ResolveContainerName(source);
         var image = string.IsNullOrWhiteSpace(model.ImageOverride) ? spec.Image : model.ImageOverride;
 
         try
@@ -77,6 +77,28 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
             return new InferenceResult { Success = false, Error = ex.Message };
         }
     }
+
+    public async Task<InferenceResult> UnloadAsync(SourceInfo source, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(source.DockerHost))
+            return new InferenceResult { Success = false, Error = "No Docker host configured for this source." };
+
+        var dockerBase = NormalizeDockerBase(source.DockerHost);
+        var containerName = ResolveContainerName(source);
+        try
+        {
+            await StopAndRemoveAsync(dockerBase, containerName, ct);
+            return new InferenceResult { Success = true };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Idle-unload failed for source {Source}.", source.Label);
+            return new InferenceResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    private static string ResolveContainerName(SourceInfo source) =>
+        source.ContainerName ?? source.Label.Replace(" ", "-").ToLowerInvariant();
 
     private static string NormalizeDockerBase(string dockerHost)
     {

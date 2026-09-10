@@ -16,6 +16,11 @@ public interface IDockerOrchestrator
         SourceInfo source, ModelInfo model, LaunchSpec spec,
         IAsyncActionProgress progress, CancellationToken ct = default);
 
+    /// <summary>Stops and removes the source's current container without starting a
+    /// replacement — used by idle-unload to actually free the GPU rather than just
+    /// swap in something else. A no-op (success) if nothing was running.</summary>
+    Task<InferenceResult> UnloadAsync(SourceInfo source, CancellationToken ct = default);
+
     Task<bool> IsDockerHostConfiguredAsync(SourceInfo source, CancellationToken ct = default);
 }
 

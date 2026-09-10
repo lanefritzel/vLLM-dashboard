@@ -26,7 +26,7 @@
             </div>
             <table class="table table-sm">
                 <thead>
-                    <tr><th>Name</th><th>Display name</th><th>Source</th><th>Path / repo</th><th>Active</th><th></th></tr>
+                    <tr><th>Name</th><th>Display name</th><th>Source</th><th>Path / repo</th><th>Idle TTL</th><th>Active</th><th></th></tr>
                 </thead>
                 <tbody>
                     @foreach (var m in _models)
@@ -36,6 +36,7 @@
                             <td>@(m.DisplayName ?? "—")</td>
                             <td>@(m.ModelSource == ModelSource.HuggingFace ? "Hugging Face" : "Local path")</td>
                             <td class="url-cell">@m.ModelPathOrRepoId</td>
+                            <td>@(m.IdleTtlSeconds is { } s ? $"{s / 60} min" : "—")</td>
                             <td>
                                 @if (m.IsActive)
                                 {
@@ -61,7 +62,7 @@
                     }
                     @if (_models.Count == 0)
                     {
-                        <tr><td colspan="6" class="text-muted">No models registered for this source.</td></tr>
+                        <tr><td colspan="7" class="text-muted">No models registered for this source.</td></tr>
                     }
                 </tbody>
             </table>
@@ -126,10 +127,15 @@
                             <div class="form-text">Mounted automatically — the container path and --model value are derived for you.</div>
                         </div>
                     }
-                    <div class="col-md-12">
+                    <div class="col-md-6">
                         <label class="form-label">
                             <input type="checkbox" class="form-check-input" @bind="_fModelActive" /> set active on save
                         </label>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Idle unload after <span class="text-muted">(minutes — blank disables it)</span></label>
+                        <input class="form-control" type="number" min="1" @bind="_fModelIdleTtlMinutes" placeholder="stays loaded until swapped" />
+                        <div class="form-text">If this model sits idle (no proxied requests) this long, its container is stopped to free the GPU.</div>
                     </div>
 
                     <div class="col-md-12">
@@ -212,6 +218,7 @@
     private ModelSource _fModelSource = ModelSource.HuggingFace;
     private string _fModelPathOrRepoId = "";
     private bool _fModelActive;
+    private int? _fModelIdleTtlMinutes;
     private Dictionary<string, string> _fOptions = new();
 
     private static string GroupLabel(VllmOptionGroup g) => g switch
@@ -372,6 +379,7 @@
         _fModelSource = ModelSource.HuggingFace;
         _fModelPathOrRepoId = "";
         _fModelActive = _models.Count == 0;
+        _fModelIdleTtlMinutes = null;
         _fOptions = new();
     }
 
@@ -386,6 +394,7 @@
         _fModelSource = m.ModelSource;
         _fModelPathOrRepoId = m.ModelPathOrRepoId;
         _fModelActive = m.IsActive;
+        _fModelIdleTtlMinutes = m.IdleTtlSeconds is { } s ? Math.Max(1, s / 60) : null;
         _fOptions = new Dictionary<string, string>(m.Options);
     }
 
@@ -405,6 +414,7 @@
                 ImageOverride = string.IsNullOrWhiteSpace(_fModelImageOverride) ? null : _fModelImageOverride.Trim(),
                 ModelSource = _fModelSource,
                 ModelPathOrRepoId = _fModelPathOrRepoId.Trim(),
+                IdleTtlSeconds = _fModelIdleTtlMinutes is { } m and > 0 ? m * 60 : null,
                 Options = _fOptions.Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
                     .ToDictionary(kv => kv.Key, kv => kv.Value),
             };

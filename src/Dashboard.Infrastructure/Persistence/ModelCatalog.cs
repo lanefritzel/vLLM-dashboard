@@ -57,6 +57,7 @@ public sealed class ModelCatalog : IModelCatalog
             OptionsJson = System.Text.Json.JsonSerializer.Serialize(model.Options),
             IsActive = model.IsActive || !anyActive,
             SortOrder = model.SortOrder,
+            IdleTtlSeconds = model.IdleTtlSeconds,
         };
         if (entity.IsActive)
             await DeactivateOthersAsync(db, entity.SourceId, ct);
@@ -82,6 +83,7 @@ public sealed class ModelCatalog : IModelCatalog
         entity.ImageOverride = model.ImageOverride;
         entity.OptionsJson = System.Text.Json.JsonSerializer.Serialize(model.Options);
         entity.SortOrder = model.SortOrder;
+        entity.IdleTtlSeconds = model.IdleTtlSeconds;
         if (model.IsActive)
         {
             await DeactivateOthersAsync(db, entity.SourceId, ct);
@@ -110,6 +112,17 @@ public sealed class ModelCatalog : IModelCatalog
         var entity = await db.Models.SingleAsync(x => x.Id == Guid.Parse(modelId), ct);
         await DeactivateOthersAsync(db, entity.SourceId, ct);
         entity.IsActive = true;
+        await db.SaveChangesAsync(ct);
+        _config.RaiseChanged();
+    }
+
+    public async Task DeactivateAsync(string modelId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var entity = await db.Models.FirstOrDefaultAsync(x => x.Id == Guid.Parse(modelId), ct);
+        if (entity is null || !entity.IsActive) return;
+        entity.IsActive = false;
         await db.SaveChangesAsync(ct);
         _config.RaiseChanged();
     }

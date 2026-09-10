@@ -73,6 +73,7 @@ builder.Services.AddSingleton<IInferenceProbe, Dashboard.Application.Metrics.Inf
 builder.Services.AddSingleton<IGpuProvisionerFactory, Dashboard.Infrastructure.Docker.GpuProvisionerFactory>();
 builder.Services.AddSingleton<IDockerOrchestrator, Dashboard.Infrastructure.Docker.DockerOrchestrator>();
 builder.Services.AddSingleton<Dashboard.Application.Proxy.IModelProxyService, Dashboard.Application.Proxy.ModelProxyService>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IActivityTracker, Dashboard.Application.Idle.ActivityTracker>();
 
 // Singleton; each opens a fresh AppDbContext per operation via IServiceScopeFactory
 // (same pattern as ConfigStore/SampleStore) so concurrent calls from different
@@ -88,6 +89,7 @@ builder.Services.AddSingleton<IMetricsHistory, MetricsHistory>();
 builder.Services.AddHostedService<Dashboard.Web.DbInitializerHostedService>();
 builder.Services.AddHostedService<MetricsPollingService>();
 builder.Services.AddHostedService<RollupService>();
+builder.Services.AddHostedService<Dashboard.Application.Idle.IdleUnloadService>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
 {

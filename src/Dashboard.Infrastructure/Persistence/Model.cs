@@ -21,6 +21,7 @@ public class Model
 
     public bool IsActive { get; set; }
     public int SortOrder { get; set; }
+    public int? IdleTtlSeconds { get; set; }
 
     public Source? Source { get; set; }
 
@@ -37,6 +38,7 @@ public class Model
             ImageOverride = ImageOverride,
             IsActive = IsActive,
             SortOrder = SortOrder,
+            IdleTtlSeconds = IdleTtlSeconds,
         };
 
         try
