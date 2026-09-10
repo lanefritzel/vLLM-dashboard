@@ -3,6 +3,7 @@
 @attribute [Authorize]
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
+@inject NavigationManager Nav
 
 <PageTitle>Settings — vLLM Dashboard</PageTitle>
 
@@ -33,7 +34,7 @@
                 <tr>
                     <th>Label</th>
                     <th>Type</th>
-                    <th>Metrics URL</th>
+                    <th>Proxy URL</th>
                     <th>Interval</th>
                     <th>Active</th>
                     <th></th>
@@ -45,7 +46,9 @@
                     <tr>
                         <td>@s.Label</td>
                         <td>@s.Type</td>
-                        <td class="url-cell">@s.MetricsUrl</td>
+                        <td class="url-cell">
+                            <code title="Use this as the OpenAI-compatible baseURL for API clients">@ProxyUrl(s)</code>
+                        </td>
                         <td>@s.ScrapeIntervalSeconds s</td>
                         <td>
                             <input type="checkbox" checked="@s.Active" onchange="@(() => ToggleActiveAsync(s))" title="Enable/disable polling" />
@@ -78,6 +81,10 @@
                     <div class="col-md-6">
                         <label class="form-label">Label</label>
                         <input class="form-control" @bind="_fLabel" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Proxy slug <span class="text-muted small">(used in the proxy URL instead of the internal ID — leave blank to auto-generate from the label)</span></label>
+                        <input class="form-control" @bind="_fSlug" placeholder="@Slug.From(_fLabel)" />
                     </div>
                     <div class="col-md-3">
                         <label class="form-label">Type</label>
@@ -316,6 +323,7 @@
 
     // Source form fields.
     private string _fLabel = "";
+    private string _fSlug = "";
     private string _fType = "vllm";
     private string _fMetricsUrl = "";
     private string _fInferenceUrl = "";
@@ -355,6 +363,9 @@
     private bool _fRollups = true;
 
     private bool TypeIsVllm => _fType == "vllm";
+
+    private string ProxyUrl(SourceInfo s) =>
+        $"{Nav.BaseUri.TrimEnd('/')}/proxy/{(string.IsNullOrWhiteSpace(s.Slug) ? s.Id : s.Slug)}/v1";
 
     protected override async Task OnInitializedAsync()
     {
@@ -410,6 +421,7 @@
             SortOrder = _sources.Count,
         };
         _fLabel = "";
+        _fSlug = "";
         _fType = "vllm";
         _fMetricsUrl = "";
         _fInferenceUrl = "";
@@ -426,6 +438,7 @@
         _isCreating = false;
         _editing = s;
         _fLabel = s.Label;
+        _fSlug = s.Slug;
         _fType = s.Type.ToStorage();
         _fMetricsUrl = s.MetricsUrl;
         _fInferenceUrl = s.InferenceUrl;
@@ -473,6 +486,7 @@
             var info = _editing with
             {
                 Label = _fLabel.Trim(),
+                Slug = _fSlug.Trim(),
                 Type = ParsedType,
                 MetricsUrl = _fMetricsUrl.Trim(),
                 InferenceUrl = _fInferenceUrl.Trim(),

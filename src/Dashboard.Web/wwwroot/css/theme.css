@@ -241,6 +241,24 @@ code { background: var(--bg-2); border: 1px solid var(--border); border-radius: 
   font-size: 0.85rem; color: var(--text); margin: 0;
 }
 
+/* Live traffic */
+.traffic-card { border-left: 3px solid var(--border); }
+.traffic-response, .traffic-reasoning { max-height: 260px; overflow-y: auto; margin-bottom: 0.75rem; }
+.traffic-response:last-child { margin-bottom: 0; }
+.traffic-reasoning { opacity: 0.8; font-style: italic; }
+.traffic-messages {
+  display: flex; flex-direction: column; gap: 0.4rem;
+  max-height: 220px; overflow-y: auto;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+}
+.traffic-message { display: flex; gap: 0.5rem; align-items: baseline; font-size: 0.85rem; }
+.traffic-role {
+  flex: none; text-transform: uppercase; font-size: 0.68rem; font-weight: 650;
+  letter-spacing: 0.03em; color: var(--muted); min-width: 4.5rem;
+}
+.traffic-message-text { white-space: pre-wrap; word-break: break-word; color: var(--text); }
+
 /* Responsive */
 @media (max-width: 900px) {
   .app-nav { width: 64px; flex-basis: 64px; }

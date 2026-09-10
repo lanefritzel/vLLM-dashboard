@@ -443,6 +443,11 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<int>("ScrapeIntervalSeconds")
                         .HasColumnType("integer");
 
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
+
                     b.Property<int>("SortOrder")
                         .HasColumnType("integer");
 
@@ -455,6 +460,9 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Slug")
+                        .IsUnique();
 
                     b.ToTable("Sources", (string)null);
                 });

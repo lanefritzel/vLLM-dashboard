@@ -4,6 +4,7 @@ namespace Dashboard.Core.Models;
 public sealed record SourceInfo
 {
     public string Id { get; init; } = "";
+    public string Slug { get; init; } = "";
     public string Label { get; init; } = "";
     public SourceType Type { get; init; }
     public string MetricsUrl { get; init; } = "";

@@ -14,4 +14,10 @@
     <ProjectReference Include="..\Dashboard.Core\Dashboard.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Lets Dashboard.Core.Tests unit-test internal, pure helpers (e.g.
+         ModelProxyService.TryExtractModelName) without a live HTTP pipeline. -->
+    <InternalsVisibleTo Include="Dashboard.Core.Tests" />
+  </ItemGroup>
+
 </Project>

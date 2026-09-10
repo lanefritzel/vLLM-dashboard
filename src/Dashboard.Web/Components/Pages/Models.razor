@@ -480,6 +480,8 @@
 
         if (!result.Success)
             await AlertAsync("Hot-swap failed: " + result.Error);
+        else
+            await ModelCatalog.ActivateAsync(m.Id);
 
         _busyModelId = null;
         await ReloadAsync();

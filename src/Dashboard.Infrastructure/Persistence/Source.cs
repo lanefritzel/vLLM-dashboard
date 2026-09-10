@@ -5,6 +5,7 @@ namespace Dashboard.Infrastructure.Persistence;
 public class Source
 {
     public Guid Id { get; set; }
+    public string Slug { get; set; } = "";
     public string Label { get; set; } = "";
     public string Type { get; set; } = SourceType.Vllm.ToStorage();
     public string MetricsUrl { get; set; } = "";
@@ -23,6 +24,7 @@ public class Source
     public SourceInfo ToInfo() => new()
     {
         Id = Id.ToString(),
+        Slug = Slug,
         Label = Label,
         Type = SourceTypeExtensions.FromStorage(Type),
         MetricsUrl = MetricsUrl,

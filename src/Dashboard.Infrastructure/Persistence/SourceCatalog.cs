@@ -45,12 +45,24 @@ public sealed class SourceCatalog : ISourceCatalog
         return s?.ToInfo();
     }
 
+    public async Task<SourceInfo?> GetByIdOrSlugAsync(string idOrSlug, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var s = Guid.TryParse(idOrSlug, out var guid)
+            ? await db.Sources.AsNoTracking().FirstOrDefaultAsync(x => x.Id == guid, ct)
+            : await db.Sources.AsNoTracking().FirstOrDefaultAsync(x => x.Slug == idOrSlug.Trim().ToLowerInvariant(), ct);
+        return s?.ToInfo();
+    }
+
     public async Task<SourceInfo> CreateAsync(SourceInfo source, CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var baseSlug = Core.Models.Slug.From(string.IsNullOrWhiteSpace(source.Slug) ? source.Label : source.Slug);
         var entity = new Source
         {
+            Slug = await EnsureUniqueSlugAsync(db, baseSlug, excludeId: null, ct),
             Label = source.Label,
             Type = source.Type.ToStorage(),
             MetricsUrl = source.MetricsUrl,
@@ -72,6 +84,11 @@ public sealed class SourceCatalog : ISourceCatalog
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var entity = await db.Sources.SingleAsync(x => x.Id == Guid.Parse(source.Id), ct);
+
+        var baseSlug = Core.Models.Slug.From(string.IsNullOrWhiteSpace(source.Slug) ? source.Label : source.Slug);
+        if (!string.Equals(baseSlug, entity.Slug, StringComparison.Ordinal))
+            entity.Slug = await EnsureUniqueSlugAsync(db, baseSlug, excludeId: entity.Id, ct);
+
         entity.Label = source.Label;
         entity.Type = source.Type.ToStorage();
         entity.MetricsUrl = source.MetricsUrl;
@@ -85,6 +102,20 @@ public sealed class SourceCatalog : ISourceCatalog
         await db.SaveChangesAsync(ct);
         _config.RaiseChanged();
         return entity.ToInfo();
+    }
+
+    /// <summary>Appends "-2", "-3", … until the slug doesn't collide with another
+    /// source. Runs inside the caller's already-open scope/context.</summary>
+    private static async Task<string> EnsureUniqueSlugAsync(AppDbContext db, string baseSlug, Guid? excludeId, CancellationToken ct)
+    {
+        var candidate = baseSlug;
+        var suffix = 2;
+        while (await db.Sources.AnyAsync(s => s.Slug == candidate && (excludeId == null || s.Id != excludeId), ct))
+        {
+            candidate = $"{baseSlug}-{suffix}";
+            suffix++;
+        }
+        return candidate;
     }
 
     public async Task DeleteAsync(string id, CancellationToken ct = default)

@@ -54,6 +54,10 @@ builder.Services.AddSignalR();
 builder.Services.AddHttpClient("metrics", c => c.Timeout = TimeSpan.FromSeconds(5));
 builder.Services.AddHttpClient("docker", c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("inference", c => c.Timeout = TimeSpan.FromSeconds(30));
+// No client-side timeout: a proxied inference request (in particular a streaming SSE
+// chat completion) has no natural fixed duration. Cancellation comes from the actual
+// client disconnecting (HttpContext.RequestAborted), not a timer.
+builder.Services.AddHttpClient("proxy", c => c.Timeout = Timeout.InfiniteTimeSpan);
 
 // Cross-circuit shared UI state (which source the dashboard is showing).
 builder.Services.AddSingleton<SourceSelection>();
@@ -68,6 +72,7 @@ builder.Services.AddSingleton<IMetricsSourceFactory, Dashboard.Infrastructure.Sc
 builder.Services.AddSingleton<IInferenceProbe, Dashboard.Application.Metrics.InferenceProbeService>();
 builder.Services.AddSingleton<IGpuProvisionerFactory, Dashboard.Infrastructure.Docker.GpuProvisionerFactory>();
 builder.Services.AddSingleton<IDockerOrchestrator, Dashboard.Infrastructure.Docker.DockerOrchestrator>();
+builder.Services.AddSingleton<Dashboard.Application.Proxy.IModelProxyService, Dashboard.Application.Proxy.ModelProxyService>();
 
 // Singleton; each opens a fresh AppDbContext per operation via IServiceScopeFactory
 // (same pattern as ConfigStore/SampleStore) so concurrent calls from different
@@ -122,6 +127,17 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.MapHub<MetricsHub>("/metrics-hub").RequireAuthorization();
+app.MapHub<Dashboard.Application.Proxy.TrafficHub>("/traffic-hub").RequireAuthorization();
 app.MapAdditionalIdentityEndpoints();
+
+// Transparent proxy: inference clients hit this stable URL instead of a source's own
+// vLLM address; it auto-swaps the backend model first if the request asks for a
+// different one, then forwards. Deliberately NOT behind .RequireAuthorization() — this
+// is a machine-to-machine endpoint for API clients, not a dashboard page, and they
+// can't do the interactive cookie login the rest of this app uses.
+app.Map("/proxy/{sourceId}/{**path}", async (HttpContext context, string sourceId, string? path, Dashboard.Application.Proxy.IModelProxyService proxy) =>
+{
+    await proxy.HandleAsync(context, sourceId, path ?? "");
+});
 
 app.Run();

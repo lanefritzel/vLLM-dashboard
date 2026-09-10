@@ -35,6 +35,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
         {
             entity.ToTable("Sources");
             entity.HasKey(s => s.Id);
+            entity.Property(s => s.Slug).HasMaxLength(60).IsRequired();
+            entity.HasIndex(s => s.Slug).IsUnique();
             entity.Property(s => s.Label).HasMaxLength(200).IsRequired();
             entity.Property(s => s.Type).HasMaxLength(20).IsRequired();
             entity.Property(s => s.MetricsUrl).HasMaxLength(500).IsRequired();
