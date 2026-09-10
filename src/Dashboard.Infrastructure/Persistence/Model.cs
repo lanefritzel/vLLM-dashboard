@@ -22,6 +22,7 @@ public class Model
     public bool IsActive { get; set; }
     public int SortOrder { get; set; }
     public int? IdleTtlSeconds { get; set; }
+    public bool PreloadOnStartup { get; set; }
 
     public Source? Source { get; set; }
 
@@ -39,6 +40,7 @@ public class Model
             IsActive = IsActive,
             SortOrder = SortOrder,
             IdleTtlSeconds = IdleTtlSeconds,
+            PreloadOnStartup = PreloadOnStartup,
         };
 
         try

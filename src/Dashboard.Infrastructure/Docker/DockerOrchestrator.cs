@@ -88,6 +88,39 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         }
     }
 
+    public async Task<string?> GetActuallyRunningModelNameAsync(SourceInfo source, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(source.InferenceUrl))
+            return null;
+        try
+        {
+            var client = _httpFactory.CreateClient("inference");
+            var url = source.InferenceUrl.TrimEnd('/') + "/v1/models";
+            using var resp = await client.GetAsync(url, ct);
+            if (!resp.IsSuccessStatusCode)
+                return null;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.TryGetProperty("data", out var data) &&
+                data.ValueKind == JsonValueKind.Array &&
+                data.GetArrayLength() > 0 &&
+                data[0].TryGetProperty("id", out var idEl) &&
+                idEl.ValueKind == JsonValueKind.String)
+            {
+                return idEl.GetString();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not query the actual running model for {Source}.", source.Label);
+        }
+        return null;
+    }
+
     public async Task<InferenceResult> UnloadAsync(SourceInfo source, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(source.DockerHost))

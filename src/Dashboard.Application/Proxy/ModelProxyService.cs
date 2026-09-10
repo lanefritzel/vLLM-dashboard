@@ -143,7 +143,7 @@ public sealed class ModelProxyService : IModelProxyService
             // Ask the backend itself what it's actually serving before tearing down and
             // recreating a container that's already correct — a real swap should never
             // fire just because our own bookkeeping hadn't caught up yet.
-            var actuallyLoaded = await GetActuallyLoadedModelNameAsync(source, ct);
+            var actuallyLoaded = await _orchestrator.GetActuallyRunningModelNameAsync(source, ct);
             if (actuallyLoaded is not null && string.Equals(actuallyLoaded, requestedModelName, StringComparison.Ordinal))
             {
                 await _models.ActivateAsync(target.Id, ct);
@@ -166,40 +166,6 @@ public sealed class ModelProxyService : IModelProxyService
         {
             gate.Release();
         }
-    }
-
-    /// <summary>Asks the backend's own (real, not synthesized) <c>/v1/models</c> what it's
-    /// actually serving right now. Returns null on any failure (unreachable, malformed,
-    /// no models reported) — callers treat that as "unknown," not "definitely nothing."</summary>
-    private async Task<string?> GetActuallyLoadedModelNameAsync(SourceInfo source, CancellationToken ct)
-    {
-        try
-        {
-            var client = _httpFactory.CreateClient("inference");
-            var url = source.InferenceUrl.TrimEnd('/') + "/v1/models";
-            using var resp = await client.GetAsync(url, ct);
-            if (!resp.IsSuccessStatusCode)
-                return null;
-
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            if (doc.RootElement.TryGetProperty("data", out var data) &&
-                data.ValueKind == JsonValueKind.Array &&
-                data.GetArrayLength() > 0 &&
-                data[0].TryGetProperty("id", out var idEl) &&
-                idEl.ValueKind == JsonValueKind.String)
-            {
-                return idEl.GetString();
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not query the actual loaded model for {Source}.", source.Label);
-        }
-        return null;
     }
 
     private static async Task<string> BufferRequestBodyAsync(HttpContext context, CancellationToken ct)
@@ -613,11 +579,5 @@ public sealed class ModelProxyService : IModelProxyService
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "text/plain";
         await context.Response.WriteAsync(message);
-    }
-
-    private sealed class NoOpProgress : IAsyncActionProgress
-    {
-        public static readonly NoOpProgress Instance = new();
-        public Task ReportAsync(SwapStep step) => Task.CompletedTask;
     }
 }

@@ -90,6 +90,7 @@ builder.Services.AddHostedService<Dashboard.Web.DbInitializerHostedService>();
 builder.Services.AddHostedService<MetricsPollingService>();
 builder.Services.AddHostedService<RollupService>();
 builder.Services.AddHostedService<Dashboard.Application.Idle.IdleUnloadService>();
+builder.Services.AddHostedService<Dashboard.Application.Startup.PreloadService>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
 {

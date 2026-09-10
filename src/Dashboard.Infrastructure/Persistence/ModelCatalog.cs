@@ -58,6 +58,7 @@ public sealed class ModelCatalog : IModelCatalog
             IsActive = model.IsActive || !anyActive,
             SortOrder = model.SortOrder,
             IdleTtlSeconds = model.IdleTtlSeconds,
+            PreloadOnStartup = model.PreloadOnStartup,
         };
         if (entity.IsActive)
             await DeactivateOthersAsync(db, entity.SourceId, ct);
@@ -84,6 +85,7 @@ public sealed class ModelCatalog : IModelCatalog
         entity.OptionsJson = System.Text.Json.JsonSerializer.Serialize(model.Options);
         entity.SortOrder = model.SortOrder;
         entity.IdleTtlSeconds = model.IdleTtlSeconds;
+        entity.PreloadOnStartup = model.PreloadOnStartup;
         if (model.IsActive)
         {
             await DeactivateOthersAsync(db, entity.SourceId, ct);

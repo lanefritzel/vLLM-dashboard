@@ -396,6 +396,9 @@ namespace Dashboard.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("PreloadOnStartup")
+                        .HasColumnType("boolean");
+
                     b.Property<int>("SortOrder")
                         .HasColumnType("integer");
 

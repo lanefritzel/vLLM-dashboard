@@ -22,10 +22,25 @@ public interface IDockerOrchestrator
     Task<InferenceResult> UnloadAsync(SourceInfo source, CancellationToken ct = default);
 
     Task<bool> IsDockerHostConfiguredAsync(SourceInfo source, CancellationToken ct = default);
+
+    /// <summary>Asks the backend's own (real, not synthesized) <c>/v1/models</c> what
+    /// it's actually serving right now — the source of truth over this app's own
+    /// IsActive bookkeeping, which can drift (a model started outside the app, a crash,
+    /// a host reboot). Returns null on any failure (unreachable, malformed, no models
+    /// reported) — callers treat that as "unknown," not "definitely nothing."</summary>
+    Task<string?> GetActuallyRunningModelNameAsync(SourceInfo source, CancellationToken ct = default);
 }
 
 /// <summary>Per-step progress reporting for hot-swap.</summary>
 public interface IAsyncActionProgress
 {
     Task ReportAsync(SwapStep step);
+}
+
+/// <summary>Shared no-op progress reporter for callers that trigger a swap without a
+/// UI to report to (e.g. auto-swap-on-request, startup preload).</summary>
+public sealed class NoOpProgress : IAsyncActionProgress
+{
+    public static readonly NoOpProgress Instance = new();
+    public Task ReportAsync(SwapStep step) => Task.CompletedTask;
 }

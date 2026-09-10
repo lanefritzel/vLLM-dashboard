@@ -46,6 +46,10 @@
                                 {
                                     <span class="text-muted">—</span>
                                 }
+                                @if (m.PreloadOnStartup)
+                                {
+                                    <span class="chip" title="Brought up automatically when the dashboard starts">preload</span>
+                                }
                             </td>
                             <td class="text-end">
                                 <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditModel(m))">Edit</button>
@@ -127,12 +131,18 @@
                             <div class="form-text">Mounted automatically — the container path and --model value are derived for you.</div>
                         </div>
                     }
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="form-label">
                             <input type="checkbox" class="form-check-input" @bind="_fModelActive" /> set active on save
                         </label>
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-md-4">
+                        <label class="form-label">
+                            <input type="checkbox" class="form-check-input" @bind="_fModelPreloadOnStartup" /> preload on dashboard startup
+                        </label>
+                        <div class="form-text">Brings this container up automatically when the dashboard starts, if it isn't already running.</div>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label">Idle unload after <span class="text-muted">(minutes — blank disables it)</span></label>
                         <input class="form-control" type="number" min="1" @bind="_fModelIdleTtlMinutes" placeholder="stays loaded until swapped" />
                         <div class="form-text">If this model sits idle (no proxied requests) this long, its container is stopped to free the GPU.</div>
@@ -218,6 +228,7 @@
     private ModelSource _fModelSource = ModelSource.HuggingFace;
     private string _fModelPathOrRepoId = "";
     private bool _fModelActive;
+    private bool _fModelPreloadOnStartup;
     private int? _fModelIdleTtlMinutes;
     private Dictionary<string, string> _fOptions = new();
 
@@ -379,6 +390,7 @@
         _fModelSource = ModelSource.HuggingFace;
         _fModelPathOrRepoId = "";
         _fModelActive = _models.Count == 0;
+        _fModelPreloadOnStartup = false;
         _fModelIdleTtlMinutes = null;
         _fOptions = new();
     }
@@ -394,6 +406,7 @@
         _fModelSource = m.ModelSource;
         _fModelPathOrRepoId = m.ModelPathOrRepoId;
         _fModelActive = m.IsActive;
+        _fModelPreloadOnStartup = m.PreloadOnStartup;
         _fModelIdleTtlMinutes = m.IdleTtlSeconds is { } s ? Math.Max(1, s / 60) : null;
         _fOptions = new Dictionary<string, string>(m.Options);
     }
@@ -415,6 +428,7 @@
                 ModelSource = _fModelSource,
                 ModelPathOrRepoId = _fModelPathOrRepoId.Trim(),
                 IdleTtlSeconds = _fModelIdleTtlMinutes is { } m and > 0 ? m * 60 : null,
+                PreloadOnStartup = _fModelPreloadOnStartup,
                 Options = _fOptions.Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
                     .ToDictionary(kv => kv.Key, kv => kv.Value),
             };

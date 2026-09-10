@@ -59,4 +59,9 @@ public sealed record ModelInfo
     /// <c>IdleUnloadService</c> stops its container to free the GPU. Null/0 disables
     /// idle-unload for this model — it stays loaded until something else swaps it out.</summary>
     public int? IdleTtlSeconds { get; init; }
+
+    /// <summary>Explicit opt-in: bring this model's container up when the dashboard
+    /// itself starts, instead of waiting for the first proxied request. Only meaningful
+    /// alongside IsActive — a preload-flagged model that isn't the active one is a no-op.</summary>
+    public bool PreloadOnStartup { get; init; }
 }
