@@ -1,0 +1,100 @@
+# Example full stack: this dashboard deployed alongside a real vLLM backend
+# (vllm-scaler) and llama-swap on the same host. Paths, image tags, GPU device
+# passthrough, and model flags below are specific to one real deployment — treat
+# this as a reference to adapt, not a drop-in file.
+#
+# Key point: vllm-scaler and llama-swap use network_mode: host, so dashboard does
+# too — otherwise it can't reliably reach vllm-scaler's port from a separate bridge
+# network. Because dashboard is host-networked, it can no longer resolve postgres by
+# its Compose service name (host networking has no Compose-internal DNS), so
+# postgres publishes its port to loopback instead and dashboard connects via
+# 127.0.0.1.
+
+version: "3.8"
+services:
+
+  vllm-scaler:
+    image: intel/llm-scaler-vllm:0.21.0-b3
+    container_name: vllm-scaler
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - /dev/dri/by-path:/dev/dri/by-path
+      - /media/external6tb/llm-models/hf-cache/Qwen3.8-27B-INT4:/models/qwen3.8-int4
+    ipc: host
+    privileged: true
+    entrypoint: ["vllm"]
+    command:
+      - serve
+      - /models/qwen3.8-int4
+      - --served-model-name
+      - qwen3.8-vllm
+      - --port
+      - "9999"
+      - --dtype
+      - float16
+      - --gpu-memory-utilization
+      - "0.80"
+      - --max-model-len
+      - "131072"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      - --reasoning-parser
+      - qwen3
+      - --mm-encoder-tp-mode
+      - data
+
+  llama-swap:
+    image: ghcr.io/mostlygeek/llama-swap:vulkan
+    container_name: llama-swap
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /media/external6tb/docker-compose/llama-swap-config.yaml:/app/config.yaml
+    command: ["-config", "/app/config.yaml", "-listen", "0.0.0.0:8990"]
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dashboard
+      POSTGRES_USER: dashboard
+      POSTGRES_PASSWORD: dashboard
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Bound to loopback only: reachable from host-networked containers on this box
+    # (like dashboard, below), but not exposed to the LAN.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  dashboard:
+    image: lanedfritz/vllm-dashboard:latest
+    restart: unless-stopped
+    # Host networking so it can reach vllm-scaler/llama-swap directly (they're also
+    # host-networked) without relying on this host's mDNS name resolving from inside
+    # a bridge-networked container.
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: "http://+:8080"
+      DATAPROTECTION_KEYS_DIR: /data/dataprotection
+      # Only needed for a source you want to hot-swap models on, e.g. tcp://127.0.0.1:2375
+      DOCKER_HOST: ""
+    volumes:
+      - dataprotection:/data
+
+volumes:
+  pgdata:
+  dataprotection:
