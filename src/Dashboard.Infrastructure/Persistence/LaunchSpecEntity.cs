@@ -18,6 +18,7 @@ public class LaunchSpecEntity
     public string? HfCacheHostPath { get; set; }
     public string? HfToken { get; set; }
     public int HealthWaitTimeoutSeconds { get; set; } = 600;
+    public int? MemoryLimitMb { get; set; }
     public string? GpuOptions { get; set; }
     public string GpuVendor { get; set; } = "none";
     public string DevicesJson { get; set; } = "[]";
@@ -44,6 +45,7 @@ public class LaunchSpecEntity
             HfCacheHostPath = HfCacheHostPath,
             HfToken = HfToken,
             HealthWaitTimeoutSeconds = HealthWaitTimeoutSeconds > 0 ? HealthWaitTimeoutSeconds : 600,
+            MemoryLimitMb = MemoryLimitMb,
             GpuOptions = GpuOptions,
             GpuVendor = Core.Models.GpuVendorExtensions.FromStorage(GpuVendor),
             NetworkMode = string.IsNullOrWhiteSpace(NetworkMode) ? "bridge" : NetworkMode,
@@ -84,6 +86,7 @@ public class LaunchSpecEntity
         HfCacheHostPath = spec.HfCacheHostPath,
         HfToken = spec.HfToken,
         HealthWaitTimeoutSeconds = spec.HealthWaitTimeoutSeconds > 0 ? spec.HealthWaitTimeoutSeconds : 600,
+        MemoryLimitMb = spec.MemoryLimitMb,
         GpuOptions = spec.GpuOptions,
         GpuVendor = spec.GpuVendor.ToStorage(),
         DevicesJson = System.Text.Json.JsonSerializer.Serialize(spec.Devices),

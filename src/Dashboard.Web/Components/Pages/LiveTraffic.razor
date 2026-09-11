@@ -10,6 +10,7 @@
 @inject IJSRuntime JS
 @inject ISourceCatalog Sources
 @inject SourceSelection Selection
+@inject IConfigStore Config
 
 <PageTitle>Live Traffic — vLLM Dashboard</PageTitle>
 
@@ -116,8 +117,20 @@ else
     {
         _receiver = DotNetObjectReference.Create(this);
         Selection.Changed += OnSelectionChanged;
+        Config.Changed += OnConfigChanged;
         _all = (await Sources.GetAllAsync()).ToList();
     }
+
+    // Without this, editing a source's slug/settings elsewhere left this page
+    // holding a stale SourceInfo indefinitely — it would keep joining the hub group
+    // for whatever Id it loaded at page-open time.
+    private void OnConfigChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            _all = (await Sources.GetAllAsync()).ToList();
+            StateHasChanged();
+        });
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -239,6 +252,7 @@ else
         if (_disposed) return;
         _disposed = true;
         Selection.Changed -= OnSelectionChanged;
+        Config.Changed -= OnConfigChanged;
         _receiver?.Dispose();
     }
 

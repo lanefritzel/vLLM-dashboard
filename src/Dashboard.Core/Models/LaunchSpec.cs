@@ -107,6 +107,14 @@ public sealed record LaunchSpec
     /// first-time swap to an uncached HF model downloads its weights first.</summary>
     public int HealthWaitTimeoutSeconds { get; init; } = 600;
 
+    /// <summary>Hard cap on the container's RAM usage (megabytes), enforced by Docker
+    /// itself (a cgroup memory limit) — not a vLLM setting. Null means no limit. On an
+    /// integrated GPU host, this is the same memory the model's weights/KV cache
+    /// actually consume, so it's the backstop against a misconfigured model (e.g. no
+    /// quantization, a huge context length) exhausting the whole host instead of just
+    /// this container getting killed.</summary>
+    public int? MemoryLimitMb { get; init; }
+
     /// <summary>NVIDIA-only: device ids for the nvidia-container-runtime DeviceRequests
     /// API ("all" or a comma-separated list like "0,1"). Only meaningful when
     /// <see cref="GpuVendor"/> is <see cref="Models.GpuVendor.Nvidia"/>.</summary>

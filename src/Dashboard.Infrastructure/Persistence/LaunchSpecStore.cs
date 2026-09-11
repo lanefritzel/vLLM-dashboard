@@ -66,6 +66,7 @@ public sealed class LaunchSpecStore : ILaunchSpecStore
         entity.HfCacheHostPath = spec.HfCacheHostPath;
         entity.HfToken = spec.HfToken;
         entity.HealthWaitTimeoutSeconds = spec.HealthWaitTimeoutSeconds > 0 ? spec.HealthWaitTimeoutSeconds : 600;
+        entity.MemoryLimitMb = spec.MemoryLimitMb;
         entity.GpuOptions = spec.GpuOptions;
         entity.GpuVendor = spec.GpuVendor.ToStorage();
         entity.DevicesJson = System.Text.Json.JsonSerializer.Serialize(spec.Devices);

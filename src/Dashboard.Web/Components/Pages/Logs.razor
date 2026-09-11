@@ -8,6 +8,7 @@
 @inject IJSRuntime JS
 @inject ISourceCatalog Sources
 @inject SourceSelection Selection
+@inject IConfigStore Config
 
 <PageTitle>Logs — vLLM Dashboard</PageTitle>
 
@@ -57,8 +58,19 @@ else
     {
         _receiver = DotNetObjectReference.Create(this);
         Selection.Changed += OnSelectionChanged;
+        Config.Changed += OnConfigChanged;
         _all = (await Sources.GetAllAsync()).ToList();
     }
+
+    // Without this, editing a source's slug/settings elsewhere left this page
+    // holding a stale SourceInfo (e.g. its displayed Label) indefinitely.
+    private void OnConfigChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            _all = (await Sources.GetAllAsync()).ToList();
+            StateHasChanged();
+        });
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -124,6 +136,7 @@ else
         if (_disposed) return;
         _disposed = true;
         Selection.Changed -= OnSelectionChanged;
+        Config.Changed -= OnConfigChanged;
         // No explicit logshub_leave here: LogsHub.OnDisconnectedAsync cleans up the
         // server-side ref-count once this circuit's connection actually closes, which
         // works even on an abrupt tab close where Dispose might not get a chance to

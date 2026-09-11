@@ -75,7 +75,23 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
             });
             var healthy = await HealthWaitAsync(source.InferenceUrl, model.Name, spec.HealthWaitTimeoutSeconds, ct);
             if (!healthy)
-                return new InferenceResult { Success = false, Error = "Health check timed out after container start." };
+            {
+                // A timed-out health check must not leave the container it just created
+                // running unsupervised — that's exactly what let one bad swap balloon into
+                // a full host OOM (the "failure" the UI reported was just this app giving
+                // up watching; the actual process kept running and consuming memory with
+                // nothing left to stop it).
+                await progress.ReportAsync(new SwapStep { Step = "cleanup", Message = "Health check failed — stopping the container it started" });
+                try
+                {
+                    await StopAndRemoveAsync(dockerBase, containerName, CancellationToken.None);
+                }
+                catch (Exception cleanupEx)
+                {
+                    _logger.LogError(cleanupEx, "Failed to clean up container {Container} after a failed health check.", containerName);
+                }
+                return new InferenceResult { Success = false, Error = "Health check timed out after container start. The container has been stopped." };
+            }
 
             await progress.ReportAsync(new SwapStep { Step = "done", Message = "Swap complete", Complete = true });
             return new InferenceResult { Success = true, Text = model.Name };
@@ -489,6 +505,8 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
             hostConfig["Privileged"] = true;
         if (!string.IsNullOrWhiteSpace(spec.IpcMode))
             hostConfig["IpcMode"] = spec.IpcMode;
+        if (spec.MemoryLimitMb is > 0)
+            hostConfig["Memory"] = (long)spec.MemoryLimitMb.Value * 1024 * 1024;
 
         gpuProvisioner.Apply(hostConfig, spec);
 

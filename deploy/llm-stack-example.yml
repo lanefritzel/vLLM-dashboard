@@ -5,10 +5,15 @@
 #
 # Key point: vllm-scaler and llama-swap use network_mode: host, so dashboard does
 # too — otherwise it can't reliably reach vllm-scaler's port from a separate bridge
-# network. Because dashboard is host-networked, it can no longer resolve postgres by
-# its Compose service name (host networking has no Compose-internal DNS), so
-# postgres publishes its port to loopback instead and dashboard connects via
-# 127.0.0.1.
+# network. postgres is host-networked as well: reaching it only through Docker's
+# published-port/NAT path (bridge network + 127.0.0.1:5432 publish) let a pooled
+# connection get silently reset by that layer while idle between queries, corrupting
+# it for the next request that reused it — seen in production as a Blazor Server
+# circuit dying mid-request with an Npgsql "operation cancelled"/connection-corruption
+# error. With postgres also host-networked, the connection is genuine loopback the
+# whole way, no NAT involved. Since host-networked containers aren't part of any
+# Compose bridge network, dashboard can't resolve postgres by its Compose service
+# name either way — it connects via 127.0.0.1 in both cases.
 
 version: "3.8"
 services:
@@ -59,21 +64,27 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    # Host networking, matching dashboard below — a pooled connection to postgres
+    # published only via Docker's iptables/NAT layer (the previous setup: postgres on
+    # the bridge network, reached through 127.0.0.1:5432) can get silently reset by
+    # that layer while sitting idle between queries, corrupting the connection for
+    # whatever request reuses it next. Host networking end-to-end makes it genuine
+    # loopback the whole way, with no NAT involved at all.
+    network_mode: host
+    # listen_addresses is explicit here because host networking otherwise exposes
+    # Postgres's own default (all interfaces) to the entire LAN, not just loopback.
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
     environment:
       POSTGRES_DB: dashboard
       POSTGRES_USER: dashboard
       POSTGRES_PASSWORD: dashboard
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - /media/external6tb/app-data/vLLM-Dashboard/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
       interval: 5s
       timeout: 5s
       retries: 10
-    # Bound to loopback only: reachable from host-networked containers on this box
-    # (like dashboard, below), but not exposed to the LAN.
-    ports:
-      - "127.0.0.1:5432:5432"
 
   dashboard:
     image: lanedfritz/vllm-dashboard:latest
@@ -96,5 +107,4 @@ services:
       - dataprotection:/data
 
 volumes:
-  pgdata:
   dataprotection:

@@ -5,6 +5,7 @@ using Dashboard.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using Dashboard.Web.Components;
@@ -50,6 +51,19 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 // ---- Metrics / live telemetry wiring --------------------------------------
 builder.Services.AddSignalR();
+// Applies to every hub, including Blazor Server's own circuit connection: pinging
+// more often gives an intermediate router/firewall's idle-connection reaping less
+// opportunity to kill a persistent WebSocket that's just sitting quiet between
+// events — seen in practice as the whole circuit (and any open hub, e.g. Live
+// Traffic) dropping and reconnecting every 20-30s on some home networks, with
+// nothing logged server-side since the connection dies in the network path, not
+// in the app. Shorter pings don't fix a hard network-level timeout below this
+// interval, but they meaningfully narrow the exposure window.
+builder.Services.Configure<HubOptions>(o =>
+{
+    o.KeepAliveInterval = TimeSpan.FromSeconds(5);
+    o.ClientTimeoutInterval = TimeSpan.FromSeconds(20);
+});
 
 builder.Services.AddHttpClient("metrics", c => c.Timeout = TimeSpan.FromSeconds(5));
 builder.Services.AddHttpClient("docker", c => c.Timeout = TimeSpan.FromSeconds(30));

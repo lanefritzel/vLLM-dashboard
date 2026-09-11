@@ -153,6 +153,25 @@ public class DockerOrchestratorPayloadTests
     }
 
     [Fact]
+    public void BuildCreatePayload_MemoryLimit_SetsHostConfigMemoryInBytes()
+    {
+        var spec = new LaunchSpec { MemoryLimitMb = 4096 };
+        var hostConfig = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()))
+            .GetProperty("HostConfig");
+
+        Assert.Equal(4096L * 1024 * 1024, hostConfig.GetProperty("Memory").GetInt64());
+    }
+
+    [Fact]
+    public void BuildCreatePayload_OmitsMemoryWhenLimitNotSet()
+    {
+        var hostConfig = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), new NoneGpuProvisioner()))
+            .GetProperty("HostConfig");
+
+        Assert.False(hostConfig.TryGetProperty("Memory", out _));
+    }
+
+    [Fact]
     public void BuildCreatePayload_AppendsExtraRunArgsAfterOptions()
     {
         var spec = new LaunchSpec { ExtraRunArgs = "--foo bar" };

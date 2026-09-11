@@ -156,6 +156,16 @@
                             <input class="form-control" type="number" min="30" @bind="_fHealthTimeout" />
                             <div class="form-text">First-time swap to an uncached Hugging Face model has to download it first — allow enough time.</div>
                         </div>
+                        <div class="col-md-3">
+                            <label class="form-label">RAM limit (GB) <span class="text-muted">(optional)</span></label>
+                            <input class="form-control" type="number" min="1" step="1" @bind="_fMemoryLimitGb" placeholder="e.g. 20 — blank = no limit" />
+                            <div class="form-text">
+                                A hard number of gigabytes, enforced by Docker itself. If this model ever tries to use
+                                more RAM than this, Docker kills <em>this container only</em> instead of the model
+                                exhausting the whole server's memory. Set it below your host's total RAM (leave some
+                                headroom for other services running there). Leave blank for no limit.
+                            </div>
+                        </div>
                         <div class="col-md-4">
                             <label class="form-label">Network mode</label>
                             <select class="form-select" @bind="_fNetworkMode">
@@ -338,6 +348,7 @@
     private int? _fServingPort;
     private string _fRestartPolicy = "unless-stopped";
     private int _fHealthTimeout = 600;
+    private int? _fMemoryLimitGb;
     private string _fNetworkMode = "bridge";
     private string _fIpcMode = "";
     private bool _fPrivileged;
@@ -396,6 +407,7 @@
         _fServingPort = spec?.ServingPort;
         _fRestartPolicy = string.IsNullOrWhiteSpace(spec?.RestartPolicy) ? "unless-stopped" : spec!.RestartPolicy;
         _fHealthTimeout = spec?.HealthWaitTimeoutSeconds is > 0 ? spec!.HealthWaitTimeoutSeconds : 600;
+        _fMemoryLimitGb = spec?.MemoryLimitMb is { } mb ? Math.Max(1, mb / 1024) : null;
         _fNetworkMode = string.IsNullOrWhiteSpace(spec?.NetworkMode) ? "bridge" : spec!.NetworkMode;
         _fIpcMode = spec?.IpcMode ?? "";
         _fPrivileged = spec?.Privileged ?? false;
@@ -510,6 +522,7 @@
                     ServingPort = _fServingPort,
                     RestartPolicy = string.IsNullOrWhiteSpace(_fRestartPolicy) ? "unless-stopped" : _fRestartPolicy,
                     HealthWaitTimeoutSeconds = _fHealthTimeout > 0 ? _fHealthTimeout : 600,
+                    MemoryLimitMb = _fMemoryLimitGb is > 0 ? _fMemoryLimitGb * 1024 : null,
                     NetworkMode = string.IsNullOrWhiteSpace(_fNetworkMode) ? "bridge" : _fNetworkMode,
                     IpcMode = string.IsNullOrWhiteSpace(_fIpcMode) ? null : _fIpcMode,
                     Privileged = _fPrivileged,

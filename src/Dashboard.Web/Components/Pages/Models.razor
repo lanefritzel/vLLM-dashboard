@@ -210,6 +210,7 @@
     [Inject] private IDockerOrchestrator Orchestrator { get; set; } = default!;
     [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private SourceSelection Selection { get; set; } = default!;
+    [Inject] private IConfigStore Config { get; set; } = default!;
 
     private List<SourceInfo> _all = new();
     private List<ModelInfo> _models = new();
@@ -354,10 +355,22 @@
     protected override async Task OnInitializedAsync()
     {
         Selection.Changed += OnSelectionChanged;
+        Config.Changed += OnConfigChanged;
         await ReloadAsync();
     }
 
     private void OnSelectionChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await ReloadAsync();
+        });
+
+    // Without this, editing a source's settings (e.g. Container name, Image) on a
+    // different page/tab left this page holding a stale SourceInfo/LaunchSpec
+    // indefinitely — a swap could silently act on settings that were already
+    // corrected, because nothing here ever re-read them until a full page reload.
+    private void OnConfigChanged(object? sender, EventArgs e) =>
         _ = InvokeAsync(async () =>
         {
             if (_disposed) return;
@@ -534,5 +547,6 @@
         if (_disposed) return;
         _disposed = true;
         Selection.Changed -= OnSelectionChanged;
+        Config.Changed -= OnConfigChanged;
     }
 }

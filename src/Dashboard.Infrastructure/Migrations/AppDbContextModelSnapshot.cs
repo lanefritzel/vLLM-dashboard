@@ -169,6 +169,9 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<string>("IpcMode")
                         .HasColumnType("text");
 
+                    b.Property<int?>("MemoryLimitMb")
+                        .HasColumnType("integer");
+
                     b.Property<string>("ModelArgTemplate")
                         .IsRequired()
                         .HasMaxLength(1000)
