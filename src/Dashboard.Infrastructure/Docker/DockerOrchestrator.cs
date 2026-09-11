@@ -37,6 +37,36 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
     public Task<bool> IsDockerHostConfiguredAsync(SourceInfo source, CancellationToken ct = default)
         => Task.FromResult(!string.IsNullOrWhiteSpace(source.DockerHost));
 
+    public async Task<DockerHostTestResult> TestDockerHostAsync(string dockerHost, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(dockerHost))
+            return new DockerHostTestResult { Success = false, Message = "Enter a Docker host first." };
+
+        var dockerBase = NormalizeDockerBase(dockerHost);
+        try
+        {
+            using var client = _httpFactory.CreateClient("docker");
+            using var resp = await client.GetAsync($"{dockerBase}/v1.43/version", ct);
+            if (!resp.IsSuccessStatusCode)
+                return new DockerHostTestResult { Success = false, Message = $"Docker host responded with HTTP {(int)resp.StatusCode}." };
+
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            var doc = JsonSerializer.Deserialize<JsonElement>(body);
+            var version = doc.TryGetProperty("Version", out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()
+                : "unknown version";
+            return new DockerHostTestResult { Success = true, Message = $"Connected — Docker {version}." };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new DockerHostTestResult { Success = false, Message = $"Could not reach Docker host: {ex.Message}" };
+        }
+    }
+
     public async Task<InferenceResult> SwapModelAsync(
         SourceInfo source, ModelInfo model, LaunchSpec spec,
         IAsyncActionProgress progress, CancellationToken ct)
@@ -217,8 +247,13 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         }
     }
 
+    /// <summary>Falls back to a Docker-valid name derived from the label when
+    /// ContainerName isn't set. Sanitizes every run of non-alphanumeric characters (not
+    /// just spaces) into a single hyphen — a label containing e.g. an em-dash produces
+    /// an invalid Docker container name otherwise (a real incident: "tes — main vLLM"
+    /// became the invalid "tes-—-main-vllm").</summary>
     private static string ResolveContainerName(SourceInfo source) =>
-        source.ContainerName ?? source.Label.Replace(" ", "-").ToLowerInvariant();
+        string.IsNullOrWhiteSpace(source.ContainerName) ? Slug.From(source.Label) : source.ContainerName;
 
     /// <summary>Persists freshly observed Compose labels onto this source's LaunchSpec,
     /// if they're new — a one-time write per label change, not on every swap. No-op

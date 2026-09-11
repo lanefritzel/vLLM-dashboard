@@ -9,6 +9,12 @@ public sealed record SwapStep
     public string? Message { get; init; }
 }
 
+public sealed record DockerHostTestResult
+{
+    public bool Success { get; init; }
+    public string Message { get; init; } = "";
+}
+
 /// <summary>Hot-swap the backend container for a source to a different model.</summary>
 public interface IDockerOrchestrator
 {
@@ -22,6 +28,12 @@ public interface IDockerOrchestrator
     Task<InferenceResult> UnloadAsync(SourceInfo source, CancellationToken ct = default);
 
     Task<bool> IsDockerHostConfiguredAsync(SourceInfo source, CancellationToken ct = default);
+
+    /// <summary>Live reachability check for a Docker host string (e.g.
+    /// "tcp://host:2375") — hits the Docker Engine API's own version endpoint. Used by
+    /// the Server Setup Wizard so a bad Docker host is caught before save, not
+    /// discovered later during a swap.</summary>
+    Task<DockerHostTestResult> TestDockerHostAsync(string dockerHost, CancellationToken ct = default);
 
     /// <summary>Asks the backend's own (real, not synthesized) <c>/v1/models</c> what
     /// it's actually serving right now — the source of truth over this app's own

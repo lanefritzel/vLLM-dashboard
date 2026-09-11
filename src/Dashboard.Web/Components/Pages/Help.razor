@@ -1,0 +1,139 @@
+@page "/help"
+@attribute [Authorize]
+
+<PageTitle>Help — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Help</h1>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="card-title">Getting started</div>
+        <p>
+            There are two ways to configure a server (a Docker host running a model) and a model on it:
+        </p>
+        <ul>
+            <li>
+                <strong>Setup wizards</strong> — step-by-step, with live checks (e.g. testing the Docker
+                connection) and plain-language guidance. Find them on the <a href="settings">Settings</a>
+                page ("Full Setup Wizard" or "Server Setup Wizard") and the <a href="models">Models</a>
+                page ("Model Setup Wizard"). Use the "Full Setup Wizard" for a brand-new setup — it walks
+                you through the server first, then the model, skipping the server step if you already have
+                one.
+            </li>
+            <li>
+                <strong>Advanced / "+ Add source" and "+ Add model"</strong> — the same underlying settings,
+                shown as a single form with every field visible at once. Use this once you're comfortable
+                with what each field does, or to change one setting on an existing server/model without
+                going through the wizard.
+            </li>
+        </ul>
+        <p class="mb-0 text-muted">
+            Both save partial/incomplete work — you can leave a server or model half-configured and come
+            back to finish it later.
+        </p>
+    </div>
+</div>
+
+<div class="card mb-4" id="docker-port">
+    <div class="card-body">
+        <div class="card-title">Opening the Docker TCP port (for hot-swap)</div>
+        <p>
+            "Hot-swap" (starting, stopping, and replacing a model's container from this dashboard) needs to
+            reach the <strong>Docker daemon's own API</strong> on the machine running your model — not the
+            model's own API. By default, Docker only listens on a local Unix socket, which this dashboard
+            (usually running elsewhere, e.g. in its own container) can't reach. You need to tell Docker to
+            also listen on a network (TCP) port.
+        </p>
+
+        <p><strong>On a systemd-based Linux host</strong> (Ubuntu, Debian, Fedora, etc.):</p>
+        <ol>
+            <li>
+                Create a systemd override for the Docker service:
+                <pre><code>sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/override.conf &lt;&lt;'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375
+EOF</code></pre>
+            </li>
+            <li>
+                Reload and restart Docker:
+                <pre><code>sudo systemctl daemon-reload
+sudo systemctl restart docker</code></pre>
+            </li>
+            <li>
+                Verify it's listening, from the machine running this dashboard:
+                <pre><code>curl http://&lt;servername-or-ip&gt;:2375/version</code></pre>
+                A JSON response means it's reachable — this is exactly what the wizard's "Test connection"
+                button checks for you.
+            </li>
+        </ol>
+
+        <div class="alert alert-warning">
+            <strong>Security note:</strong> the Docker API has no authentication by default — anyone who can
+            reach this port can run arbitrary containers, which is equivalent to root access on that
+            machine. Never expose it to the public internet. Keep it on a private/trusted network only
+            (e.g. your home LAN), and firewall it off from anything else, for example with:
+            <pre class="mb-0"><code>sudo ufw allow from &lt;dashboard-host-ip&gt; to any port 2375 proto tcp</code></pre>
+            For anything beyond a small trusted home network, secure the Docker API with TLS
+            (<code>dockerd --tlsverify</code>) instead of leaving it open and unauthenticated.
+        </div>
+
+        <p class="mb-0 text-muted">
+            Docker Desktop (Windows/Mac) has an equivalent setting under
+            Settings → General → "Expose daemon on tcp://localhost:2375 without TLS" — the same security
+            note applies.
+        </p>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="card-title">Walkthrough example</div>
+        <p>A concrete example of what to enter in the Server Setup Wizard for a typical single-box vLLM setup:</p>
+        <table class="table table-sm">
+            <tbody>
+                <tr><td class="text-muted">Label</td><td>My GPU box</td></tr>
+                <tr><td class="text-muted">Docker host</td><td><code>tcp://&lt;servername-or-ip&gt;:2375</code></td></tr>
+                <tr><td class="text-muted">Image</td><td><code>vllm/vllm-openai:latest</code></td></tr>
+                <tr><td class="text-muted">Serving port</td><td><code>8000</code></td></tr>
+                <tr><td class="text-muted">Inference URL</td><td><code>http://&lt;servername-or-ip&gt;:8000</code> (auto-suggested from the two above)</td></tr>
+                <tr><td class="text-muted">GPU vendor</td><td>NVIDIA, or Intel if using an Arc/integrated GPU with device passthrough</td></tr>
+                <tr><td class="text-muted">GPU VRAM total</td><td>Whatever your card actually has, e.g. <code>24</code> GB — this powers the size warnings on the Models page</td></tr>
+            </tbody>
+        </table>
+        <p>Then in the Model Setup Wizard, for a Hugging Face model:</p>
+        <table class="table table-sm mb-0">
+            <tbody>
+                <tr><td class="text-muted">Repo id</td><td><code>meta-llama/Llama-3.1-8B-Instruct</code></td></tr>
+                <tr><td class="text-muted">Served model name</td><td><code>llama-3.1-8b</code> — whatever your API clients should request</td></tr>
+                <tr><td class="text-muted">Context length</td><td>Set explicitly rather than leaving blank — the wizard suggests a safe starting value from the model's own reported default</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="card-title">Troubleshooting</div>
+        <ul class="mb-0">
+            <li>
+                <strong>"Test connection" fails / hot-swap says no Docker host configured</strong> — confirm
+                the port is open (see above), and that nothing between this dashboard and the target machine
+                (a firewall, a VPN) is blocking it.
+            </li>
+            <li>
+                <strong>A model loads but uses far more VRAM than expected</strong> — check whether
+                Quantization and Context length are set explicitly on the Models page. Left unset, vLLM
+                falls back to the model's own (sometimes very large) defaults, and
+                <code>gpu-memory-utilization</code> defaults to 90% of the card's VRAM on its own.
+            </li>
+            <li>
+                <strong>A swap seems to hang</strong> — the first load of an uncached Hugging Face model
+                downloads its weights first, which can take a long time on a slow connection. The
+                Health-check timeout field (Advanced page) controls how long the dashboard waits before
+                giving up and cleaning up the container.
+            </li>
+        </ul>
+    </div>
+</div>

@@ -1,0 +1,58 @@
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+@inject ISourceCatalog Sources
+
+@if (_loading)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog-custom">
+            <p class="text-muted">Loading…</p>
+        </div>
+    </div>
+}
+else if (_phase == Phase.Server)
+{
+    <ServerSetupWizard OnCancelled="@OnCancelledAsync" OnSaved="@OnServerSavedAsync" />
+}
+else if (_phase == Phase.Model)
+{
+    <ModelSetupWizard PreselectedSourceId="@_preselectedSourceId" OnCancelled="@OnCancelledAsync" OnSaved="@OnModelSavedAsync" />
+}
+
+@code {
+    // The full wizard is just the Server and Model wizards run back to back —
+    // it skips the Server step only when a usable vLLM source already exists.
+    private enum Phase { Server, Model }
+
+    [Parameter] public EventCallback OnCancelled { get; set; }
+    [Parameter] public EventCallback<ModelInfo> OnSaved { get; set; }
+
+    private bool _loading = true;
+    private Phase _phase;
+    private string? _preselectedSourceId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var hasServer = false;
+        try
+        {
+            hasServer = (await Sources.GetAllAsync()).Any(s => s.Type == SourceType.Vllm);
+        }
+        catch
+        {
+            hasServer = false;
+        }
+        _phase = hasServer ? Phase.Model : Phase.Server;
+        _loading = false;
+    }
+
+    private async Task OnCancelledAsync() => await OnCancelled.InvokeAsync();
+
+    private void OnServerSavedAsync(SourceInfo saved)
+    {
+        _preselectedSourceId = saved.Id;
+        _phase = Phase.Model;
+    }
+
+    private async Task OnModelSavedAsync(ModelInfo saved) => await OnSaved.InvokeAsync(saved);
+}

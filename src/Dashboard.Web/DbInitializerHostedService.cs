@@ -31,59 +31,62 @@ public sealed class DbInitializerHostedService(
         }
     }
 
+    /// <summary>Only ever seeds a source when an operator explicitly opts in via env
+    /// var — a brand-new install for a different user must start with an empty
+    /// Sources list (use the Server/Model Setup Wizard from there), not a source
+    /// pointed at a hostname and model name specific to one particular deployment.</summary>
     private async Task SeedInitialSourcesAsync(AppDbContext db, CancellationToken ct)
     {
         if (await db.Sources.AnyAsync(ct))
             return; // only on a truly first run
 
-        var vllmUrl = configuration["VLLM_URL"] ?? "http://tes.home:9999";
-        var vllmInfer = configuration["VLLM_INFERENCE_URL"] ?? vllmUrl;
+        var vllmUrl = configuration["VLLM_URL"];
         var ollamaUrl = configuration["OLLAMA_URL"];
+        var sortOrder = 0;
 
-        var tes = new Source
+        if (!string.IsNullOrWhiteSpace(vllmUrl))
         {
-            Label = "tes — main vLLM",
-            Type = SourceType.Vllm.ToStorage(),
-            MetricsUrl = vllmUrl,
-            InferenceUrl = vllmInfer,
-            DockerHost = "tcp://tes.home:2375",
-            ContainerName = null,
-            ScrapeIntervalSeconds = 5,
-            Active = true,
-            SortOrder = 0,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        };
-        db.Sources.Add(tes);
-
-        db.Models.Add(new Model
-        {
-            SourceId = tes.Id,
-            Name = "qwen3.8-vllm",
-            DisplayName = "Qwen3.8 (vLLM)",
-            SwapArgs = null,
-            IsActive = true,
-            SortOrder = 0,
-        });
-
-        if (!string.IsNullOrWhiteSpace(ollamaUrl))
-        {
+            var vllmInfer = configuration["VLLM_INFERENCE_URL"] ?? vllmUrl;
             db.Sources.Add(new Source
             {
-                Label = "serenity — Ollama",
-                Type = SourceType.Ollama.ToStorage(),
-                MetricsUrl = ollamaUrl,
-                InferenceUrl = ollamaUrl,
+                Label = "vLLM",
+                Type = SourceType.Vllm.ToStorage(),
+                MetricsUrl = vllmUrl,
+                InferenceUrl = vllmInfer,
+                DockerHost = configuration["VLLM_DOCKER_HOST"],
+                ContainerName = null,
                 ScrapeIntervalSeconds = 5,
-                Active = false,
-                SortOrder = 1,
+                Active = true,
+                SortOrder = sortOrder++,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             });
         }
 
+        if (!string.IsNullOrWhiteSpace(ollamaUrl))
+        {
+            db.Sources.Add(new Source
+            {
+                Label = "Ollama",
+                Type = SourceType.Ollama.ToStorage(),
+                MetricsUrl = ollamaUrl,
+                InferenceUrl = ollamaUrl,
+                ScrapeIntervalSeconds = 5,
+                Active = false,
+                SortOrder = sortOrder++,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            });
+        }
+
+        if (sortOrder == 0)
+        {
+            logger.LogInformation("No VLLM_URL/OLLAMA_URL set — starting with no sources. Use the Server Setup Wizard on the Settings page.");
+            return;
+        }
+
         await db.SaveChangesAsync(ct);
-        logger.LogInformation("Seeded initial sources (tes vLLM + model, optional serenity Ollama).");
+        logger.LogInformation("Seeded initial sources from environment configuration.");
     }
 
     private static async Task SeedConfigDefaultsAsync(AppDbContext db, CancellationToken ct)

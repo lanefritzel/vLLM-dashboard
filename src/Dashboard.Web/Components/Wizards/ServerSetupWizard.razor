@@ -1,0 +1,371 @@
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+@inject ISourceCatalog Sources
+@inject ILaunchSpecStore LaunchSpecs
+@inject IDockerOrchestrator Docker
+@inject IJSRuntime JS
+
+<div class="modal-overlay" @onclick="@RequestCancel">
+    <div class="modal-dialog-custom" @onclick:stopPropagation="true">
+        <div class="d-flex align-items-center justify-content-between mb-1">
+            <div class="card-title mb-0">Server Setup Wizard — step @_step of 4</div>
+            <button type="button" class="modal-close-btn" @onclick="@RequestCancel" aria-label="Close">✕</button>
+        </div>
+        <div class="text-muted small mb-2">
+            New to this? See the <a href="help" target="_blank">Help page</a> for a full walkthrough with example values.
+        </div>
+
+        <div class="wizard-steps mb-3 text-muted small">
+            @for (var i = 1; i <= 4; i++)
+            {
+                var label = i switch { 1 => "Docker host", 2 => "Image", 3 => "GPU", _ => "Review" };
+                <span class="@(i == _step ? "fw-bold text-body" : "")">@i. @label</span>
+                @if (i < 4) { <text> &nbsp;→&nbsp; </text> }
+            }
+        </div>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger py-2">@_error</div>
+        }
+
+        @if (_step == 1)
+        {
+            <p class="text-muted small">
+                This is the Docker host that will run this server's container — everything downstream
+                (hot-swap, models) depends on this being reachable.
+            </p>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Label</label>
+                    <input class="form-control" @bind="_label" placeholder="e.g. Main GPU box" />
+                    <div class="form-text">A friendly name shown throughout the dashboard (e.g. in the server picker at the top of the page). Just for your own reference — doesn't affect anything technical.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Docker host</label>
+                    <input class="form-control" @bind="_dockerHost" @bind:after="@SuggestInferenceUrl" placeholder="tcp://servername-or-ip:2375" />
+                    <div class="form-text">The address of the Docker daemon's own API on the machine running the container — not the model's API address (that's the Inference URL, on the next step). This is what lets the dashboard start, stop, and replace containers for hot-swap; without it, hot-swap and idle-unload can't work for this server.</div>
+                </div>
+                <div class="col-md-12">
+                    <button type="button" class="btn btn-outline btn-sm" disabled="@_testing" @onclick="@TestConnectionAsync">
+                        @(_testing ? "Testing…" : "Test connection")
+                    </button>
+                    @if (_testResult is not null)
+                    {
+                        <span class="ms-2 @(_testResult.Success ? "text-success" : "text-danger")">@_testResult.Message</span>
+                    }
+                    @if (_testResult is { Success: false })
+                    {
+                        <div class="form-text mt-2">
+                            Not sure why? See <a href="help#docker-port" target="_blank">Help: opening the Docker TCP port</a>
+                            for step-by-step instructions.
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+        else if (_step == 2)
+        {
+            <p class="text-muted small">
+                The default image and container name every model on this server falls back to. A model can
+                override the image, but this default must still be valid.
+            </p>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Image</label>
+                    <input class="form-control" @bind="_image" placeholder="vllm/vllm-openai:latest" />
+                    <div class="form-text">The Docker image that runs the inference backend itself (e.g. vLLM) — not a specific model's weights. Used whenever a model on this server doesn't specify its own image.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Container name <span class="text-muted">(optional)</span></label>
+                    <input class="form-control" @bind="_containerName" placeholder="(default: label)" />
+                    <div class="form-text">The name Docker gives this container. Leave blank and one is generated from the Label above. Only set this if it needs to match a specific existing container name — e.g. one already managed by Docker Compose.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Serving port</label>
+                    <input class="form-control" type="number" min="1" @bind="_servingPort" @bind:after="@SuggestInferenceUrl" />
+                    <div class="form-text">The port the backend listens on inside the container for API requests (commonly 8000 for vLLM). Different from the Docker host's own port on step 1.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Inference URL <span class="text-muted">(vLLM /v1 base)</span></label>
+                    <input class="form-control" @bind="_inferenceUrl" placeholder="http://servername-or-ip:8000" />
+                    <div class="form-text">Where the dashboard actually reaches this server's API — usually the Docker host's own address with the serving port above.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Metrics URL <span class="text-muted">(/metrics endpoint)</span></label>
+                    <input class="form-control" @bind="_metricsUrl" placeholder="http://servername-or-ip:8000" />
+                    <div class="form-text">Usually the same as the inference URL.</div>
+                </div>
+            </div>
+        }
+        else if (_step == 3)
+        {
+            <p class="text-muted small">
+                Skippable, but skipping means the app can't warn you when a model is likely to exceed this
+                card's VRAM — the exact gap that let an unquantized model nearly fill a 32GB card and take
+                the whole host down.
+            </p>
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">GPU vendor</label>
+                    <select class="form-select" @bind="_gpuVendor">
+                        <option value="@GpuVendor.None">None</option>
+                        <option value="@GpuVendor.Nvidia">NVIDIA</option>
+                        <option value="@GpuVendor.Intel">Intel (raw device passthrough)</option>
+                    </select>
+                    <div class="form-text">Which GPU passthrough mechanism the container needs, if any. NVIDIA uses the nvidia-container-runtime; Intel uses raw device passthrough (e.g. /dev/dri). Leave as None for a CPU-only server.</div>
+                </div>
+                @if (_gpuVendor != GpuVendor.None)
+                {
+                    <div class="col-md-4">
+                        <label class="form-label">GPU VRAM total (GB)</label>
+                        <input class="form-control" type="number" min="1" step="1" @bind="_gpuVramTotalGb" placeholder="e.g. 32" />
+                        <div class="form-text">Informational only — powers warnings on the Models page, not enforced by anything.</div>
+                    </div>
+                }
+                @if (_gpuVendor == GpuVendor.Nvidia)
+                {
+                    <div class="col-md-4">
+                        <label class="form-label">GPU device ids</label>
+                        <input class="form-control" @bind="_gpuOptions" placeholder="all, or e.g. 0,1" />
+                        <div class="form-text">Which NVIDIA GPU(s) this container may use. "all" gives it every GPU on the box; a comma-separated list (e.g. 0,1) restricts it to specific ones.</div>
+                    </div>
+                }
+                @if (_gpuVendor == GpuVendor.Intel)
+                {
+                    <div class="col-md-12">
+                        <label class="form-label">Devices (raw --device passthrough, e.g. /dev/dri)</label>
+                        <div class="form-text mb-2">Host device files this container needs direct access to for GPU rendering — commonly just /dev/dri on Intel hardware. Leave the container path blank to use the same path as the host.</div>
+                        @for (var i = 0; i < _devices.Count; i++)
+                        {
+                            var row = _devices[i];
+                            <div class="row g-2 mb-2 align-items-center">
+                                <div class="col-md-5"><input class="form-control form-control-sm" placeholder="Host path" @bind="row.HostPath" /></div>
+                                <div class="col-md-5"><input class="form-control form-control-sm" placeholder="Container path" @bind="row.ContainerPath" /></div>
+                                <div class="col-md-2 text-end">
+                                    <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _devices.Remove(row))">Remove</button>
+                                </div>
+                            </div>
+                        }
+                        <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _devices.Add(new DeviceMapping()))">+ Add device</button>
+                    </div>
+                }
+                @if (_gpuVendor == GpuVendor.None)
+                {
+                    <div class="col-md-12">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="skip-gpu" @bind="_gpuSkippedDeliberately" />
+                            <label class="form-check-label" for="skip-gpu">This server genuinely has no GPU — I'm not just skipping this.</label>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else if (_step == 4)
+        {
+            <p class="text-muted small">Review before saving. You can go back and change anything.</p>
+            <ul class="list-unstyled small">
+                <li><strong>Label:</strong> @NoneIfBlank(_label)</li>
+                <li><strong>Docker host:</strong> @NoneIfBlank(_dockerHost) @(_testResult?.Success == true ? "(tested OK)" : "(not confirmed reachable)")</li>
+                <li><strong>Image:</strong> @NoneIfBlank(_image)</li>
+                <li><strong>Container name:</strong> @(string.IsNullOrWhiteSpace(_containerName) ? "(defaults to label)" : _containerName)</li>
+                <li><strong>Serving port:</strong> @(_servingPort?.ToString() ?? "(none)")</li>
+                <li><strong>Inference URL:</strong> @NoneIfBlank(_inferenceUrl)</li>
+                <li><strong>Metrics URL:</strong> @NoneIfBlank(_metricsUrl)</li>
+                <li><strong>GPU:</strong> @GpuSummary()</li>
+            </ul>
+
+            @if (MissingItems().Count > 0)
+            {
+                <div class="alert alert-warning py-2">
+                    <div class="mb-1">This setup isn't complete yet:</div>
+                    <ul class="mb-0">
+                        @foreach (var m in MissingItems())
+                        {
+                            <li>@m</li>
+                        }
+                    </ul>
+                </div>
+            }
+        }
+
+        <div class="mt-3 d-flex justify-content-between">
+            <div>
+                @if (_step > 1)
+                {
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@(() => _step--)">Back</button>
+                }
+            </div>
+            <div>
+                <button type="button" class="btn btn-secondary btn-sm me-2" @onclick="@RequestCancel">Cancel</button>
+                @if (_step < 4)
+                {
+                    <button type="button" class="btn btn-primary btn-sm" @onclick="@(() => _step++)">Next</button>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-primary btn-sm" disabled="@_busy" @onclick="@SaveAsync">
+                        @(_busy ? "Saving…" : "Save")
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback OnCancelled { get; set; }
+    [Parameter] public EventCallback<SourceInfo> OnSaved { get; set; }
+
+    private int _step = 1;
+    private bool _busy;
+    private bool _testing;
+    private string? _error;
+    private DockerHostTestResult? _testResult;
+
+    private string _label = "";
+    private string _dockerHost = "";
+    private string _image = "vllm/vllm-openai:latest";
+    private string _containerName = "";
+    private int? _servingPort = 8000;
+    private string _inferenceUrl = "";
+    private string _metricsUrl = "";
+    private GpuVendor _gpuVendor = GpuVendor.None;
+    private int? _gpuVramTotalGb;
+    private string _gpuOptions = "all";
+    private List<DeviceMapping> _devices = new();
+    private bool _gpuSkippedDeliberately;
+
+    private static string NoneIfBlank(string s) => string.IsNullOrWhiteSpace(s) ? "(not set)" : s;
+
+    /// <summary>Best-effort default so the source isn't silently left with no working
+    /// inference/metrics URL — the Docker API port and the vLLM serving port are
+    /// different things, so this is a starting guess, not a substitute for
+    /// confirmation. Never overwrites a value the user already typed.</summary>
+    private void SuggestInferenceUrl()
+    {
+        if (!string.IsNullOrWhiteSpace(_inferenceUrl) || string.IsNullOrWhiteSpace(_dockerHost))
+            return;
+
+        var host = _dockerHost.Trim();
+        foreach (var scheme in new[] { "tcp://", "http://", "https://" })
+        {
+            if (host.StartsWith(scheme, StringComparison.OrdinalIgnoreCase))
+                host = host[scheme.Length..];
+        }
+        var hostname = host.Split(':', '/')[0];
+        if (string.IsNullOrWhiteSpace(hostname)) return;
+
+        var suggested = $"http://{hostname}:{_servingPort ?? 8000}";
+        _inferenceUrl = suggested;
+        if (string.IsNullOrWhiteSpace(_metricsUrl))
+            _metricsUrl = suggested;
+    }
+
+    private string GpuSummary() => _gpuVendor switch
+    {
+        GpuVendor.None => "None",
+        GpuVendor.Nvidia => $"NVIDIA, devices: {(string.IsNullOrWhiteSpace(_gpuOptions) ? "all" : _gpuOptions)}, VRAM: {(_gpuVramTotalGb is > 0 ? _gpuVramTotalGb + " GB" : "unknown")}",
+        GpuVendor.Intel => $"Intel, {_devices.Count(d => !string.IsNullOrWhiteSpace(d.HostPath))} device(s), VRAM: {(_gpuVramTotalGb is > 0 ? _gpuVramTotalGb + " GB" : "unknown")}",
+        _ => "None",
+    };
+
+    private List<string> MissingItems()
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(_label)) missing.Add("Label");
+        if (string.IsNullOrWhiteSpace(_dockerHost)) missing.Add("Docker host — hot-swap won't work without one");
+        else if (_testResult is not { Success: true }) missing.Add("Docker host hasn't been confirmed reachable (test connection on step 1)");
+        if (string.IsNullOrWhiteSpace(_image)) missing.Add("Image");
+        if (string.IsNullOrWhiteSpace(_inferenceUrl)) missing.Add("Inference URL — without this the dashboard can't reach this server's API at all");
+        if (_gpuVendor == GpuVendor.None && !_gpuSkippedDeliberately) missing.Add("GPU not set and not confirmed as intentional (step 3)");
+        if (_gpuVendor != GpuVendor.None && _gpuVramTotalGb is not > 0) missing.Add("GPU VRAM total — warnings on the Models page will be disabled without it");
+        return missing;
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        _testing = true;
+        _testResult = null;
+        StateHasChanged();
+        try
+        {
+            _testResult = await Docker.TestDockerHostAsync(_dockerHost);
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private async Task RequestCancel()
+    {
+        await OnCancelled.InvokeAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_busy) return;
+        if (string.IsNullOrWhiteSpace(_label))
+        {
+            _error = "Label is required.";
+            _step = 1;
+            return;
+        }
+
+        var missing = MissingItems();
+        if (missing.Count > 0)
+        {
+            var proceed = await JS.InvokeAsync<bool>("confirm",
+                "This setup isn't complete yet:\n\n" + string.Join("\n", missing.Select(m => "- " + m)) +
+                "\n\nSave anyway? You can come back and finish it later.");
+            if (!proceed) return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var source = new SourceInfo
+            {
+                Id = Guid.NewGuid().ToString(),
+                Label = _label.Trim(),
+                Slug = Slug.From(_label),
+                Type = SourceType.Vllm,
+                MetricsUrl = _metricsUrl.Trim(),
+                InferenceUrl = _inferenceUrl.Trim(),
+                DockerHost = string.IsNullOrWhiteSpace(_dockerHost) ? null : _dockerHost.Trim(),
+                ContainerName = string.IsNullOrWhiteSpace(_containerName) ? null : _containerName.Trim(),
+                ScrapeIntervalSeconds = 5,
+                Active = true,
+            };
+            var saved = await Sources.CreateAsync(source);
+
+            var spec = new LaunchSpec
+            {
+                Id = Guid.NewGuid().ToString(),
+                SourceId = saved.Id,
+                Image = _image.Trim(),
+                ServingPort = _servingPort,
+                GpuVendor = _gpuVendor,
+                GpuVramTotalGb = _gpuVramTotalGb is > 0 ? _gpuVramTotalGb : null,
+                GpuOptions = _gpuVendor == GpuVendor.Nvidia ? (string.IsNullOrWhiteSpace(_gpuOptions) ? "all" : _gpuOptions.Trim()) : null,
+                Devices = _gpuVendor == GpuVendor.Intel
+                    ? _devices.Where(d => !string.IsNullOrWhiteSpace(d.HostPath))
+                        .Select(d => new DeviceMapping { HostPath = d.HostPath.Trim(), ContainerPath = string.IsNullOrWhiteSpace(d.ContainerPath) ? d.HostPath.Trim() : d.ContainerPath.Trim() }).ToList()
+                    : new(),
+            };
+            await LaunchSpecs.SaveAsync(spec);
+
+            await OnSaved.InvokeAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            _error = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

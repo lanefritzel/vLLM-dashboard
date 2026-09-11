@@ -26,7 +26,11 @@
     <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-3">
             <div class="card-title">Sources</div>
-            <button class="btn btn-primary btn-sm" @onclick="@StartNewSource">+ Add source</button>
+            <div>
+                <button class="btn btn-outline btn-sm me-2" @onclick="@(() => _fullWizardOpen = true)">Full Setup Wizard</button>
+                <button class="btn btn-outline btn-sm me-2" @onclick="@(() => _wizardOpen = true)">Server Setup Wizard</button>
+                <button class="btn btn-primary btn-sm" @onclick="@StartNewSource">+ Add source</button>
+            </div>
         </div>
 
         <table class="table table-sm sources-table">
@@ -68,6 +72,20 @@
     </div>
 </div>
 
+@if (_wizardOpen)
+{
+    <Dashboard.Web.Components.Wizards.ServerSetupWizard
+        OnCancelled="@(() => _wizardOpen = false)"
+        OnSaved="@OnWizardSavedAsync" />
+}
+
+@if (_fullWizardOpen)
+{
+    <Dashboard.Web.Components.Wizards.FullSetupWizard
+        OnCancelled="@(() => _fullWizardOpen = false)"
+        OnSaved="@OnFullWizardSavedAsync" />
+}
+
 @if (_editing is not null)
 {
     <div class="modal-overlay" @onclick="@CancelEdit">
@@ -100,11 +118,11 @@
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Metrics URL @(TypeIsVllm ? "(/metrics endpoint)" : "ignored")</label>
-                        <input class="form-control" @bind="_fMetricsUrl" placeholder="http://host:9999" />
+                        <input class="form-control" @bind="_fMetricsUrl" placeholder="http://servername-or-ip:9999" />
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Inference URL (vLLM /v1 or Ollama base)</label>
-                        <input class="form-control" @bind="_fInferenceUrl" placeholder="http://host:9999" />
+                        <input class="form-control" @bind="_fInferenceUrl" placeholder="http://servername-or-ip:9999" />
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Active</label>
@@ -124,7 +142,7 @@
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label">Docker host <span class="text-muted">(optional, for hot-swap)</span></label>
-                            <input class="form-control" @bind="_fDockerHost" placeholder="tcp://host:2375" />
+                            <input class="form-control" @bind="_fDockerHost" placeholder="tcp://servername-or-ip:2375" />
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Container name <span class="text-muted">(optional)</span></label>
@@ -336,12 +354,15 @@
     [Inject] private IConfigStore Config { get; set; } = default!;
     [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
     [Inject] private IJSRuntime JS { get; set; } = default!;
+    [Inject] private Dashboard.Web.Components.SourceSelection Selection { get; set; } = default!;
 
     private List<SourceInfo> _sources = new();
     private SourceInfo? _editing;
     private LaunchSpec? _launch;
     private bool _isCreating;
     private bool _busy;
+    private bool _wizardOpen;
+    private bool _fullWizardOpen;
     private string? _error;
     private string? _message;
 
@@ -485,6 +506,20 @@
     private void CancelEdit()
     {
         _editing = null;
+    }
+
+    private async Task OnWizardSavedAsync(SourceInfo saved)
+    {
+        _wizardOpen = false;
+        _message = "Created " + saved.Label;
+        await ReloadSourcesAsync();
+    }
+
+    private void OnFullWizardSavedAsync(ModelInfo saved)
+    {
+        _fullWizardOpen = false;
+        Selection.SetCurrent(saved.SourceId);
+        Nav.NavigateTo("/models");
     }
 
     private SourceType ParsedType => SourceTypeExtensions.FromStorage(_fType);

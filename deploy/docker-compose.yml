@@ -30,7 +30,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: "http://+:8080"
       DATAPROTECTION_KEYS_DIR: /data/dataprotection
-      # Only needed for a source you want to hot-swap models on, e.g. tcp://tes.home:2375
+      # Only needed for a source you want to hot-swap models on, e.g. tcp://<servername-or-ip>:2375
       DOCKER_HOST: ""
     ports:
       - "8080:8080"
