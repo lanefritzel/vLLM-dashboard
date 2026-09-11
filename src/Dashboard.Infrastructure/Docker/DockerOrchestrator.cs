@@ -374,7 +374,11 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
 
         var pullUrl = $"{dockerBase}/v1.43/images/create?fromImage={Uri.EscapeDataString(repo)}&tag={Uri.EscapeDataString(tag)}";
         _logger.LogInformation("Pulling image {Image}.", image);
-        using var pull = await client.PostAsync(pullUrl, null, ct);
+        // Docker streams pull progress over this one connection until the pull
+        // actually finishes — a multi-GB image can take minutes, far longer than the
+        // "docker" client's normal 30s timeout meant for quick admin calls.
+        using var pullClient = _httpFactory.CreateClient("docker-pull");
+        using var pull = await pullClient.PostAsync(pullUrl, null, ct);
         // Drain the pull progress (NDJSON) so the request completes.
         _ = await pull.Content.ReadAsStringAsync(ct);
     }

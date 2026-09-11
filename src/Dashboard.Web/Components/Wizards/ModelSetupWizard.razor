@@ -191,11 +191,17 @@
             }
         }
 
-        <div class="mt-3 d-flex justify-content-between">
+        <div class="mt-3 d-flex justify-content-between align-items-center">
             <div>
                 @if (_step > FirstStep)
                 {
-                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@Back">Back</button>
+                    <button type="button" class="btn btn-secondary btn-sm me-2" @onclick="@Back">Back</button>
+                }
+                @if (_step != StepPickServer)
+                {
+                    <button type="button" class="btn btn-link btn-sm text-muted p-0" disabled="@_busy" @onclick="@SwitchToAdvancedAsync">
+                        Switch to Advanced
+                    </button>
                 }
             </div>
             <div>
@@ -219,6 +225,7 @@
     [Parameter] public string? PreselectedSourceId { get; set; }
     [Parameter] public EventCallback OnCancelled { get; set; }
     [Parameter] public EventCallback<ModelInfo> OnSaved { get; set; }
+    [Parameter] public EventCallback<ModelInfo> OnSwitchToAdvanced { get; set; }
 
     private const int StepPickServer = 0;
     private const int StepRepo = 1;
@@ -388,6 +395,29 @@
 
     private async Task RequestCancel() => await OnCancelled.InvokeAsync();
 
+    /// <summary>Creates the model from whatever's been entered so far. Shared by the
+    /// normal Save flow and by Switch-to-Advanced, so the advanced form that opens
+    /// afterward reflects precisely what the wizard had.</summary>
+    private async Task<ModelInfo> PersistAsync()
+    {
+        var options = new Dictionary<string, string>();
+        if (_maxModelLen is > 0) options["max-model-len"] = _maxModelLen.Value.ToString();
+        if (_gpuMemUtil is > 0) options["gpu-memory-utilization"] = _gpuMemUtil.Value.ToString("0.##");
+
+        var existing = string.IsNullOrWhiteSpace(_sourceId) ? new List<ModelInfo>() : (await Models.GetBySourceAsync(_sourceId)).ToList();
+        var model = new ModelInfo
+        {
+            SourceId = _sourceId,
+            Name = _name.Trim(),
+            ModelSource = _modelSource,
+            ModelPathOrRepoId = _repoOrPath.Trim(),
+            Options = options,
+            SortOrder = existing.Count,
+            IsActive = existing.Count == 0,
+        };
+        return await Models.CreateAsync(model);
+    }
+
     private async Task SaveAsync()
     {
         if (_busy) return;
@@ -405,27 +435,36 @@
         _error = null;
         try
         {
-            var options = new Dictionary<string, string>();
-            if (_maxModelLen is > 0) options["max-model-len"] = _maxModelLen.Value.ToString();
-            if (_gpuMemUtil is > 0) options["gpu-memory-utilization"] = _gpuMemUtil.Value.ToString("0.##");
-
-            var existing = string.IsNullOrWhiteSpace(_sourceId) ? new List<ModelInfo>() : (await Models.GetBySourceAsync(_sourceId)).ToList();
-            var model = new ModelInfo
-            {
-                SourceId = _sourceId,
-                Name = _name.Trim(),
-                ModelSource = _modelSource,
-                ModelPathOrRepoId = _repoOrPath.Trim(),
-                Options = options,
-                SortOrder = existing.Count,
-                IsActive = existing.Count == 0,
-            };
-            var saved = await Models.CreateAsync(model);
+            var saved = await PersistAsync();
             await OnSaved.InvokeAsync(saved);
         }
         catch (Exception ex)
         {
             _error = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Persists whatever's been entered so far (no completeness confirm) and
+    /// hands off to the real Edit form loaded from that record. Only reachable once a
+    /// server is chosen (hidden on StepPickServer), since the advanced Model form is
+    /// scoped to the page's currently selected source.</summary>
+    private async Task SwitchToAdvancedAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var saved = await PersistAsync();
+            await OnSwitchToAdvanced.InvokeAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not switch to the advanced form: " + ex.Message;
         }
         finally
         {

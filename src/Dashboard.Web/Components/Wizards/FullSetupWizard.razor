@@ -12,11 +12,11 @@
 }
 else if (_phase == Phase.Server)
 {
-    <ServerSetupWizard OnCancelled="@OnCancelledAsync" OnSaved="@OnServerSavedAsync" />
+    <ServerSetupWizard OnCancelled="@OnCancelledAsync" OnSaved="@OnServerSavedAsync" OnSwitchToAdvanced="@OnSwitchToAdvancedSourceAsync" />
 }
 else if (_phase == Phase.Model)
 {
-    <ModelSetupWizard PreselectedSourceId="@_preselectedSourceId" OnCancelled="@OnCancelledAsync" OnSaved="@OnModelSavedAsync" />
+    <ModelSetupWizard PreselectedSourceId="@_preselectedSourceId" OnCancelled="@OnCancelledAsync" OnSaved="@OnModelSavedAsync" OnSwitchToAdvanced="@OnSwitchToAdvancedModelAsync" />
 }
 
 @code {
@@ -26,6 +26,13 @@ else if (_phase == Phase.Model)
 
     [Parameter] public EventCallback OnCancelled { get; set; }
     [Parameter] public EventCallback<ModelInfo> OnSaved { get; set; }
+
+    /// <summary>Forwarded straight through from whichever sub-wizard is currently
+    /// showing — the Server phase's hand-off stays on Settings (the same shape as the
+    /// standalone Server wizard), the Model phase's needs the caller to navigate to
+    /// the Models page since that's where the advanced Model form lives.</summary>
+    [Parameter] public EventCallback<SourceInfo> OnSwitchToAdvancedSource { get; set; }
+    [Parameter] public EventCallback<ModelInfo> OnSwitchToAdvancedModel { get; set; }
 
     private bool _loading = true;
     private Phase _phase;
@@ -55,4 +62,8 @@ else if (_phase == Phase.Model)
     }
 
     private async Task OnModelSavedAsync(ModelInfo saved) => await OnSaved.InvokeAsync(saved);
+
+    private async Task OnSwitchToAdvancedSourceAsync(SourceInfo saved) => await OnSwitchToAdvancedSource.InvokeAsync(saved);
+
+    private async Task OnSwitchToAdvancedModelAsync(ModelInfo saved) => await OnSwitchToAdvancedModel.InvokeAsync(saved);
 }

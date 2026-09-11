@@ -23,8 +23,7 @@
             <div class="d-flex align-items-center justify-content-between mb-3">
                 <div class="card-title">Models</div>
                 <div>
-                    <button class="btn btn-outline btn-sm me-2" @onclick="@(() => _modelWizardOpen = true)">Model Setup Wizard</button>
-                    <button class="btn btn-primary btn-sm" @onclick="@StartNewModel">+ Add model</button>
+                    <button class="btn btn-primary btn-sm" @onclick="@(() => _modelWizardOpen = true)">+ Add model</button>
                 </div>
             </div>
             <table class="table table-sm">
@@ -81,7 +80,8 @@
         <Dashboard.Web.Components.Wizards.ModelSetupWizard
             PreselectedSourceId="@src.Id"
             OnCancelled="@(() => _modelWizardOpen = false)"
-            OnSaved="@OnModelWizardSavedAsync" />
+            OnSaved="@OnModelWizardSavedAsync"
+            OnSwitchToAdvanced="@OnModelWizardSwitchToAdvancedAsync" />
     }
 
     @if (_editingModel is not null)
@@ -501,11 +501,25 @@
     private SourceInfo? SelectedSource =>
         _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
 
+    [SupplyParameterFromQuery(Name = "edit")]
+    [Parameter]
+    public string? EditModelId { get; set; }
+
     protected override async Task OnInitializedAsync()
     {
         Selection.Changed += OnSelectionChanged;
         Config.Changed += OnConfigChanged;
         await ReloadAsync();
+
+        // Lets the Full Setup Wizard's model phase hand off to this page's own Edit
+        // modal after navigating here — it can't open the modal directly since that
+        // wizard is hosted from the Settings page, not this one.
+        if (!string.IsNullOrWhiteSpace(EditModelId))
+        {
+            var model = _models.FirstOrDefault(m => m.Id == EditModelId);
+            if (model is not null)
+                await StartEditModel(model);
+        }
     }
 
     private void OnSelectionChanged(object? sender, EventArgs e) =>
@@ -541,25 +555,6 @@
         StateHasChanged();
     }
 
-    private async Task StartNewModel()
-    {
-        _isCreatingModel = true;
-        _editingModel = new ModelInfo { SourceId = SelectedSource!.Id, SortOrder = _models.Count };
-        _fModelSourceId = SelectedSource!.Id;
-        _fModelName = "";
-        _fModelDisplay = "";
-        _fModelImageOverride = "";
-        _fModelSource = ModelSource.HuggingFace;
-        _fModelPathOrRepoId = "";
-        _fModelActive = _models.Count == 0;
-        _fModelPreloadOnStartup = false;
-        _fModelIdleTtlMinutes = null;
-        _fOptions = new();
-        _hfLookup = null;
-        _hfLookupFailed = false;
-        await RefreshCurrentSpecAsync();
-    }
-
     private async Task StartEditModel(ModelInfo m)
     {
         _isCreatingModel = false;
@@ -586,6 +581,16 @@
     {
         _modelWizardOpen = false;
         await ReloadAsync();
+    }
+
+    /// <summary>The wizard already persisted the (possibly incomplete) model — this
+    /// just closes the wizard and opens the same Edit modal the row's own "Edit"
+    /// button uses, loaded from what was just saved.</summary>
+    private async Task OnModelWizardSwitchToAdvancedAsync(ModelInfo saved)
+    {
+        _modelWizardOpen = false;
+        await ReloadAsync();
+        await StartEditModel(saved);
     }
 
     private async Task OnModelSubmit()

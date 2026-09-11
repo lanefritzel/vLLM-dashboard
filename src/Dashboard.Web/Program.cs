@@ -70,6 +70,11 @@ builder.Services.AddHttpClient("docker", c => c.Timeout = TimeSpan.FromSeconds(3
 // Docker's log-follow endpoint is a long-lived streaming connection, not a normal
 // request/response call — needs the same infinite timeout as the "proxy" client.
 builder.Services.AddHttpClient("docker-logs", c => c.Timeout = Timeout.InfiniteTimeSpan);
+// Same story for an image pull: Docker streams progress over one open connection
+// until the pull actually finishes, which for a multi-GB image can easily take
+// minutes — the general "docker" client's 30s timeout would (and did, in testing)
+// kill the request outright while the pull was still genuinely progressing.
+builder.Services.AddHttpClient("docker-pull", c => c.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient("inference", c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("huggingface", c =>
 {

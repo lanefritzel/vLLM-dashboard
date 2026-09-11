@@ -26,10 +26,14 @@
     <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-3">
             <div class="card-title">Sources</div>
-            <div>
-                <button class="btn btn-outline btn-sm me-2" @onclick="@(() => _fullWizardOpen = true)">Full Setup Wizard</button>
-                <button class="btn btn-outline btn-sm me-2" @onclick="@(() => _wizardOpen = true)">Server Setup Wizard</button>
-                <button class="btn btn-primary btn-sm" @onclick="@StartNewSource">+ Add source</button>
+            <div class="text-end">
+                <div>
+                    <button class="btn btn-outline btn-sm me-2" @onclick="@(() => _fullWizardOpen = true)">Full Setup Wizard</button>
+                    <button class="btn btn-primary btn-sm" @onclick="@(() => _wizardOpen = true)">+ Add source</button>
+                </div>
+                <div class="mt-1">
+                    <button type="button" class="btn btn-link btn-sm text-muted p-0" @onclick="@StartNewSource">Not vLLM? Add an Ollama/other source directly</button>
+                </div>
             </div>
         </div>
 
@@ -76,14 +80,17 @@
 {
     <Dashboard.Web.Components.Wizards.ServerSetupWizard
         OnCancelled="@(() => _wizardOpen = false)"
-        OnSaved="@OnWizardSavedAsync" />
+        OnSaved="@OnWizardSavedAsync"
+        OnSwitchToAdvanced="@OnSwitchToAdvancedSourceAsync" />
 }
 
 @if (_fullWizardOpen)
 {
     <Dashboard.Web.Components.Wizards.FullSetupWizard
         OnCancelled="@(() => _fullWizardOpen = false)"
-        OnSaved="@OnFullWizardSavedAsync" />
+        OnSaved="@OnFullWizardSavedAsync"
+        OnSwitchToAdvancedSource="@OnSwitchToAdvancedSourceAsync"
+        OnSwitchToAdvancedModel="@OnFullWizardSwitchToAdvancedModelAsync" />
 }
 
 @if (_editing is not null)
@@ -520,6 +527,28 @@
         _fullWizardOpen = false;
         Selection.SetCurrent(saved.SourceId);
         Nav.NavigateTo("/models");
+    }
+
+    /// <summary>Used by both the standalone Server wizard and the Full wizard's Server
+    /// phase — the wizard has already persisted the (possibly incomplete) source, so
+    /// this just closes the wizard and opens the same Edit modal the row's own "Edit"
+    /// button uses, loaded fresh from what was just saved.</summary>
+    private async Task OnSwitchToAdvancedSourceAsync(SourceInfo saved)
+    {
+        _wizardOpen = false;
+        _fullWizardOpen = false;
+        await ReloadSourcesAsync();
+        await StartEditSourceAsync(saved);
+    }
+
+    /// <summary>The Full wizard's Model phase already saved the model — the advanced
+    /// Model form lives on the Models page, not here, so this selects the new source
+    /// and navigates there with a query param Models.razor uses to auto-open Edit.</summary>
+    private void OnFullWizardSwitchToAdvancedModelAsync(ModelInfo saved)
+    {
+        _fullWizardOpen = false;
+        Selection.SetCurrent(saved.SourceId);
+        Nav.NavigateTo($"/models?edit={saved.Id}");
     }
 
     private SourceType ParsedType => SourceTypeExtensions.FromStorage(_fType);

@@ -96,6 +96,22 @@
                     <input class="form-control" @bind="_metricsUrl" placeholder="http://servername-or-ip:8000" />
                     <div class="form-text">Usually the same as the inference URL.</div>
                 </div>
+                <div class="col-md-6">
+                    <label class="form-label">Hugging Face cache directory <span class="text-muted">(optional, strongly recommended)</span></label>
+                    <input class="form-control" @bind="_hfCacheHostPath" placeholder="/home/you/.cache/huggingface" />
+                    <div class="form-text">
+                        A folder on the Docker host itself, persisted across container recreations. Without
+                        this, every hot-swap starts from an empty cache — even a model this same physical
+                        server already downloaded once (for a <em>different</em> source, or before this
+                        volume was set) gets downloaded again from scratch. Point every source that shares
+                        the same Docker host at the same path here to share one cache between them.
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Hugging Face token <span class="text-muted">(optional)</span></label>
+                    <input class="form-control" type="password" autocomplete="off" @bind="_hfToken" placeholder="hf_…" />
+                    <div class="form-text">Only needed for gated or private Hugging Face repos.</div>
+                </div>
             </div>
         }
         else if (_step == 3)
@@ -172,6 +188,7 @@
                 <li><strong>Serving port:</strong> @(_servingPort?.ToString() ?? "(none)")</li>
                 <li><strong>Inference URL:</strong> @NoneIfBlank(_inferenceUrl)</li>
                 <li><strong>Metrics URL:</strong> @NoneIfBlank(_metricsUrl)</li>
+                <li><strong>Hugging Face cache directory:</strong> @(string.IsNullOrWhiteSpace(_hfCacheHostPath) ? "(none — every swap re-downloads weights)" : _hfCacheHostPath)</li>
                 <li><strong>GPU:</strong> @GpuSummary()</li>
             </ul>
 
@@ -189,12 +206,15 @@
             }
         }
 
-        <div class="mt-3 d-flex justify-content-between">
+        <div class="mt-3 d-flex justify-content-between align-items-center">
             <div>
                 @if (_step > 1)
                 {
-                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@(() => _step--)">Back</button>
+                    <button type="button" class="btn btn-secondary btn-sm me-2" @onclick="@(() => _step--)">Back</button>
                 }
+                <button type="button" class="btn btn-link btn-sm text-muted p-0" disabled="@_busy" @onclick="@SwitchToAdvancedAsync">
+                    Switch to Advanced
+                </button>
             </div>
             <div>
                 <button type="button" class="btn btn-secondary btn-sm me-2" @onclick="@RequestCancel">Cancel</button>
@@ -216,6 +236,7 @@
 @code {
     [Parameter] public EventCallback OnCancelled { get; set; }
     [Parameter] public EventCallback<SourceInfo> OnSaved { get; set; }
+    [Parameter] public EventCallback<SourceInfo> OnSwitchToAdvanced { get; set; }
 
     private int _step = 1;
     private bool _busy;
@@ -230,6 +251,8 @@
     private int? _servingPort = 8000;
     private string _inferenceUrl = "";
     private string _metricsUrl = "";
+    private string _hfCacheHostPath = "";
+    private string _hfToken = "";
     private GpuVendor _gpuVendor = GpuVendor.None;
     private int? _gpuVramTotalGb;
     private string _gpuOptions = "all";
@@ -303,6 +326,48 @@
         await OnCancelled.InvokeAsync();
     }
 
+    /// <summary>Creates the source + launch spec from whatever's been entered so far.
+    /// Shared by the normal Save flow and by Switch-to-Advanced — both write exactly
+    /// the same record, so the advanced form that opens afterward reflects precisely
+    /// what the wizard had, with no separate field-mapping code path to drift.</summary>
+    private async Task<SourceInfo> PersistAsync()
+    {
+        var source = new SourceInfo
+        {
+            Id = Guid.NewGuid().ToString(),
+            Label = _label.Trim(),
+            Slug = Slug.From(_label),
+            Type = SourceType.Vllm,
+            MetricsUrl = _metricsUrl.Trim(),
+            InferenceUrl = _inferenceUrl.Trim(),
+            DockerHost = string.IsNullOrWhiteSpace(_dockerHost) ? null : _dockerHost.Trim(),
+            ContainerName = string.IsNullOrWhiteSpace(_containerName) ? null : _containerName.Trim(),
+            ScrapeIntervalSeconds = 5,
+            Active = true,
+        };
+        var saved = await Sources.CreateAsync(source);
+
+        var spec = new LaunchSpec
+        {
+            Id = Guid.NewGuid().ToString(),
+            SourceId = saved.Id,
+            Image = _image.Trim(),
+            ServingPort = _servingPort,
+            GpuVendor = _gpuVendor,
+            GpuVramTotalGb = _gpuVramTotalGb is > 0 ? _gpuVramTotalGb : null,
+            GpuOptions = _gpuVendor == GpuVendor.Nvidia ? (string.IsNullOrWhiteSpace(_gpuOptions) ? "all" : _gpuOptions.Trim()) : null,
+            Devices = _gpuVendor == GpuVendor.Intel
+                ? _devices.Where(d => !string.IsNullOrWhiteSpace(d.HostPath))
+                    .Select(d => new DeviceMapping { HostPath = d.HostPath.Trim(), ContainerPath = string.IsNullOrWhiteSpace(d.ContainerPath) ? d.HostPath.Trim() : d.ContainerPath.Trim() }).ToList()
+                : new(),
+            HfCacheHostPath = string.IsNullOrWhiteSpace(_hfCacheHostPath) ? null : _hfCacheHostPath.Trim(),
+            HfToken = string.IsNullOrWhiteSpace(_hfToken) ? null : _hfToken.Trim(),
+        };
+        await LaunchSpecs.SaveAsync(spec);
+
+        return saved;
+    }
+
     private async Task SaveAsync()
     {
         if (_busy) return;
@@ -326,42 +391,35 @@
         _error = null;
         try
         {
-            var source = new SourceInfo
-            {
-                Id = Guid.NewGuid().ToString(),
-                Label = _label.Trim(),
-                Slug = Slug.From(_label),
-                Type = SourceType.Vllm,
-                MetricsUrl = _metricsUrl.Trim(),
-                InferenceUrl = _inferenceUrl.Trim(),
-                DockerHost = string.IsNullOrWhiteSpace(_dockerHost) ? null : _dockerHost.Trim(),
-                ContainerName = string.IsNullOrWhiteSpace(_containerName) ? null : _containerName.Trim(),
-                ScrapeIntervalSeconds = 5,
-                Active = true,
-            };
-            var saved = await Sources.CreateAsync(source);
-
-            var spec = new LaunchSpec
-            {
-                Id = Guid.NewGuid().ToString(),
-                SourceId = saved.Id,
-                Image = _image.Trim(),
-                ServingPort = _servingPort,
-                GpuVendor = _gpuVendor,
-                GpuVramTotalGb = _gpuVramTotalGb is > 0 ? _gpuVramTotalGb : null,
-                GpuOptions = _gpuVendor == GpuVendor.Nvidia ? (string.IsNullOrWhiteSpace(_gpuOptions) ? "all" : _gpuOptions.Trim()) : null,
-                Devices = _gpuVendor == GpuVendor.Intel
-                    ? _devices.Where(d => !string.IsNullOrWhiteSpace(d.HostPath))
-                        .Select(d => new DeviceMapping { HostPath = d.HostPath.Trim(), ContainerPath = string.IsNullOrWhiteSpace(d.ContainerPath) ? d.HostPath.Trim() : d.ContainerPath.Trim() }).ToList()
-                    : new(),
-            };
-            await LaunchSpecs.SaveAsync(spec);
-
+            var saved = await PersistAsync();
             await OnSaved.InvokeAsync(saved);
         }
         catch (Exception ex)
         {
             _error = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Persists whatever's been entered so far (no completeness confirm —
+    /// choosing Advanced already means "let me finish this myself") and hands off to
+    /// the real Edit form loaded from that record.</summary>
+    private async Task SwitchToAdvancedAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var saved = await PersistAsync();
+            await OnSwitchToAdvanced.InvokeAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not switch to the advanced form: " + ex.Message;
         }
         finally
         {
