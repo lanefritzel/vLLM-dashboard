@@ -152,6 +152,9 @@ namespace Dashboard.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int?>("GpuVramTotalGb")
+                        .HasColumnType("integer");
+
                     b.Property<int>("HealthWaitTimeoutSeconds")
                         .HasColumnType("integer");
 

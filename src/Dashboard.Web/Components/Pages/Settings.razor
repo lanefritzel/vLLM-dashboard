@@ -157,13 +157,15 @@
                             <div class="form-text">First-time swap to an uncached Hugging Face model has to download it first — allow enough time.</div>
                         </div>
                         <div class="col-md-3">
-                            <label class="form-label">RAM limit (GB) <span class="text-muted">(optional)</span></label>
+                            <label class="form-label">System RAM limit (GB) <span class="text-muted">(optional)</span></label>
                             <input class="form-control" type="number" min="1" step="1" @bind="_fMemoryLimitGb" placeholder="e.g. 20 — blank = no limit" />
                             <div class="form-text">
                                 A hard number of gigabytes, enforced by Docker itself. If this model ever tries to use
-                                more RAM than this, Docker kills <em>this container only</em> instead of the model
-                                exhausting the whole server's memory. Set it below your host's total RAM (leave some
-                                headroom for other services running there). Leave blank for no limit.
+                                more <strong>system RAM</strong> than this, Docker kills <em>this container only</em>
+                                instead of the model exhausting the whole server's memory. Set it below your host's
+                                total RAM (leave some headroom for other services running there). Leave blank for no
+                                limit. <strong>This does not apply to GPU VRAM</strong> — see VRAM total below if this
+                                source has a GPU.
                             </div>
                         </div>
                         <div class="col-md-4">
@@ -194,6 +196,18 @@
                                 <option value="@GpuVendor.Intel">Intel (raw device passthrough)</option>
                             </select>
                         </div>
+                        @if (_fGpuVendor != GpuVendor.None)
+                        {
+                            <div class="col-md-4">
+                                <label class="form-label">GPU VRAM total (GB) <span class="text-muted">(optional)</span></label>
+                                <input class="form-control" type="number" min="1" step="1" @bind="_fGpuVramTotalGb" placeholder="e.g. 32" />
+                                <div class="form-text">
+                                    Informational only — not enforced by anything. Lets the app warn when a model is
+                                    likely to exceed this card's actual VRAM. Separate from the RAM limit above,
+                                    which only caps system RAM and has no effect on GPU VRAM.
+                                </div>
+                            </div>
+                        }
                         @if (_fGpuVendor == GpuVendor.Nvidia)
                         {
                             <div class="col-md-8">
@@ -349,6 +363,7 @@
     private string _fRestartPolicy = "unless-stopped";
     private int _fHealthTimeout = 600;
     private int? _fMemoryLimitGb;
+    private int? _fGpuVramTotalGb;
     private string _fNetworkMode = "bridge";
     private string _fIpcMode = "";
     private bool _fPrivileged;
@@ -413,6 +428,7 @@
         _fPrivileged = spec?.Privileged ?? false;
         _fGpuVendor = spec?.GpuVendor ?? GpuVendor.None;
         _fGpuOptions = spec?.GpuOptions ?? "";
+        _fGpuVramTotalGb = spec?.GpuVramTotalGb;
         _fDevices = spec?.Devices.Select(d => new DeviceMapping { HostPath = d.HostPath, ContainerPath = d.ContainerPath }).ToList() ?? new();
         _fHfCache = spec?.HfCacheHostPath ?? "";
         _fHfToken = spec?.HfToken ?? "";
@@ -523,6 +539,7 @@
                     RestartPolicy = string.IsNullOrWhiteSpace(_fRestartPolicy) ? "unless-stopped" : _fRestartPolicy,
                     HealthWaitTimeoutSeconds = _fHealthTimeout > 0 ? _fHealthTimeout : 600,
                     MemoryLimitMb = _fMemoryLimitGb is > 0 ? _fMemoryLimitGb * 1024 : null,
+                    GpuVramTotalGb = _fGpuVramTotalGb is > 0 ? _fGpuVramTotalGb : null,
                     NetworkMode = string.IsNullOrWhiteSpace(_fNetworkMode) ? "bridge" : _fNetworkMode,
                     IpcMode = string.IsNullOrWhiteSpace(_fIpcMode) ? null : _fIpcMode,
                     Privileged = _fPrivileged,

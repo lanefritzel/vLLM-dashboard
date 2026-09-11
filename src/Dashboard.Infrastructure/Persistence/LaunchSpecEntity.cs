@@ -21,6 +21,7 @@ public class LaunchSpecEntity
     public int? MemoryLimitMb { get; set; }
     public string? GpuOptions { get; set; }
     public string GpuVendor { get; set; } = "none";
+    public int? GpuVramTotalGb { get; set; }
     public string DevicesJson { get; set; } = "[]";
     public string NetworkMode { get; set; } = "bridge";
     public bool Privileged { get; set; }
@@ -48,6 +49,7 @@ public class LaunchSpecEntity
             MemoryLimitMb = MemoryLimitMb,
             GpuOptions = GpuOptions,
             GpuVendor = Core.Models.GpuVendorExtensions.FromStorage(GpuVendor),
+            GpuVramTotalGb = GpuVramTotalGb,
             NetworkMode = string.IsNullOrWhiteSpace(NetworkMode) ? "bridge" : NetworkMode,
             Privileged = Privileged,
             IpcMode = IpcMode,
@@ -89,6 +91,7 @@ public class LaunchSpecEntity
         MemoryLimitMb = spec.MemoryLimitMb,
         GpuOptions = spec.GpuOptions,
         GpuVendor = spec.GpuVendor.ToStorage(),
+        GpuVramTotalGb = spec.GpuVramTotalGb,
         DevicesJson = System.Text.Json.JsonSerializer.Serialize(spec.Devices),
         NetworkMode = string.IsNullOrWhiteSpace(spec.NetworkMode) ? "bridge" : spec.NetworkMode,
         Privileged = spec.Privileged,

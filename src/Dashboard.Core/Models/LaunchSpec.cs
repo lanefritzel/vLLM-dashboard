@@ -107,12 +107,12 @@ public sealed record LaunchSpec
     /// first-time swap to an uncached HF model downloads its weights first.</summary>
     public int HealthWaitTimeoutSeconds { get; init; } = 600;
 
-    /// <summary>Hard cap on the container's RAM usage (megabytes), enforced by Docker
-    /// itself (a cgroup memory limit) — not a vLLM setting. Null means no limit. On an
-    /// integrated GPU host, this is the same memory the model's weights/KV cache
-    /// actually consume, so it's the backstop against a misconfigured model (e.g. no
-    /// quantization, a huge context length) exhausting the whole host instead of just
-    /// this container getting killed.</summary>
+    /// <summary>Hard cap on the container's system RAM usage (megabytes), enforced by
+    /// Docker itself (a cgroup memory limit) — not a vLLM setting. Null means no limit.
+    /// This protects system RAM only. On a discrete GPU, VRAM is a completely separate
+    /// memory pool this limit has no effect on at all — see
+    /// <see cref="GpuVramTotalGb"/> and a model's <c>gpu-memory-utilization</c> option
+    /// for the setting that actually bounds VRAM.</summary>
     public int? MemoryLimitMb { get; init; }
 
     /// <summary>NVIDIA-only: device ids for the nvidia-container-runtime DeviceRequests
@@ -121,6 +121,13 @@ public sealed record LaunchSpec
     public string? GpuOptions { get; init; }
 
     public GpuVendor GpuVendor { get; init; } = GpuVendor.None;
+
+    /// <summary>Informational only — not read by anything that launches a container.
+    /// The GPU's actual total video memory, so the UI can warn when a model's expected
+    /// footprint (weights + vLLM's <c>gpu-memory-utilization</c> default of 90%) is
+    /// likely to exceed what the card actually has. Null disables those warnings for
+    /// this source rather than guessing.</summary>
+    public int? GpuVramTotalGb { get; init; }
 
     /// <summary>Raw --device passthrough entries. Only meaningful when
     /// <see cref="GpuVendor"/> is <see cref="Models.GpuVendor.Intel"/>.</summary>

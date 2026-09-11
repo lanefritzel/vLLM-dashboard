@@ -71,6 +71,12 @@ builder.Services.AddHttpClient("docker", c => c.Timeout = TimeSpan.FromSeconds(3
 // request/response call — needs the same infinite timeout as the "proxy" client.
 builder.Services.AddHttpClient("docker-logs", c => c.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient("inference", c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("huggingface", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(15);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("vLLM-Dashboard/1.0");
+});
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IHuggingFaceModelLookup, Dashboard.Application.HuggingFace.HuggingFaceModelLookupService>();
 // No client-side timeout: a proxied inference request (in particular a streaming SSE
 // chat completion) has no natural fixed duration. Cancellation comes from the actual
 // client disconnecting (HttpContext.RequestAborted), not a timer.

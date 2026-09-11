@@ -69,6 +69,7 @@ public sealed class LaunchSpecStore : ILaunchSpecStore
         entity.MemoryLimitMb = spec.MemoryLimitMb;
         entity.GpuOptions = spec.GpuOptions;
         entity.GpuVendor = spec.GpuVendor.ToStorage();
+        entity.GpuVramTotalGb = spec.GpuVramTotalGb;
         entity.DevicesJson = System.Text.Json.JsonSerializer.Serialize(spec.Devices);
         entity.NetworkMode = string.IsNullOrWhiteSpace(spec.NetworkMode) ? "bridge" : spec.NetworkMode;
         entity.Privileged = spec.Privileged;

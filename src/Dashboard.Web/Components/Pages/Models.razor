@@ -90,7 +90,7 @@
                 <form @onsubmit="@OnModelSubmit" @onsubmit:preventDefault="true" class="row g-3">
                     <div class="col-md-4">
                         <label class="form-label">Server</label>
-                        <select class="form-select" @bind="_fModelSourceId">
+                        <select class="form-select" @bind="_fModelSourceId" @bind:after="RefreshCurrentSpecAsync">
                             @foreach (var s in _all)
                             {
                                 <option value="@s.Id">@s.Label</option>
@@ -111,7 +111,7 @@
                     </div>
                     <div class="col-md-3">
                         <label class="form-label">Model source</label>
-                        <select class="form-select" @bind="_fModelSource">
+                        <select class="form-select" @bind="_fModelSource" @bind:after="OnModelSourceChanged">
                             <option value="@ModelSource.HuggingFace">Hugging Face repo</option>
                             <option value="@ModelSource.LocalPath">Local path</option>
                         </select>
@@ -120,7 +120,41 @@
                     {
                         <div class="col-md-9">
                             <label class="form-label">Hugging Face repo id</label>
-                            <input class="form-control" @bind="_fModelPathOrRepoId" placeholder="Qwen/Qwen2.5-7B-Instruct" />
+                            <input class="form-control" @bind="_fModelPathOrRepoId" @bind:after="TriggerHfLookupAsync"
+                                   placeholder="Qwen/Qwen2.5-7B-Instruct" />
+                        </div>
+                        <div class="col-md-12">
+                            @if (_hfLookupBusy)
+                            {
+                                <div class="text-muted small">Looking up @_fModelPathOrRepoId on Hugging Face…</div>
+                            }
+                            else if (_hfLookupFailed)
+                            {
+                                <div class="text-muted small">
+                                    Couldn't look this repo up (not found, private, or unreachable) — nothing below
+                                    can be checked against it automatically.
+                                </div>
+                            }
+                            else if (_hfLookup is not null && string.Equals(_hfLookup.RepoId, _fModelPathOrRepoId.Trim(), StringComparison.Ordinal))
+                            {
+                                <div class="card status-card mb-0" style="border-left-color: var(--green);">
+                                    <div class="card-body py-2 small">
+                                        <strong>@FormatParamCount(_hfLookup.ParameterCount)</strong> parameters
+                                        @if (_hfLookup.IsQuantized)
+                                        {
+                                            <span> · already quantized@(_hfLookup.QuantizationMethod is { } qm ? $" ({qm})" : "")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-danger"> · not quantized (full precision)</span>
+                                        }
+                                        @if (_hfLookup.DefaultMaxContextLength is { } ctx)
+                                        {
+                                            <span> · default context length: @ctx.ToString("N0") tokens</span>
+                                        }
+                                    </div>
+                                </div>
+                            }
                         </div>
                     }
                     else
@@ -211,6 +245,7 @@
     [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private SourceSelection Selection { get; set; } = default!;
     [Inject] private IConfigStore Config { get; set; } = default!;
+    [Inject] private IHuggingFaceModelLookup HfLookup { get; set; } = default!;
 
     private List<SourceInfo> _all = new();
     private List<ModelInfo> _models = new();
@@ -232,6 +267,14 @@
     private bool _fModelPreloadOnStartup;
     private int? _fModelIdleTtlMinutes;
     private Dictionary<string, string> _fOptions = new();
+
+    // Live Hugging Face lookup + the current server's LaunchSpec (for its stated
+    // VRAM total) — both drive the dependency hints rendered alongside options like
+    // max-model-len/quantization/gpu-memory-utilization.
+    private HuggingFaceModelInfo? _hfLookup;
+    private bool _hfLookupBusy;
+    private bool _hfLookupFailed;
+    private LaunchSpec? _currentSpec;
 
     private static string GroupLabel(VllmOptionGroup g) => g switch
     {
@@ -275,6 +318,65 @@
         else
             _fOptions[key] = value;
     }
+
+    private async Task RefreshCurrentSpecAsync()
+    {
+        _currentSpec = string.IsNullOrWhiteSpace(_fModelSourceId) ? null : await LaunchSpecs.GetBySourceAsync(_fModelSourceId);
+    }
+
+    private Task OnModelSourceChanged()
+    {
+        // Switching away from Hugging Face makes any lookup result stale/irrelevant
+        // (it was for a repo id, not a local path) — drop it rather than show
+        // misleading leftover info.
+        if (_fModelSource != ModelSource.HuggingFace)
+        {
+            _hfLookup = null;
+            _hfLookupFailed = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task TriggerHfLookupAsync()
+    {
+        if (_fModelSource != ModelSource.HuggingFace || string.IsNullOrWhiteSpace(_fModelPathOrRepoId))
+        {
+            _hfLookup = null;
+            _hfLookupFailed = false;
+            return;
+        }
+
+        var repoId = _fModelPathOrRepoId.Trim();
+        if (_hfLookup?.RepoId == repoId)
+            return; // already have this exact repo's result
+
+        _hfLookupBusy = true;
+        _hfLookupFailed = false;
+        StateHasChanged();
+        try
+        {
+            _hfLookup = await HfLookup.LookupAsync(repoId);
+            _hfLookupFailed = _hfLookup is null;
+        }
+        catch
+        {
+            _hfLookup = null;
+            _hfLookupFailed = true;
+        }
+        finally
+        {
+            _hfLookupBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string FormatParamCount(long? count) => count switch
+    {
+        null => "unknown",
+        >= 1_000_000_000 => $"{count.Value / 1_000_000_000.0:0.#}B",
+        >= 1_000_000 => $"{count.Value / 1_000_000.0:0.#}M",
+        _ => count.Value.ToString("N0"),
+    };
 
     private RenderFragment RenderOption(VllmOptionDefinition opt) =>
         @<div class="col-md-6">
@@ -320,6 +422,41 @@
                 @if (!string.IsNullOrEmpty(opt.Description))
                 {
                     <div class="form-text">@opt.Description</div>
+                }
+                @if (!IsOptionEnabled(opt.Key))
+                {
+                    @if (opt.Key == "max-model-len" && _fModelSource == ModelSource.HuggingFace && _hfLookup?.DefaultMaxContextLength is { } ctxLen)
+                    {
+                        <div class="form-text text-danger">
+                            Not set — will use this model's own default (@ctxLen.ToString("N0") tokens) unless you
+                            set one. This is what caused a real production incident (a model defaulting to a
+                            262,144-token context silently exhausted a server's entire memory).
+                        </div>
+                    }
+                    else if (opt.Key == "quantization" && _fModelSource == ModelSource.HuggingFace && _hfLookup is not null)
+                    {
+                        @if (_hfLookup.IsQuantized)
+                        {
+                            <div class="form-text" style="color: var(--green);">
+                                This repo already appears to be quantized@(_hfLookup.QuantizationMethod is { } qm ? $" ({qm})" : "")
+                                — vLLM should auto-detect this; you likely don't need to set this.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="form-text text-danger">
+                                This repo does not appear to be pre-quantized — running it at full precision needs
+                                significantly more memory. Consider finding an already-quantized variant instead.
+                            </div>
+                        }
+                    }
+                    else if (opt.Key == "gpu-memory-utilization")
+                    {
+                        <div class="form-text text-danger">
+                            Not set — vLLM will default to using 90% of this source's GPU VRAM@(_currentSpec?.GpuVramTotalGb is { } vram ? $" (≈{vram * 0.9:0.#} GB of the {vram} GB you've told the dashboard this card has)" : "").
+                            The System RAM limit on the Settings page does not apply to VRAM at all.
+                        </div>
+                    }
                 }
                 @if (IsOptionEnabled(opt.Key) && opt.ControlType != VllmOptionControlType.Toggle)
                 {
@@ -392,7 +529,7 @@
         StateHasChanged();
     }
 
-    private void StartNewModel()
+    private async Task StartNewModel()
     {
         _isCreatingModel = true;
         _editingModel = new ModelInfo { SourceId = SelectedSource!.Id, SortOrder = _models.Count };
@@ -406,9 +543,12 @@
         _fModelPreloadOnStartup = false;
         _fModelIdleTtlMinutes = null;
         _fOptions = new();
+        _hfLookup = null;
+        _hfLookupFailed = false;
+        await RefreshCurrentSpecAsync();
     }
 
-    private void StartEditModel(ModelInfo m)
+    private async Task StartEditModel(ModelInfo m)
     {
         _isCreatingModel = false;
         _editingModel = m;
@@ -422,6 +562,10 @@
         _fModelPreloadOnStartup = m.PreloadOnStartup;
         _fModelIdleTtlMinutes = m.IdleTtlSeconds is { } s ? Math.Max(1, s / 60) : null;
         _fOptions = new Dictionary<string, string>(m.Options);
+        _hfLookup = null;
+        _hfLookupFailed = false;
+        await RefreshCurrentSpecAsync();
+        await TriggerHfLookupAsync();
     }
 
     private void CancelEditModel() => _editingModel = null;
