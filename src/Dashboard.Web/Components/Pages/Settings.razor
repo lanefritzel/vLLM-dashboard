@@ -25,6 +25,129 @@
 <div class="card mb-4">
     <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-3">
+            <div>
+                <div class="card-title mb-1">Physical Servers</div>
+                <p class="text-muted small mb-0">
+                    A physical (or virtual) machine that runs one or more vLLM instances below. Its Docker
+                    host address, GPU, and Hugging Face cache directory are shared by every instance on it —
+                    set once here instead of re-entering them per instance.
+                </p>
+            </div>
+            <button class="btn btn-primary btn-sm" @onclick="@(() => _serverWizardOpen = true)">+ Add physical server</button>
+        </div>
+
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Label</th>
+                    <th>Docker host</th>
+                    <th>GPU</th>
+                    <th>HF cache directory</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var p in _physicalServers)
+                {
+                    <tr>
+                        <td>@p.Label</td>
+                        <td class="url-cell"><code>@p.DockerHost</code></td>
+                        <td>@(p.GpuVendor == GpuVendor.None ? "—" : $"{p.GpuVendor}{(p.GpuVramTotalGb is > 0 ? $" ({p.GpuVramTotalGb} GB)" : "")}")</td>
+                        <td>@(string.IsNullOrWhiteSpace(p.HfCacheHostPath) ? "—" : p.HfCacheHostPath)</td>
+                        <td class="text-end">
+                            <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditPhysicalServer(p))">Edit</button>
+                            <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeletePhysicalServerAsync(p))">Delete</button>
+                        </td>
+                    </tr>
+                }
+                @if (_physicalServers.Count == 0)
+                {
+                    <tr><td colspan="5" class="text-muted">No physical servers configured.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@if (_serverWizardOpen)
+{
+    <Dashboard.Web.Components.Wizards.PhysicalServerSetupWizard
+        OnCancelled="@(() => _serverWizardOpen = false)"
+        OnSaved="@OnServerWizardSavedAsync"
+        OnSwitchToAdvanced="@OnServerWizardSwitchToAdvancedAsync" />
+}
+
+@if (_editingServer is not null)
+{
+    <div class="modal-overlay" @onclick="@CancelEditServer">
+        <div class="modal-dialog-custom" @onclick:stopPropagation="true">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+                <div class="card-title mb-0">@(_isCreatingServer ? "New physical server" : "Edit physical server")</div>
+                <button type="button" class="modal-close-btn" @onclick="@CancelEditServer" aria-label="Close">✕</button>
+            </div>
+            <form @onsubmit="@SubmitServerAsync" @onsubmit:preventDefault="true">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Label</label>
+                        <input class="form-control" @bind="_fsLabel" placeholder="e.g. Main GPU box" />
+                        <div class="form-text">A friendly name for this machine, shown wherever a vLLM instance's server is picked.</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Docker host</label>
+                        <input class="form-control" @bind="_fsDockerHost" placeholder="tcp://servername-or-ip:2375" />
+                        <div class="form-text">The Docker daemon's own API address — shared by every vLLM instance on this machine.</div>
+                    </div>
+                    <div class="col-md-12">
+                        <button type="button" class="btn btn-outline btn-sm" disabled="@_serverTesting" @onclick="@TestServerConnectionAsync">
+                            @(_serverTesting ? "Testing…" : "Test connection")
+                        </button>
+                        @if (_serverTestResult is not null)
+                        {
+                            <span class="ms-2 @(_serverTestResult.Success ? "text-success" : "text-danger")">@_serverTestResult.Message</span>
+                        }
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">GPU vendor</label>
+                        <select class="form-select" @bind="_fsGpuVendor">
+                            <option value="@GpuVendor.None">None</option>
+                            <option value="@GpuVendor.Nvidia">NVIDIA</option>
+                            <option value="@GpuVendor.Intel">Intel (raw device passthrough)</option>
+                        </select>
+                    </div>
+                    @if (_fsGpuVendor != GpuVendor.None)
+                    {
+                        <div class="col-md-4">
+                            <label class="form-label">GPU VRAM total (GB) <span class="text-muted">(optional)</span></label>
+                            <input class="form-control" type="number" min="1" step="1" @bind="_fsGpuVramTotalGb" placeholder="e.g. 32" />
+                            <div class="form-text">Informational only — powers warnings on the Models page.</div>
+                        </div>
+                    }
+                    <div class="col-md-6">
+                        <label class="form-label">Hugging Face cache directory <span class="text-muted">(optional, strongly recommended)</span></label>
+                        <input class="form-control" @bind="_fsHfCache" placeholder="/home/you/.cache/huggingface" />
+                        <div class="form-text">
+                            Shared by every vLLM instance on this machine — set once here so the same model is
+                            never downloaded twice for two instances on the same box.
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Hugging Face token <span class="text-muted">(optional)</span></label>
+                        <input class="form-control" type="password" autocomplete="off" @bind="_fsHfToken" placeholder="hf_…" />
+                        <div class="form-text">Only needed for gated or private Hugging Face repos.</div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button type="submit" class="btn btn-primary btn-sm" disabled="@_serverBusy">@(_serverBusy ? "Saving…" : "Save")</button>
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@CancelEditServer">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
             <div class="card-title">Sources</div>
             <div class="text-end">
                 <div>
@@ -148,8 +271,18 @@
                     </p>
                     <div class="row g-3">
                         <div class="col-md-6">
-                            <label class="form-label">Docker host <span class="text-muted">(optional, for hot-swap)</span></label>
-                            <input class="form-control" @bind="_fDockerHost" placeholder="tcp://servername-or-ip:2375" />
+                            <label class="form-label">Physical server <span class="text-muted">(optional, for hot-swap)</span></label>
+                            <select class="form-select" @bind="_fPhysicalServerId">
+                                <option value="">-- none (metrics-only, no hot-swap) --</option>
+                                @foreach (var p in _physicalServers)
+                                {
+                                    <option value="@p.Id">@p.Label (@p.DockerHost)</option>
+                                }
+                            </select>
+                            <div class="form-text">
+                                Which machine this vLLM instance runs on — its Docker host, GPU, and Hugging
+                                Face cache directory come from there. Manage them above.
+                            </div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Container name <span class="text-muted">(optional)</span></label>
@@ -213,38 +346,20 @@
                                 <label class="form-check-label" for="privileged">Privileged</label>
                             </div>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label">GPU vendor</label>
-                            <select class="form-select" @bind="_fGpuVendor">
-                                <option value="@GpuVendor.None">None</option>
-                                <option value="@GpuVendor.Nvidia">NVIDIA</option>
-                                <option value="@GpuVendor.Intel">Intel (raw device passthrough)</option>
-                            </select>
-                        </div>
-                        @if (_fGpuVendor != GpuVendor.None)
-                        {
-                            <div class="col-md-4">
-                                <label class="form-label">GPU VRAM total (GB) <span class="text-muted">(optional)</span></label>
-                                <input class="form-control" type="number" min="1" step="1" @bind="_fGpuVramTotalGb" placeholder="e.g. 32" />
-                                <div class="form-text">
-                                    Informational only — not enforced by anything. Lets the app warn when a model is
-                                    likely to exceed this card's actual VRAM. Separate from the RAM limit above,
-                                    which only caps system RAM and has no effect on GPU VRAM.
-                                </div>
-                            </div>
-                        }
-                        @if (_fGpuVendor == GpuVendor.Nvidia)
+                        @if (SelectedServerVendor == GpuVendor.Nvidia)
                         {
                             <div class="col-md-8">
                                 <label class="form-label">GPU device ids</label>
                                 <input class="form-control" @bind="_fGpuOptions" placeholder="all, or e.g. 0,1" />
+                                <div class="form-text">Which of this server's GPU(s) this instance uses. "all" or a comma-separated list (e.g. 0,1) if the box has more than one.</div>
                             </div>
                         }
 
-                        @if (_fGpuVendor == GpuVendor.Intel)
+                        @if (SelectedServerVendor == GpuVendor.Intel)
                         {
                             <div class="col-md-12">
                                 <label class="form-label">Devices (raw --device passthrough, e.g. /dev/dri)</label>
+                                <div class="form-text mb-2">Which of this server's GPU device(s) this instance uses.</div>
                                 @for (var i = 0; i < _fDevices.Count; i++)
                                 {
                                     var row = _fDevices[i];
@@ -259,17 +374,6 @@
                                 <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _fDevices.Add(new DeviceMapping()))">+ Add device</button>
                             </div>
                         }
-
-                        <div class="col-md-6">
-                            <label class="form-label">Hugging Face cache directory <span class="text-muted">(optional)</span></label>
-                            <input class="form-control" @bind="_fHfCache" placeholder="/home/you/.cache/huggingface" />
-                            <div class="form-text">Persists downloaded weights across hot-swaps so re-selecting a model doesn't re-download it.</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Hugging Face token <span class="text-muted">(optional)</span></label>
-                            <input class="form-control" type="password" autocomplete="off" @bind="_fHfToken" placeholder="hf_…" />
-                            <div class="form-text">Only needed for gated or private Hugging Face repos.</div>
-                        </div>
 
                         <div class="col-md-12">
                             <details>
@@ -360,8 +464,24 @@
     [Inject] private ISourceCatalog Sources { get; set; } = default!;
     [Inject] private IConfigStore Config { get; set; } = default!;
     [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
+    [Inject] private IPhysicalServerCatalog Servers { get; set; } = default!;
+    [Inject] private IDockerOrchestrator Docker { get; set; } = default!;
     [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private Dashboard.Web.Components.SourceSelection Selection { get; set; } = default!;
+
+    private List<PhysicalServerInfo> _physicalServers = new();
+    private bool _serverWizardOpen;
+    private PhysicalServerInfo? _editingServer;
+    private bool _isCreatingServer;
+    private bool _serverBusy;
+    private bool _serverTesting;
+    private DockerHostTestResult? _serverTestResult;
+    private string _fsLabel = "";
+    private string _fsDockerHost = "";
+    private GpuVendor _fsGpuVendor = GpuVendor.None;
+    private int? _fsGpuVramTotalGb;
+    private string _fsHfCache = "";
+    private string _fsHfToken = "";
 
     private List<SourceInfo> _sources = new();
     private SourceInfo? _editing;
@@ -379,7 +499,7 @@
     private string _fType = "vllm";
     private string _fMetricsUrl = "";
     private string _fInferenceUrl = "";
-    private string _fDockerHost = "";
+    private string _fPhysicalServerId = "";
     private string _fContainerName = "";
     private int _fInterval = 5;
     private bool _fActive = true;
@@ -391,15 +511,11 @@
     private string _fRestartPolicy = "unless-stopped";
     private int _fHealthTimeout = 600;
     private int? _fMemoryLimitGb;
-    private int? _fGpuVramTotalGb;
     private string _fNetworkMode = "bridge";
     private string _fIpcMode = "";
     private bool _fPrivileged;
-    private GpuVendor _fGpuVendor = GpuVendor.None;
     private string _fGpuOptions = "";
     private List<DeviceMapping> _fDevices = new();
-    private string _fHfCache = "";
-    private string _fHfToken = "";
     private List<VolumeMapping> _fVolumes = new();
     private List<EnvRow> _fEnv = new();
     private string _fExtraRunArgs = "";
@@ -418,6 +534,9 @@
 
     private bool TypeIsVllm => _fType == "vllm";
 
+    private GpuVendor SelectedServerVendor =>
+        _physicalServers.FirstOrDefault(p => p.Id == _fPhysicalServerId)?.GpuVendor ?? GpuVendor.None;
+
     private string ProxyUrl(SourceInfo s) =>
         $"{Nav.BaseUri.TrimEnd('/')}/proxy/{(string.IsNullOrWhiteSpace(s.Slug) ? s.Id : s.Slug)}/v1";
 
@@ -428,6 +547,7 @@
         _fHistWindow = Config.DefaultHistoryWindowMinutes;
         _fRollups = Config.RollupsEnabled;
         await ReloadSourcesAsync();
+        await ReloadServersAsync();
     }
 
     private async Task ReloadSourcesAsync()
@@ -439,6 +559,18 @@
         catch (Exception ex)
         {
             _error = "Could not load sources: " + ex.Message;
+        }
+    }
+
+    private async Task ReloadServersAsync()
+    {
+        try
+        {
+            _physicalServers = (await Servers.GetAllAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not load physical servers: " + ex.Message;
         }
     }
 
@@ -454,12 +586,8 @@
         _fNetworkMode = string.IsNullOrWhiteSpace(spec?.NetworkMode) ? "bridge" : spec!.NetworkMode;
         _fIpcMode = spec?.IpcMode ?? "";
         _fPrivileged = spec?.Privileged ?? false;
-        _fGpuVendor = spec?.GpuVendor ?? GpuVendor.None;
         _fGpuOptions = spec?.GpuOptions ?? "";
-        _fGpuVramTotalGb = spec?.GpuVramTotalGb;
         _fDevices = spec?.Devices.Select(d => new DeviceMapping { HostPath = d.HostPath, ContainerPath = d.ContainerPath }).ToList() ?? new();
-        _fHfCache = spec?.HfCacheHostPath ?? "";
-        _fHfToken = spec?.HfToken ?? "";
         _fVolumes = spec?.Volumes.Select(v => new VolumeMapping { Host = v.Host, Container = v.Container, ReadOnly = v.ReadOnly }).ToList() ?? new();
         _fEnv = spec?.Env.Select(kv => new EnvRow { Key = kv.Key, Value = kv.Value }).ToList() ?? new();
         _fExtraRunArgs = spec?.ExtraRunArgs ?? "";
@@ -481,7 +609,7 @@
         _fType = "vllm";
         _fMetricsUrl = "";
         _fInferenceUrl = "";
-        _fDockerHost = "";
+        _fPhysicalServerId = "";
         _fContainerName = "";
         _fInterval = 5;
         _fActive = true;
@@ -498,7 +626,7 @@
         _fType = s.Type.ToStorage();
         _fMetricsUrl = s.MetricsUrl;
         _fInferenceUrl = s.InferenceUrl;
-        _fDockerHost = s.DockerHost ?? "";
+        _fPhysicalServerId = s.PhysicalServerId ?? "";
         _fContainerName = s.ContainerName ?? "";
         _fInterval = s.ScrapeIntervalSeconds;
         _fActive = s.Active;
@@ -513,6 +641,131 @@
     private void CancelEdit()
     {
         _editing = null;
+    }
+
+    private void StartNewPhysicalServer()
+    {
+        _isCreatingServer = true;
+        _editingServer = new PhysicalServerInfo { Id = Guid.NewGuid().ToString() };
+        _fsLabel = "";
+        _fsDockerHost = "";
+        _fsGpuVendor = GpuVendor.None;
+        _fsGpuVramTotalGb = null;
+        _fsHfCache = "";
+        _fsHfToken = "";
+        _serverTestResult = null;
+        _error = null;
+    }
+
+    private void StartEditPhysicalServer(PhysicalServerInfo p)
+    {
+        _isCreatingServer = false;
+        _editingServer = p;
+        _fsLabel = p.Label;
+        _fsDockerHost = p.DockerHost;
+        _fsGpuVendor = p.GpuVendor;
+        _fsGpuVramTotalGb = p.GpuVramTotalGb;
+        _fsHfCache = p.HfCacheHostPath ?? "";
+        _fsHfToken = p.HfToken ?? "";
+        _serverTestResult = null;
+        _error = null;
+    }
+
+    private void CancelEditServer()
+    {
+        _editingServer = null;
+    }
+
+    private async Task OnServerWizardSavedAsync(PhysicalServerInfo saved)
+    {
+        _serverWizardOpen = false;
+        _message = "Created " + saved.Label;
+        await ReloadServersAsync();
+    }
+
+    private async Task OnServerWizardSwitchToAdvancedAsync(PhysicalServerInfo saved)
+    {
+        _serverWizardOpen = false;
+        await ReloadServersAsync();
+        StartEditPhysicalServer(saved);
+    }
+
+    private async Task TestServerConnectionAsync()
+    {
+        _serverTesting = true;
+        _serverTestResult = null;
+        StateHasChanged();
+        try
+        {
+            _serverTestResult = await Docker.TestDockerHostAsync(_fsDockerHost);
+        }
+        finally
+        {
+            _serverTesting = false;
+        }
+    }
+
+    private async Task SubmitServerAsync()
+    {
+        if (_editingServer is null || _serverBusy) return;
+        _serverBusy = true;
+        _error = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_fsLabel))
+            {
+                _error = "Label is required.";
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(_fsDockerHost))
+            {
+                _error = "Docker host is required.";
+                return;
+            }
+            var info = _editingServer with
+            {
+                Label = _fsLabel.Trim(),
+                DockerHost = _fsDockerHost.Trim(),
+                GpuVendor = _fsGpuVendor,
+                GpuVramTotalGb = _fsGpuVramTotalGb is > 0 ? _fsGpuVramTotalGb : null,
+                HfCacheHostPath = string.IsNullOrWhiteSpace(_fsHfCache) ? null : _fsHfCache.Trim(),
+                HfToken = string.IsNullOrWhiteSpace(_fsHfToken) ? null : _fsHfToken.Trim(),
+            };
+            await (_isCreatingServer ? Servers.CreateAsync(info) : Servers.UpdateAsync(info));
+            _message = (_isCreatingServer ? "Created " : "Updated ") + info.Label;
+            _editingServer = null;
+            await ReloadServersAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _serverBusy = false;
+        }
+    }
+
+    private async Task DeletePhysicalServerAsync(PhysicalServerInfo p)
+    {
+        var inUse = _sources.Any(s => s.PhysicalServerId == p.Id);
+        if (inUse)
+        {
+            _error = $"Can't delete '{p.Label}' — one or more sources still run on it. Reassign or delete those first.";
+            return;
+        }
+        var ok = await JS.InvokeAsync<bool>("confirm", $"Delete physical server '{p.Label}'?");
+        if (!ok) return;
+        try
+        {
+            await Servers.DeleteAsync(p.Id);
+            _message = "Deleted " + p.Label;
+            await ReloadServersAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "Delete failed: " + ex.Message;
+        }
     }
 
     private async Task OnWizardSavedAsync(SourceInfo saved)
@@ -582,7 +835,7 @@
                 Type = ParsedType,
                 MetricsUrl = _fMetricsUrl.Trim(),
                 InferenceUrl = _fInferenceUrl.Trim(),
-                DockerHost = string.IsNullOrWhiteSpace(_fDockerHost) ? null : _fDockerHost.Trim(),
+                PhysicalServerId = string.IsNullOrWhiteSpace(_fPhysicalServerId) ? null : _fPhysicalServerId,
                 ContainerName = string.IsNullOrWhiteSpace(_fContainerName) ? null : _fContainerName.Trim(),
                 ScrapeIntervalSeconds = Math.Max(1, _fInterval),
                 Active = _fActive,
@@ -603,16 +856,12 @@
                     RestartPolicy = string.IsNullOrWhiteSpace(_fRestartPolicy) ? "unless-stopped" : _fRestartPolicy,
                     HealthWaitTimeoutSeconds = _fHealthTimeout > 0 ? _fHealthTimeout : 600,
                     MemoryLimitMb = _fMemoryLimitGb is > 0 ? _fMemoryLimitGb * 1024 : null,
-                    GpuVramTotalGb = _fGpuVramTotalGb is > 0 ? _fGpuVramTotalGb : null,
                     NetworkMode = string.IsNullOrWhiteSpace(_fNetworkMode) ? "bridge" : _fNetworkMode,
                     IpcMode = string.IsNullOrWhiteSpace(_fIpcMode) ? null : _fIpcMode,
                     Privileged = _fPrivileged,
-                    GpuVendor = _fGpuVendor,
                     GpuOptions = string.IsNullOrWhiteSpace(_fGpuOptions) ? null : _fGpuOptions.Trim(),
                     Devices = _fDevices.Where(d => !string.IsNullOrWhiteSpace(d.HostPath))
                         .Select(d => new DeviceMapping { HostPath = d.HostPath.Trim(), ContainerPath = string.IsNullOrWhiteSpace(d.ContainerPath) ? d.HostPath.Trim() : d.ContainerPath.Trim() }).ToList(),
-                    HfCacheHostPath = string.IsNullOrWhiteSpace(_fHfCache) ? null : _fHfCache.Trim(),
-                    HfToken = string.IsNullOrWhiteSpace(_fHfToken) ? null : _fHfToken.Trim(),
                     Volumes = _fVolumes.Where(v => !string.IsNullOrWhiteSpace(v.Host) && !string.IsNullOrWhiteSpace(v.Container))
                         .Select(v => new VolumeMapping { Host = v.Host.Trim(), Container = v.Container.Trim(), ReadOnly = v.ReadOnly }).ToList(),
                     Env = _fEnv.Where(e => !string.IsNullOrWhiteSpace(e.Key))

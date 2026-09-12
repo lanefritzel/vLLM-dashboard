@@ -7,6 +7,7 @@ namespace Dashboard.Infrastructure.Identity;
 public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbContext<ApplicationUser>(options)
 {
     public DbSet<AppConfig> Configs => Set<AppConfig>();
+    public DbSet<PhysicalServer> PhysicalServers => Set<PhysicalServer>();
     public DbSet<Source> Sources => Set<Source>();
     public DbSet<Model> Models => Set<Model>();
     public DbSet<LaunchSpecEntity> LaunchSpecs => Set<LaunchSpecEntity>();
@@ -31,6 +32,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.Property(u => u.ThemeMode).HasMaxLength(20).IsRequired();
         });
 
+        builder.Entity<PhysicalServer>(entity =>
+        {
+            entity.ToTable("PhysicalServers");
+            entity.HasKey(s => s.Id);
+            entity.Property(s => s.Label).HasMaxLength(200).IsRequired();
+            entity.Property(s => s.DockerHost).HasMaxLength(500).IsRequired();
+            entity.Property(s => s.GpuVendor).HasMaxLength(20).IsRequired();
+            entity.Property(s => s.HfCacheHostPath).HasMaxLength(1000);
+            entity.Property(s => s.HfToken).HasMaxLength(500);
+        });
+
         builder.Entity<Source>(entity =>
         {
             entity.ToTable("Sources");
@@ -43,6 +55,13 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.Property(s => s.InferenceUrl).HasMaxLength(500).IsRequired();
             entity.Property(s => s.DockerHost).HasMaxLength(500);
             entity.Property(s => s.ContainerName).HasMaxLength(200);
+            // Restrict, not cascade: deleting a physical server out from under a vLLM
+            // instance that still points at it would silently break hot-swap for that
+            // instance — force the user to reassign or delete the instance first.
+            entity.HasOne(s => s.PhysicalServer)
+                .WithMany(p => p.Sources)
+                .HasForeignKey(s => s.PhysicalServerId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<Model>(entity =>

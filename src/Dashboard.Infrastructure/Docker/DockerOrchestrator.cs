@@ -20,22 +20,34 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
     private readonly IHttpClientFactory _httpFactory;
     private readonly IGpuProvisionerFactory _gpuProvisionerFactory;
     private readonly ILaunchSpecStore _launchSpecs;
+    private readonly IPhysicalServerCatalog _servers;
     private readonly ILogger<DockerOrchestrator> _logger;
 
     public DockerOrchestrator(
         IHttpClientFactory httpFactory,
         IGpuProvisionerFactory gpuProvisionerFactory,
         ILaunchSpecStore launchSpecs,
+        IPhysicalServerCatalog servers,
         ILogger<DockerOrchestrator> logger)
     {
         _httpFactory = httpFactory;
         _gpuProvisionerFactory = gpuProvisionerFactory;
         _launchSpecs = launchSpecs;
+        _servers = servers;
         _logger = logger;
     }
 
     public Task<bool> IsDockerHostConfiguredAsync(SourceInfo source, CancellationToken ct = default)
-        => Task.FromResult(!string.IsNullOrWhiteSpace(source.DockerHost));
+        => Task.FromResult(!string.IsNullOrWhiteSpace(source.PhysicalServerId));
+
+    /// <summary>Resolves the physical server a vLLM source runs on. Every method here
+    /// that talks to the Docker API needs this — the Docker host address, GPU vendor,
+    /// and Hugging Face cache/token all live on the shared PhysicalServer now, not
+    /// duplicated per source (see PhysicalServerInfo for why).</summary>
+    private async Task<PhysicalServerInfo?> ResolveServerAsync(SourceInfo source, CancellationToken ct) =>
+        string.IsNullOrWhiteSpace(source.PhysicalServerId)
+            ? null
+            : await _servers.GetByIdAsync(source.PhysicalServerId, ct);
 
     public async Task<DockerHostTestResult> TestDockerHostAsync(string dockerHost, CancellationToken ct = default)
     {
@@ -71,10 +83,11 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         SourceInfo source, ModelInfo model, LaunchSpec spec,
         IAsyncActionProgress progress, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(source.DockerHost))
-            return new InferenceResult { Success = false, Error = "No Docker host configured for this source." };
+        var server = await ResolveServerAsync(source, ct);
+        if (server is null)
+            return new InferenceResult { Success = false, Error = "No physical server configured for this source." };
 
-        var dockerBase = NormalizeDockerBase(source.DockerHost);
+        var dockerBase = NormalizeDockerBase(server.DockerHost);
         var containerName = ResolveContainerName(source);
         var image = string.IsNullOrWhiteSpace(model.ImageOverride) ? spec.Image : model.ImageOverride;
 
@@ -94,7 +107,7 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
             // container recreated after idle-unload still rejoins its Compose stack.
             var effectiveProject = composeProject ?? spec.ComposeProject;
             var effectiveService = composeService ?? spec.ComposeService;
-            await CreateAndStartAsync(dockerBase, containerName, spec, model, effectiveProject, effectiveService, ct);
+            await CreateAndStartAsync(dockerBase, containerName, spec, model, server, effectiveProject, effectiveService, ct);
 
             await progress.ReportAsync(new SwapStep
             {
@@ -136,10 +149,11 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
 
     public async Task StreamLogsAsync(SourceInfo source, Func<string, Task> onLine, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(source.DockerHost))
-            throw new InvalidOperationException("No Docker host configured for this source.");
+        var server = await ResolveServerAsync(source, ct);
+        if (server is null)
+            throw new InvalidOperationException("No physical server configured for this source.");
 
-        var dockerBase = NormalizeDockerBase(source.DockerHost);
+        var dockerBase = NormalizeDockerBase(server.DockerHost);
         var containerName = ResolveContainerName(source);
         var url = $"{dockerBase}/v1.43/containers/{containerName}/logs?stdout=1&stderr=1&follow=1&tail=200";
 
@@ -223,10 +237,11 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
 
     public async Task<InferenceResult> UnloadAsync(SourceInfo source, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(source.DockerHost))
-            return new InferenceResult { Success = false, Error = "No Docker host configured for this source." };
+        var server = await ResolveServerAsync(source, ct);
+        if (server is null)
+            return new InferenceResult { Success = false, Error = "No physical server configured for this source." };
 
-        var dockerBase = NormalizeDockerBase(source.DockerHost);
+        var dockerBase = NormalizeDockerBase(server.DockerHost);
         var containerName = ResolveContainerName(source);
         try
         {
@@ -397,12 +412,12 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
     }
 
     private async Task CreateAndStartAsync(
-        string dockerBase, string name, LaunchSpec spec, ModelInfo model,
+        string dockerBase, string name, LaunchSpec spec, ModelInfo model, PhysicalServerInfo server,
         string? composeProject, string? composeService, CancellationToken ct)
     {
         using var client = _httpFactory.CreateClient("docker");
 
-        var payload = BuildCreatePayload(spec, model, _gpuProvisionerFactory.Create(spec.GpuVendor), composeProject, composeService);
+        var payload = BuildCreatePayload(spec, model, server, _gpuProvisionerFactory.Create(server.GpuVendor), composeProject, composeService);
 
         var json = JsonSerializer.Serialize(payload);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -441,12 +456,13 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
 
     /// <summary>
     /// Builds the exact Docker container-create request body. Pure/no I/O, so it's
-    /// unit-testable without a live Docker daemon: given a LaunchSpec + ModelInfo (and
-    /// the GPU provisioner picked for the spec's vendor), this is everything the
-    /// orchestrator sends.
+    /// unit-testable without a live Docker daemon: given a LaunchSpec + ModelInfo, the
+    /// PhysicalServer it runs on (for GPU/HF cache/token, shared across every instance
+    /// on that machine), and the GPU provisioner picked for the server's vendor, this
+    /// is everything the orchestrator sends.
     /// </summary>
     internal static object BuildCreatePayload(
-        LaunchSpec spec, ModelInfo model, IGpuProvisioner gpuProvisioner,
+        LaunchSpec spec, ModelInfo model, PhysicalServerInfo server, IGpuProvisioner gpuProvisioner,
         string? composeProject = null, string? composeService = null)
     {
         var (modelValue, impliedVolume) = ResolveModel(model);
@@ -524,14 +540,14 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
             volumes.Add(impliedVolume);
 
         var env = new Dictionary<string, string>(spec.Env);
-        if (!string.IsNullOrWhiteSpace(spec.HfCacheHostPath))
+        if (!string.IsNullOrWhiteSpace(server.HfCacheHostPath))
         {
             const string hfCacheContainerPath = "/root/.cache/huggingface";
-            volumes.Add(new VolumeMapping { Host = spec.HfCacheHostPath, Container = hfCacheContainerPath });
+            volumes.Add(new VolumeMapping { Host = server.HfCacheHostPath, Container = hfCacheContainerPath });
             env["HF_HOME"] = hfCacheContainerPath;
         }
-        if (!string.IsNullOrWhiteSpace(spec.HfToken))
-            env["HF_TOKEN"] = spec.HfToken;
+        if (!string.IsNullOrWhiteSpace(server.HfToken))
+            env["HF_TOKEN"] = server.HfToken;
 
         if (volumes.Count > 0)
         {

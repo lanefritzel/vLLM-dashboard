@@ -9,7 +9,18 @@ public sealed record SourceInfo
     public SourceType Type { get; init; }
     public string MetricsUrl { get; init; } = "";
     public string InferenceUrl { get; init; } = "";
+
+    /// <summary>Deprecated: superseded by <see cref="PhysicalServerId"/> (a vLLM
+    /// instance's Docker host now lives on its <see cref="Models.PhysicalServerInfo"/>,
+    /// shared by every instance on that machine). Kept in the schema for the upgrade
+    /// backfill only — the app itself never reads or writes it going forward.</summary>
     public string? DockerHost { get; init; }
+
+    /// <summary>The physical (or virtual) machine this vLLM instance runs on — null
+    /// for non-vLLM sources (Ollama/Mock), which never used Docker orchestration.
+    /// Required for any vLLM source that wants hot-swap/idle-unload.</summary>
+    public string? PhysicalServerId { get; init; }
+
     public string? ContainerName { get; init; }
     public int ScrapeIntervalSeconds { get; init; } = 5;
     public bool Active { get; init; }

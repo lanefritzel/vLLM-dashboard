@@ -108,6 +108,7 @@ builder.Services.AddSingleton<Dashboard.Application.Logs.ILogStreamManager, Dash
 // (same pattern as ConfigStore/SampleStore) so concurrent calls from different
 // components sharing one Blazor circuit never race on a single DbContext instance.
 builder.Services.AddSingleton<ISourceCatalog, SourceCatalog>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IPhysicalServerCatalog, Dashboard.Infrastructure.Persistence.PhysicalServerCatalog>();
 builder.Services.AddSingleton<IModelCatalog, ModelCatalog>();
 builder.Services.AddSingleton<ILaunchSpecStore, LaunchSpecStore>();
 builder.Services.AddSingleton<IMetricsHistory, MetricsHistory>();

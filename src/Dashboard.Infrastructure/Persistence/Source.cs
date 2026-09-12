@@ -11,6 +11,7 @@ public class Source
     public string MetricsUrl { get; set; } = "";
     public string InferenceUrl { get; set; } = "";
     public string? DockerHost { get; set; }
+    public Guid? PhysicalServerId { get; set; }
     public string? ContainerName { get; set; }
     public int ScrapeIntervalSeconds { get; set; } = 5;
     public bool Active { get; set; } = true;
@@ -20,6 +21,7 @@ public class Source
 
     public List<Model> Models { get; set; } = new();
     public LaunchSpecEntity? LaunchSpec { get; set; }
+    public PhysicalServer? PhysicalServer { get; set; }
 
     public SourceInfo ToInfo() => new()
     {
@@ -30,6 +32,7 @@ public class Source
         MetricsUrl = MetricsUrl,
         InferenceUrl = InferenceUrl,
         DockerHost = DockerHost,
+        PhysicalServerId = PhysicalServerId?.ToString(),
         ContainerName = ContainerName,
         ScrapeIntervalSeconds = ScrapeIntervalSeconds,
         Active = Active,

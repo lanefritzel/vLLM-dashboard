@@ -68,6 +68,7 @@ public sealed class SourceCatalog : ISourceCatalog
             MetricsUrl = source.MetricsUrl,
             InferenceUrl = source.InferenceUrl,
             DockerHost = source.DockerHost,
+            PhysicalServerId = string.IsNullOrWhiteSpace(source.PhysicalServerId) ? null : Guid.Parse(source.PhysicalServerId),
             ContainerName = source.ContainerName,
             ScrapeIntervalSeconds = source.ScrapeIntervalSeconds,
             Active = source.Active,
@@ -94,6 +95,7 @@ public sealed class SourceCatalog : ISourceCatalog
         entity.MetricsUrl = source.MetricsUrl;
         entity.InferenceUrl = source.InferenceUrl;
         entity.DockerHost = source.DockerHost;
+        entity.PhysicalServerId = string.IsNullOrWhiteSpace(source.PhysicalServerId) ? null : Guid.Parse(source.PhysicalServerId);
         entity.ContainerName = source.ContainerName;
         entity.ScrapeIntervalSeconds = source.ScrapeIntervalSeconds;
         entity.Active = source.Active;

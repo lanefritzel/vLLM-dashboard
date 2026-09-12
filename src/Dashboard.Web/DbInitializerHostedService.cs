@@ -23,6 +23,7 @@ public sealed class DbInitializerHostedService(
             await db.Database.MigrateAsync(cancellationToken);
             await SeedConfigDefaultsAsync(db, cancellationToken);
             await SeedInitialSourcesAsync(db, cancellationToken);
+            await BackfillPhysicalServersAsync(db, cancellationToken);
             logger.LogInformation("Database initialized (migrations applied, config + sources seeded).");
         }
         catch (Exception ex)
@@ -87,6 +88,72 @@ public sealed class DbInitializerHostedService(
 
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Seeded initial sources from environment configuration.");
+    }
+
+    /// <summary>One-time (but idempotent — safe to run every startup) migration of the
+    /// old per-source DockerHost/GpuVendor/GpuVramTotalGb/HfCacheHostPath/HfToken
+    /// fields onto a shared PhysicalServer. Two vLLM sources with the same DockerHost
+    /// are the same physical machine — this merges them onto one PhysicalServer row
+    /// instead of leaving each with its own independent (and possibly inconsistent,
+    /// e.g. one missing a cache directory the other has) copy of the same settings.
+    /// Only touches sources that don't already have a PhysicalServerId.</summary>
+    private async Task BackfillPhysicalServersAsync(AppDbContext db, CancellationToken ct)
+    {
+        var candidates = await db.Sources
+            .Include(s => s.LaunchSpec)
+            .Where(s => s.PhysicalServerId == null && s.DockerHost != null && s.DockerHost != "")
+            .ToListAsync(ct);
+        if (candidates.Count == 0)
+            return;
+
+        var servers = await db.PhysicalServers.ToListAsync(ct);
+        var groups = candidates.GroupBy(s => NormalizeHost(s.DockerHost!));
+        var created = 0;
+
+        foreach (var group in groups)
+        {
+            var existing = servers.FirstOrDefault(p => NormalizeHost(p.DockerHost) == group.Key);
+            if (existing is null)
+            {
+                var first = group.First();
+                existing = new PhysicalServer
+                {
+                    Label = ExtractHostname(first.DockerHost!),
+                    DockerHost = first.DockerHost!.Trim(),
+                    GpuVendor = first.LaunchSpec?.GpuVendor ?? "none",
+                    GpuVramTotalGb = first.LaunchSpec?.GpuVramTotalGb,
+                    HfCacheHostPath = first.LaunchSpec?.HfCacheHostPath,
+                    HfToken = first.LaunchSpec?.HfToken,
+                };
+                db.PhysicalServers.Add(existing);
+                servers.Add(existing);
+                created++;
+            }
+
+            foreach (var source in group)
+                source.PhysicalServerId = existing.Id;
+        }
+
+        await db.SaveChangesAsync(ct);
+        if (created > 0)
+            logger.LogInformation("Backfilled {Count} physical server(s) from existing sources' Docker hosts.", created);
+    }
+
+    private static string NormalizeHost(string dockerHost) => dockerHost.Trim().ToLowerInvariant();
+
+    /// <summary>A reasonable default label for an auto-created physical server — just
+    /// the bare hostname/IP, since the source's own label (e.g. "tes — main vLLM")
+    /// describes the vLLM instance, not the machine it runs on. Editable afterward.</summary>
+    private static string ExtractHostname(string dockerHost)
+    {
+        var host = dockerHost.Trim();
+        foreach (var scheme in new[] { "tcp://", "http://", "https://" })
+        {
+            if (host.StartsWith(scheme, StringComparison.OrdinalIgnoreCase))
+                host = host[scheme.Length..];
+        }
+        var hostname = host.Split(':', '/')[0];
+        return string.IsNullOrWhiteSpace(hostname) ? dockerHost.Trim() : hostname;
     }
 
     private static async Task SeedConfigDefaultsAsync(AppDbContext db, CancellationToken ct)

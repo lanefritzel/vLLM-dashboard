@@ -423,6 +423,49 @@ namespace Dashboard.Infrastructure.Migrations
                     b.ToTable("Models", (string)null);
                 });
 
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.PhysicalServer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DockerHost")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("GpuVendor")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<int?>("GpuVramTotalGb")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("HfCacheHostPath")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("HfToken")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("PhysicalServers", (string)null);
+                });
+
             modelBuilder.Entity("Dashboard.Infrastructure.Persistence.Source", b =>
                 {
                     b.Property<Guid>("Id")
@@ -458,6 +501,9 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<Guid?>("PhysicalServerId")
+                        .HasColumnType("uuid");
+
                     b.Property<int>("ScrapeIntervalSeconds")
                         .HasColumnType("integer");
 
@@ -478,6 +524,8 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("PhysicalServerId");
 
                     b.HasIndex("Slug")
                         .IsUnique();
@@ -660,6 +708,16 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Navigation("Source");
                 });
 
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.Source", b =>
+                {
+                    b.HasOne("Dashboard.Infrastructure.Persistence.PhysicalServer", "PhysicalServer")
+                        .WithMany("Sources")
+                        .HasForeignKey("PhysicalServerId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("PhysicalServer");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
@@ -709,6 +767,11 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.PhysicalServer", b =>
+                {
+                    b.Navigation("Sources");
                 });
 
             modelBuilder.Entity("Dashboard.Infrastructure.Persistence.Source", b =>

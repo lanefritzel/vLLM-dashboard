@@ -2,7 +2,7 @@
 @using Dashboard.Core.Models
 @inject ISourceCatalog Sources
 @inject IModelCatalog Models
-@inject ILaunchSpecStore LaunchSpecs
+@inject IPhysicalServerCatalog Servers
 @inject IHuggingFaceModelLookup HfLookup
 @inject IJSRuntime JS
 
@@ -278,11 +278,13 @@
 
     private async Task LoadSourceVramAsync()
     {
-        if (string.IsNullOrWhiteSpace(_sourceId)) { _sourceVramGb = null; return; }
+        _sourceVramGb = null;
+        var server = _sources.FirstOrDefault(s => s.Id == _sourceId)?.PhysicalServerId;
+        if (string.IsNullOrWhiteSpace(server)) return;
         try
         {
-            var spec = await LaunchSpecs.GetBySourceAsync(_sourceId);
-            _sourceVramGb = spec?.GpuVramTotalGb;
+            var info = await Servers.GetByIdAsync(server);
+            _sourceVramGb = info?.GpuVramTotalGb;
         }
         catch
         {

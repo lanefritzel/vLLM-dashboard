@@ -17,11 +17,22 @@ public class DockerOrchestratorPayloadTests
         ModelPathOrRepoId = repoId,
     };
 
+    private static PhysicalServerInfo DefaultServer(
+        GpuVendor vendor = GpuVendor.None, string? hfCacheHostPath = null, string? hfToken = null) => new()
+    {
+        Id = Guid.NewGuid().ToString(),
+        Label = "test-server",
+        DockerHost = "tcp://test-server:2375",
+        GpuVendor = vendor,
+        HfCacheHostPath = hfCacheHostPath,
+        HfToken = hfToken,
+    };
+
     [Fact]
     public void BuildCreatePayload_PutsConfigFieldsAtTopLevelAndHostConfigAsSibling()
     {
         var spec = new LaunchSpec { Image = "vllm/vllm-openai:latest" };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         Assert.Equal("vllm/vllm-openai:latest", json.GetProperty("Image").GetString());
         Assert.True(json.TryGetProperty("HostConfig", out _));
@@ -34,7 +45,7 @@ public class DockerOrchestratorPayloadTests
     public void BuildCreatePayload_UsesServeSubcommandAndServedModelName()
     {
         var spec = new LaunchSpec();
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(name: "my-model"), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(name: "my-model"), DefaultServer(), new NoneGpuProvisioner()));
 
         var cmd = json.GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
         Assert.Equal(new[] { "serve", "Qwen/Qwen2.5-7B-Instruct", "--served-model-name", "my-model" }, cmd);
@@ -49,7 +60,7 @@ public class DockerOrchestratorPayloadTests
             ModelSource = ModelSource.LocalPath,
             ModelPathOrRepoId = "/media/external6tb/llm-models/hf-cache/Qwen3.8-27B-INT4",
         };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), model, new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), model, DefaultServer(), new NoneGpuProvisioner()));
 
         var cmd = json.GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
         Assert.Equal("serve", cmd[0]);
@@ -67,9 +78,9 @@ public class DockerOrchestratorPayloadTests
         var off = HfModel();
         off.Options["enable-auto-tool-choice"] = "false";
 
-        var onCmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), on, new NoneGpuProvisioner()))
+        var onCmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), on, DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
-        var offCmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), off, new NoneGpuProvisioner()))
+        var offCmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), off, DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
 
         Assert.Contains("--enable-auto-tool-choice", onCmd);
@@ -83,7 +94,7 @@ public class DockerOrchestratorPayloadTests
         model.Options["max-model-len"] = "131072";
         model.Options["dtype"] = "float16";
 
-        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), model, new NoneGpuProvisioner()))
+        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), model, DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
 
         Assert.Contains("--max-model-len", cmd);
@@ -98,7 +109,7 @@ public class DockerOrchestratorPayloadTests
         var model = HfModel();
         model.Options["not-a-real-flag"] = "whatever";
 
-        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), model, new NoneGpuProvisioner()))
+        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), model, DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
 
         Assert.DoesNotContain("whatever", cmd);
@@ -109,7 +120,7 @@ public class DockerOrchestratorPayloadTests
     public void BuildCreatePayload_ComposeLabels_AppliedWhenProvided()
     {
         var json = ToJson(DockerOrchestrator.BuildCreatePayload(
-            new LaunchSpec(), HfModel(), new NoneGpuProvisioner(),
+            new LaunchSpec(), HfModel(), DefaultServer(), new NoneGpuProvisioner(),
             composeProject: "docker-compose", composeService: "vllm-scaler"));
 
         var labels = json.GetProperty("Labels");
@@ -121,7 +132,7 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void BuildCreatePayload_ComposeLabels_OmittedWhenNotProvided()
     {
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         var labels = json.GetProperty("Labels");
         Assert.False(labels.TryGetProperty("com.docker.compose.project", out _));
@@ -136,7 +147,7 @@ public class DockerOrchestratorPayloadTests
         // process itself must be told to bind here or it falls back to vLLM's own
         // default port regardless of what Docker maps.
         var spec = new LaunchSpec { ServingPort = 9999 };
-        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()))
+        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
 
         Assert.Contains("--port", cmd);
@@ -146,7 +157,7 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void BuildCreatePayload_OmitsPortFlagWhenServingPortNotSet()
     {
-        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), new NoneGpuProvisioner()))
+        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
 
         Assert.DoesNotContain("--port", cmd);
@@ -156,7 +167,7 @@ public class DockerOrchestratorPayloadTests
     public void BuildCreatePayload_MemoryLimit_SetsHostConfigMemoryInBytes()
     {
         var spec = new LaunchSpec { MemoryLimitMb = 4096 };
-        var hostConfig = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()))
+        var hostConfig = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("HostConfig");
 
         Assert.Equal(4096L * 1024 * 1024, hostConfig.GetProperty("Memory").GetInt64());
@@ -165,7 +176,7 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void BuildCreatePayload_OmitsMemoryWhenLimitNotSet()
     {
-        var hostConfig = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), new NoneGpuProvisioner()))
+        var hostConfig = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("HostConfig");
 
         Assert.False(hostConfig.TryGetProperty("Memory", out _));
@@ -175,7 +186,7 @@ public class DockerOrchestratorPayloadTests
     public void BuildCreatePayload_AppendsExtraRunArgsAfterOptions()
     {
         var spec = new LaunchSpec { ExtraRunArgs = "--foo bar" };
-        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(name: "m1"), new NoneGpuProvisioner()))
+        var cmd = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(name: "m1"), DefaultServer(), new NoneGpuProvisioner()))
             .GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()).ToArray();
 
         Assert.Equal(new[] { "serve", "Qwen/Qwen2.5-7B-Instruct", "--served-model-name", "m1", "--foo", "bar" }, cmd);
@@ -188,7 +199,7 @@ public class DockerOrchestratorPayloadTests
         var model = HfModel();
         model = model with { ImageOverride = "special:v2" };
 
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, model, new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, model, DefaultServer(), new NoneGpuProvisioner()));
         Assert.Equal("special:v2", json.GetProperty("Image").GetString());
     }
 
@@ -196,7 +207,7 @@ public class DockerOrchestratorPayloadTests
     public void BuildCreatePayload_FallsBackToSpecImageWhenNoOverride()
     {
         var spec = new LaunchSpec { Image = "default:latest" };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
         Assert.Equal("default:latest", json.GetProperty("Image").GetString());
     }
 
@@ -206,8 +217,8 @@ public class DockerOrchestratorPayloadTests
         var withEntrypoint = new LaunchSpec { Entrypoint = "vllm" };
         var withoutEntrypoint = new LaunchSpec();
 
-        var withJson = ToJson(DockerOrchestrator.BuildCreatePayload(withEntrypoint, HfModel(), new NoneGpuProvisioner()));
-        var withoutJson = ToJson(DockerOrchestrator.BuildCreatePayload(withoutEntrypoint, HfModel(), new NoneGpuProvisioner()));
+        var withJson = ToJson(DockerOrchestrator.BuildCreatePayload(withEntrypoint, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
+        var withoutJson = ToJson(DockerOrchestrator.BuildCreatePayload(withoutEntrypoint, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         var entrypoint = withJson.GetProperty("Entrypoint").EnumerateArray().Select(e => e.GetString()).ToArray();
         Assert.Equal(new[] { "vllm" }, entrypoint);
@@ -218,7 +229,7 @@ public class DockerOrchestratorPayloadTests
     public void BuildCreatePayload_UsesServingPortForSinglePortBinding()
     {
         var spec = new LaunchSpec { ServingPort = 9999 };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         var bindings = json.GetProperty("HostConfig").GetProperty("PortBindings");
         var hostPort = bindings.GetProperty("9999/tcp")[0].GetProperty("HostPort").GetString();
@@ -228,15 +239,15 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void BuildCreatePayload_OmitsPortBindingsWhenServingPortNotSet()
     {
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), DefaultServer(), new NoneGpuProvisioner()));
         Assert.False(json.GetProperty("HostConfig").TryGetProperty("PortBindings", out _));
     }
 
     [Fact]
     public void BuildCreatePayload_HfCacheHostPath_AddsVolumeAndSetsHfHome()
     {
-        var spec = new LaunchSpec { HfCacheHostPath = "/home/user/.cache/huggingface" };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(
+            new LaunchSpec(), HfModel(), DefaultServer(hfCacheHostPath: "/home/user/.cache/huggingface"), new NoneGpuProvisioner()));
 
         var binds = json.GetProperty("HostConfig").GetProperty("Binds").EnumerateArray().Select(e => e.GetString()).ToArray();
         Assert.Contains("/home/user/.cache/huggingface:/root/.cache/huggingface:rw", binds);
@@ -248,8 +259,8 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void BuildCreatePayload_HfToken_SetsEnvVar()
     {
-        var spec = new LaunchSpec { HfToken = "hf_secret123" };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(
+            new LaunchSpec(), HfModel(), DefaultServer(hfToken: "hf_secret123"), new NoneGpuProvisioner()));
 
         var env = json.GetProperty("Env").EnumerateArray().Select(e => e.GetString()).ToArray();
         Assert.Contains("HF_TOKEN=hf_secret123", env);
@@ -259,7 +270,7 @@ public class DockerOrchestratorPayloadTests
     public void BuildCreatePayload_UsesSpecNetworkMode()
     {
         var spec = new LaunchSpec { NetworkMode = "host" };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         Assert.Equal("host", json.GetProperty("HostConfig").GetProperty("NetworkMode").GetString());
     }
@@ -270,8 +281,8 @@ public class DockerOrchestratorPayloadTests
         var on = new LaunchSpec { Privileged = true };
         var off = new LaunchSpec { Privileged = false };
 
-        var onJson = ToJson(DockerOrchestrator.BuildCreatePayload(on, HfModel(), new NoneGpuProvisioner()));
-        var offJson = ToJson(DockerOrchestrator.BuildCreatePayload(off, HfModel(), new NoneGpuProvisioner()));
+        var onJson = ToJson(DockerOrchestrator.BuildCreatePayload(on, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
+        var offJson = ToJson(DockerOrchestrator.BuildCreatePayload(off, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         Assert.True(onJson.GetProperty("HostConfig").GetProperty("Privileged").GetBoolean());
         Assert.False(offJson.GetProperty("HostConfig").TryGetProperty("Privileged", out _));
@@ -283,8 +294,8 @@ public class DockerOrchestratorPayloadTests
         var withIpc = new LaunchSpec { IpcMode = "host" };
         var withoutIpc = new LaunchSpec();
 
-        var withJson = ToJson(DockerOrchestrator.BuildCreatePayload(withIpc, HfModel(), new NoneGpuProvisioner()));
-        var withoutJson = ToJson(DockerOrchestrator.BuildCreatePayload(withoutIpc, HfModel(), new NoneGpuProvisioner()));
+        var withJson = ToJson(DockerOrchestrator.BuildCreatePayload(withIpc, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
+        var withoutJson = ToJson(DockerOrchestrator.BuildCreatePayload(withoutIpc, HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         Assert.Equal("host", withJson.GetProperty("HostConfig").GetProperty("IpcMode").GetString());
         Assert.False(withoutJson.GetProperty("HostConfig").TryGetProperty("IpcMode", out _));
@@ -293,8 +304,8 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void NvidiaGpuProvisioner_DefaultsToAllWhenGpuOptionsBlank()
     {
-        var spec = new LaunchSpec { GpuVendor = GpuVendor.Nvidia, GpuOptions = "" };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NvidiaGpuProvisioner()));
+        var spec = new LaunchSpec { GpuOptions = "" };
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(vendor: GpuVendor.Nvidia), new NvidiaGpuProvisioner()));
 
         var req = json.GetProperty("HostConfig").GetProperty("DeviceRequests")[0];
         Assert.Equal("nvidia", req.GetProperty("Driver").GetString());
@@ -305,8 +316,8 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void NvidiaGpuProvisioner_ParsesCommaSeparatedDeviceIds()
     {
-        var spec = new LaunchSpec { GpuVendor = GpuVendor.Nvidia, GpuOptions = "0,1" };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NvidiaGpuProvisioner()));
+        var spec = new LaunchSpec { GpuOptions = "0,1" };
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(vendor: GpuVendor.Nvidia), new NvidiaGpuProvisioner()));
 
         var ids = json.GetProperty("HostConfig").GetProperty("DeviceRequests")[0]
             .GetProperty("DeviceIds").EnumerateArray().Select(e => e.GetString()).ToArray();
@@ -318,10 +329,9 @@ public class DockerOrchestratorPayloadTests
     {
         var spec = new LaunchSpec
         {
-            GpuVendor = GpuVendor.Intel,
             Devices = new List<DeviceMapping> { new() { HostPath = "/dev/dri", ContainerPath = "/dev/dri" } },
         };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new IntelGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), DefaultServer(vendor: GpuVendor.Intel), new IntelGpuProvisioner()));
 
         var device = json.GetProperty("HostConfig").GetProperty("Devices")[0];
         Assert.Equal("/dev/dri", device.GetProperty("PathOnHost").GetString());
@@ -332,8 +342,7 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void IntelGpuProvisioner_OmitsDevicesKeyWhenEmpty()
     {
-        var spec = new LaunchSpec { GpuVendor = GpuVendor.Intel };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new IntelGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), DefaultServer(vendor: GpuVendor.Intel), new IntelGpuProvisioner()));
 
         Assert.False(json.GetProperty("HostConfig").TryGetProperty("Devices", out _));
     }
@@ -341,8 +350,7 @@ public class DockerOrchestratorPayloadTests
     [Fact]
     public void NoneGpuProvisioner_AddsNoGpuKeys()
     {
-        var spec = new LaunchSpec { GpuVendor = GpuVendor.None };
-        var json = ToJson(DockerOrchestrator.BuildCreatePayload(spec, HfModel(), new NoneGpuProvisioner()));
+        var json = ToJson(DockerOrchestrator.BuildCreatePayload(new LaunchSpec(), HfModel(), DefaultServer(), new NoneGpuProvisioner()));
 
         Assert.False(json.GetProperty("HostConfig").TryGetProperty("DeviceRequests", out _));
         Assert.False(json.GetProperty("HostConfig").TryGetProperty("Devices", out _));

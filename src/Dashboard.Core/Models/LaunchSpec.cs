@@ -93,13 +93,15 @@ public sealed record LaunchSpec
     /// for images whose default entrypoint isn't already the vllm CLI.</summary>
     public string? Entrypoint { get; init; }
 
-    /// <summary>Guided volume: host path for a persistent Hugging Face cache, mounted to
-    /// a fixed container path and paired with an auto-set HF_HOME env var, so hot-swap
-    /// doesn't silently re-download a model's weights it already has.</summary>
+    /// <summary>Deprecated: superseded by <see cref="Models.PhysicalServerInfo.HfCacheHostPath"/>
+    /// (shared by every vLLM instance on the same machine, rather than re-entered per
+    /// instance — the exact gap that let one instance silently have no cache at all
+    /// while another on the same box did). Kept in the schema for the upgrade backfill
+    /// only; the app itself never reads or writes it going forward.</summary>
     public string? HfCacheHostPath { get; init; }
 
-    /// <summary>Guided field: mapped to the HF_TOKEN env var automatically for gated/
-    /// private Hugging Face repos. Never rendered as a raw env row.</summary>
+    /// <summary>Deprecated: superseded by <see cref="Models.PhysicalServerInfo.HfToken"/>.
+    /// Kept in the schema for the upgrade backfill only.</summary>
     public string? HfToken { get; init; }
 
     /// <summary>How long to wait for the post-swap health check before giving up.
@@ -115,22 +117,29 @@ public sealed record LaunchSpec
     /// for the setting that actually bounds VRAM.</summary>
     public int? MemoryLimitMb { get; init; }
 
-    /// <summary>NVIDIA-only: device ids for the nvidia-container-runtime DeviceRequests
-    /// API ("all" or a comma-separated list like "0,1"). Only meaningful when
-    /// <see cref="GpuVendor"/> is <see cref="Models.GpuVendor.Nvidia"/>.</summary>
+    /// <summary>Which specific device(s) <em>this instance</em> uses, for a physical
+    /// server with more than one GPU (each instance can be pinned to a different one).
+    /// NVIDIA-only: device ids for the nvidia-container-runtime DeviceRequests API
+    /// ("all" or a comma-separated list like "0,1"). Only meaningful when the linked
+    /// <see cref="Models.PhysicalServerInfo.GpuVendor"/> is
+    /// <see cref="Models.GpuVendor.Nvidia"/>.</summary>
     public string? GpuOptions { get; init; }
 
+    /// <summary>Deprecated: superseded by <see cref="Models.PhysicalServerInfo.GpuVendor"/>
+    /// (the GPU is a property of the physical machine, shared by every instance on it —
+    /// see <see cref="GpuOptions"/>/<see cref="Devices"/> for per-instance device
+    /// *selection* on a multi-GPU box, which stays here). Kept in the schema for the
+    /// upgrade backfill only.</summary>
     public GpuVendor GpuVendor { get; init; } = GpuVendor.None;
 
-    /// <summary>Informational only — not read by anything that launches a container.
-    /// The GPU's actual total video memory, so the UI can warn when a model's expected
-    /// footprint (weights + vLLM's <c>gpu-memory-utilization</c> default of 90%) is
-    /// likely to exceed what the card actually has. Null disables those warnings for
-    /// this source rather than guessing.</summary>
+    /// <summary>Deprecated: superseded by <see cref="Models.PhysicalServerInfo.GpuVramTotalGb"/>.
+    /// Kept in the schema for the upgrade backfill only.</summary>
     public int? GpuVramTotalGb { get; init; }
 
-    /// <summary>Raw --device passthrough entries. Only meaningful when
-    /// <see cref="GpuVendor"/> is <see cref="Models.GpuVendor.Intel"/>.</summary>
+    /// <summary>Which specific device(s) <em>this instance</em> uses. Raw --device
+    /// passthrough entries. Only meaningful when the linked
+    /// <see cref="Models.PhysicalServerInfo.GpuVendor"/> is
+    /// <see cref="Models.GpuVendor.Intel"/>.</summary>
     public List<DeviceMapping> Devices { get; set; } = new();
 
     public string NetworkMode { get; init; } = "bridge";
