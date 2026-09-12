@@ -38,6 +38,17 @@ public sealed class ModelCatalog : IModelCatalog
                 model.ModelSource == ModelSource.LocalPath
                     ? "A local-path model must have a weights folder path."
                     : "A Hugging Face model must have a repo id.");
+
+        // A second real incident: --enable-auto-tool-choice with no --tool-call-parser
+        // is a hard vLLM startup error, not a warning — it crashed a container in an
+        // infinite restart loop exactly like the blank-path case above, just via a
+        // different missing field. vLLM requires the two flags together.
+        if (model.Options.ContainsKey("enable-auto-tool-choice") &&
+            (!model.Options.TryGetValue("tool-call-parser", out var parser) || string.IsNullOrWhiteSpace(parser)))
+        {
+            throw new ArgumentException(
+                "\"Enable auto tool choice\" requires a \"Tool call parser\" to be set too — vLLM refuses to start without one.");
+        }
     }
 
     public async Task<IReadOnlyList<ModelInfo>> GetByPhysicalServerAsync(string physicalServerId, CancellationToken ct = default)
