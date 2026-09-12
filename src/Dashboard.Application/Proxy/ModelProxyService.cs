@@ -6,6 +6,7 @@ using Dashboard.Core.Abstractions;
 using Dashboard.Core.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Dashboard.Application.Proxy;
@@ -32,6 +33,7 @@ public sealed class ModelProxyService : IModelProxyService
     private readonly IHttpClientFactory _httpFactory;
     private readonly IHubContext<TrafficHub> _traffic;
     private readonly IActivityTracker _activity;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<ModelProxyService> _logger;
 
     // One swap-in-flight lock per source, so two concurrent requests for the same
@@ -59,6 +61,7 @@ public sealed class ModelProxyService : IModelProxyService
         IHttpClientFactory httpFactory,
         IHubContext<TrafficHub> traffic,
         IActivityTracker activity,
+        IHostApplicationLifetime lifetime,
         ILogger<ModelProxyService> logger)
     {
         _sources = sources;
@@ -68,6 +71,7 @@ public sealed class ModelProxyService : IModelProxyService
         _httpFactory = httpFactory;
         _traffic = traffic;
         _activity = activity;
+        _lifetime = lifetime;
         _logger = logger;
     }
 
@@ -157,12 +161,22 @@ public sealed class ModelProxyService : IModelProxyService
             if (spec is null || string.IsNullOrWhiteSpace(spec.Image))
                 return "This source's server settings (image) aren't configured yet — set them up on the Settings page.";
 
+            // A real swap can take several minutes on a slow GPU (weight load + compile) —
+            // far longer than a chat client's own request timeout. If this ran on the
+            // inbound request's own token, a client that gives up waiting and retries
+            // would cancel the swap mid-flight, abandoning a container that's still
+            // loading with nothing left to clean it up; the retry would then tear that
+            // orphaned container down and start over, forever, never actually finishing
+            // (a real incident: LibreChat cycled the same swap 4+ times before one
+            // attempt finally outlasted its own retry). Runs to completion independent of
+            // whether the triggering request is still connected — only app shutdown
+            // should be able to cut it short.
             _logger.LogInformation("Auto-swap: {Source} -> {Model} (requested by an inbound proxy request).", source.Label, target.Name);
-            var result = await _orchestrator.SwapModelAsync(source, target, spec, NoOpProgress.Instance, ct);
+            var result = await _orchestrator.SwapModelAsync(source, target, spec, NoOpProgress.Instance, _lifetime.ApplicationStopping);
             if (!result.Success)
                 return $"Auto-swap to '{requestedModelName}' failed: {result.Error}";
 
-            await _models.ActivateAsync(source.Id, target.Id, ct);
+            await _models.ActivateAsync(source.Id, target.Id, _lifetime.ApplicationStopping);
             return null;
         }
         finally

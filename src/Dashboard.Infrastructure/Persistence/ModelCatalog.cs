@@ -22,6 +22,24 @@ public sealed class ModelCatalog : IModelCatalog
         _config = config;
     }
 
+    /// <summary>A model with no weights location can never actually be launched — a
+    /// real production incident had exactly this (a blank ModelPathOrRepoId saved
+    /// successfully, then crashed the container in an infinite restart loop every
+    /// time something tried to activate it). Rejected here as the last line of
+    /// defense regardless of which UI path the save came through.</summary>
+    private static void ValidateForSave(ModelInfo model)
+    {
+        if (string.IsNullOrWhiteSpace(model.PhysicalServerId))
+            throw new ArgumentException("A model must belong to a physical server.");
+        if (string.IsNullOrWhiteSpace(model.Name))
+            throw new ArgumentException("A model must have a served name.");
+        if (string.IsNullOrWhiteSpace(model.ModelPathOrRepoId))
+            throw new ArgumentException(
+                model.ModelSource == ModelSource.LocalPath
+                    ? "A local-path model must have a weights folder path."
+                    : "A Hugging Face model must have a repo id.");
+    }
+
     public async Task<IReadOnlyList<ModelInfo>> GetByPhysicalServerAsync(string physicalServerId, CancellationToken ct = default)
     {
         if (!Guid.TryParse(physicalServerId, out var serverGuid))
@@ -37,6 +55,7 @@ public sealed class ModelCatalog : IModelCatalog
 
     public async Task<ModelInfo> CreateAsync(ModelInfo model, CancellationToken ct = default)
     {
+        ValidateForSave(model);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var entity = new Model
@@ -59,6 +78,7 @@ public sealed class ModelCatalog : IModelCatalog
 
     public async Task<ModelInfo> UpdateAsync(ModelInfo model, CancellationToken ct = default)
     {
+        ValidateForSave(model);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var entity = await db.Models.SingleAsync(x => x.Id == Guid.Parse(model.Id), ct);

@@ -116,8 +116,8 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
                     ? "Waiting for backend health (a first-time swap may be downloading the model from Hugging Face)"
                     : "Waiting for backend health",
             });
-            var healthy = await HealthWaitAsync(source.InferenceUrl, model.Name, spec.HealthWaitTimeoutSeconds, ct);
-            if (!healthy)
+            var health = await HealthWaitAsync(dockerBase, containerName, source.InferenceUrl, model.Name, spec.HealthWaitTimeoutSeconds, ct);
+            if (!health.Healthy)
             {
                 // A timed-out health check must not leave the container it just created
                 // running unsupervised — that's exactly what let one bad swap balloon into
@@ -133,7 +133,8 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
                 {
                     _logger.LogError(cleanupEx, "Failed to clean up container {Container} after a failed health check.", containerName);
                 }
-                return new InferenceResult { Success = false, Error = "Health check timed out after container start. The container has been stopped." };
+                var reason = health.FailureReason ?? "Health check timed out after container start.";
+                return new InferenceResult { Success = false, Error = $"{reason} The container has been stopped." };
             }
 
             await progress.ReportAsync(new SwapStep { Step = "done", Message = "Swap complete", Complete = true });
@@ -576,7 +577,18 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
         return body;
     }
 
-    private async Task<bool> HealthWaitAsync(string inferenceUrl, string expectedModel, int timeoutSeconds, CancellationToken ct)
+    private sealed record HealthWaitResult(bool Healthy, string? FailureReason);
+
+    private sealed record ContainerState(string Status, int RestartCount);
+
+    /// <summary>Polls both the backend's own HTTP health (the real signal of success)
+    /// and Docker's view of the container's process state. A container crash-looping on
+    /// bad launch args (e.g. a blank model path — a real production incident) never
+    /// passes the HTTP check, so without the state check callers waited out the FULL
+    /// timeout (minutes) before getting a generic "timed out" error. Detecting a
+    /// restart/exit early and pulling the container's own log tail gets the real crash
+    /// reason back in seconds instead.</summary>
+    private async Task<HealthWaitResult> HealthWaitAsync(string dockerBase, string containerName, string inferenceUrl, string expectedModel, int timeoutSeconds, CancellationToken ct)
     {
         using var client = _httpFactory.CreateClient("docker");
         var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds > 0 ? timeoutSeconds : 600);
@@ -589,12 +601,80 @@ public sealed class DockerOrchestrator : IDockerOrchestrator
                 {
                     var body = await resp.Content.ReadAsStringAsync(ct);
                     if (body.Contains(expectedModel, StringComparison.Ordinal))
-                        return true;
+                        return new HealthWaitResult(true, null);
                 }
             }
             catch { /* not ready yet */ }
+
+            var state = await GetContainerStateAsync(dockerBase, containerName, ct);
+            if (state is not null && (state.Status is "exited" or "dead" || state.RestartCount > 0))
+            {
+                var tail = await FetchLogTailAsync(dockerBase, containerName, 40, ct);
+                return new HealthWaitResult(false,
+                    $"Container is crash-looping (status={state.Status}, restarts={state.RestartCount}). Last log lines:\n{tail}");
+            }
+
             await Task.Delay(2000, ct);
         }
-        return false;
+        return new HealthWaitResult(false, "Health check timed out after container start.");
+    }
+
+    private async Task<ContainerState?> GetContainerStateAsync(string dockerBase, string containerName, CancellationToken ct)
+    {
+        try
+        {
+            using var client = _httpFactory.CreateClient("docker");
+            using var resp = await client.GetAsync($"{dockerBase}/v1.43/containers/{containerName}/json", ct);
+            if (!resp.IsSuccessStatusCode)
+                return null;
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            var doc = JsonSerializer.Deserialize<JsonElement>(body);
+            var status = doc.TryGetProperty("State", out var state) && state.TryGetProperty("Status", out var s) && s.ValueKind == JsonValueKind.String
+                ? s.GetString() ?? ""
+                : "";
+            var restartCount = doc.TryGetProperty("RestartCount", out var rc) && rc.ValueKind == JsonValueKind.Number
+                ? rc.GetInt32()
+                : 0;
+            return new ContainerState(status, restartCount);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Bounded (non-follow) log fetch for surfacing a crash reason. Reuses the
+    /// same frame-demuxing as the live-follow path in <see cref="StreamLogsAsync"/> —
+    /// Docker's multiplexed stdout/stderr format is identical either way.</summary>
+    private async Task<string> FetchLogTailAsync(string dockerBase, string containerName, int tailLines, CancellationToken ct)
+    {
+        try
+        {
+            var client = _httpFactory.CreateClient("docker-logs");
+            var url = $"{dockerBase}/v1.43/containers/{containerName}/logs?stdout=1&stderr=1&tail={tailLines}";
+            using var resp = await client.GetAsync(url, ct);
+            if (!resp.IsSuccessStatusCode)
+                return "(could not read container logs)";
+            await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            var sb = new StringBuilder();
+            var header = new byte[8];
+            while (await ReadExactAsync(stream, header, 8, ct))
+            {
+                var size = ParseFrameSize(header);
+                if (size == 0) continue;
+                var payload = new byte[size];
+                if (!await ReadExactAsync(stream, payload, size, ct)) break;
+                sb.Append(Encoding.UTF8.GetString(payload));
+            }
+            return sb.ToString().Trim();
+        }
+        catch (Exception ex)
+        {
+            return $"(could not read container logs: {ex.Message})";
+        }
     }
 }
