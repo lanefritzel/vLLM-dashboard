@@ -11,9 +11,14 @@ the backend container to the right model on demand, unloads it when idle to free
 GPU, and brings it back automatically when the dashboard restarts.
 
 > **GPU support:** hot-swap has been built and live-tested against an **Intel GPU**
-> host (raw `--device` passthrough, e.g. `/dev/dri`). An NVIDIA code path exists
-> (device requests via the `nvidia-container-runtime`) but hasn't been exercised
-> against real NVIDIA hardware yet — treat it as untested, not verified.
+> host (raw `--device` passthrough, e.g. `/dev/dri`), running Intel's own
+> `intel/llm-scaler-vllm` image (a fork of upstream vLLM). It has **not** been tested
+> against the official `vllm/vllm-openai` image or an Intel host without that fork —
+> it should work, since Intel's image tracks upstream vLLM's CLI flags and `/v1`
+> API closely, but that's an expectation, not something verified end-to-end yet. An
+> NVIDIA code path exists (device requests via the `nvidia-container-runtime`) but
+> hasn't been exercised against real NVIDIA hardware yet either — treat both as
+> untested, not verified.
 
 ## How this is meant to be used
 
@@ -143,13 +148,55 @@ at runtime from the Settings page, not via environment variables.
 - **Volume at `/data`** — Data Protection keys (`/data/dataprotection`). Mount this
   as a named volume or bind mount so login sessions survive container restarts.
 
+## Using the proxy
+
+This app isn't just a monitor — every source gets a stable OpenAI-compatible proxy
+endpoint at:
+
+```
+http://<host>:8080/proxy/<slug-or-id>/v1
+```
+
+Point any OpenAI-compatible client (LibreChat, OpenWebUI, opencode, a raw SDK) at
+that URL instead of the backend directly. Requests are forwarded to whatever the
+source's backend actually has loaded; if the client asks for a different model than
+what's currently running (and hot-swap is available — see below), the proxy swaps
+the backend container first and then forwards the request, so the client never needs
+to know a swap happened. `/v1/models` on that same endpoint returns every model
+registered for the source, not just whatever's currently loaded — this is what lets
+a client like LibreChat (with `fetch: true` in its endpoint config) auto-discover
+every available model instead of you hand-listing them.
+
+Everything needed to make a source's proxy URL work is set in **Settings → Server**,
+on that source's own edit form:
+
+- **Label** — also the default proxy slug (see below) and what shows up throughout
+  the UI.
+- **Proxy slug** — the `<slug-or-id>` segment of the URL above. Auto-generated from
+  the Label if left blank; set it explicitly if you want a stable URL that survives
+  renaming the source later.
+- **Inference URL** — the backend's own `/v1` (vLLM) or base URL (Ollama) that the
+  proxy actually forwards requests to.
+- **Metrics URL** — the backend's `/metrics` endpoint (vLLM only), which is what
+  powers the live monitoring/history features but isn't needed for the proxy itself.
+
+Auto-swap-on-request, idle-unload, and startup preload additionally require the
+source to be a Docker-backed vLLM instance with a Physical Server configured (see
+below) — without that, the proxy still forwards requests, but can't swap or unload
+the backend container for you.
+
 ## Hot-swap requirements
 
 To use model hot-swap, idle-unload, startup preload, or the auto-swap proxy on a
 given source, that source's vLLM instance must run in a Docker container, **and**
-that Docker host's Engine API must be reachable from the dashboard container. This
-is configured per-source in the Settings page (Docker host, container name), not
-globally. Sources you only want to monitor don't need any of this.
+that Docker host's Engine API must be reachable from the dashboard container. The
+Docker host, GPU vendor/VRAM, and shared Hugging Face cache directory are configured
+once per **Physical Server** (Settings → Server → "Physical Servers"), since they're
+properties of the machine, not any one vLLM instance — multiple vLLM instances on the
+same box share one Physical Server entry, so the same weights are never downloaded
+twice. Each vLLM instance (source) then just picks which Physical Server it runs on,
+plus its own container name/image/port. Sources you only want to monitor don't need
+any of this.
 
 By default, Docker only listens on its local Unix socket — the Engine API isn't
 reachable over the network until you turn that on. On a systemd-based Linux host
