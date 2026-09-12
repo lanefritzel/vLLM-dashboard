@@ -23,13 +23,24 @@ public static class ModelSourceExtensions
     };
 }
 
-/// <summary>A model in the per-source registry. This is the "model-driven" half of
+/// <summary>A model registered on a physical server's shared catalog — every vLLM
+/// instance on that server can load it, since they all read from the same disk (see
+/// <see cref="Models.PhysicalServerInfo"/>). This is the "model-driven" half of
 /// hot-swap: everything specific to running THIS model (where its weights are, which
-/// flags it needs) lives here, rather than in the shared per-source LaunchSpec.</summary>
+/// flags it needs) lives here. Which instance currently has a given model loaded is
+/// tracked on the instance itself (<see cref="SourceInfo.ActiveModelId"/>), not here
+/// — the same model can be the active choice on one instance while a different
+/// instance on the same box runs something else entirely.</summary>
 public sealed record ModelInfo
 {
     public string Id { get; init; } = "";
-    public string SourceId { get; init; } = "";
+    public string PhysicalServerId { get; init; } = "";
+
+    /// <summary>Deprecated: superseded by <see cref="PhysicalServerId"/> (a model is
+    /// now registered on the physical server, shared by every vLLM instance on it,
+    /// rather than owned by one instance). Kept in the schema for the upgrade
+    /// backfill only.</summary>
+    public string? SourceId { get; init; }
 
     /// <summary>Served model name — passed as --served-model-name and matched against
     /// the post-swap health check response.</summary>
@@ -52,16 +63,23 @@ public sealed record ModelInfo
     /// "use default" simply means the flag is never emitted.</summary>
     public Dictionary<string, string> Options { get; set; } = new();
 
+    /// <summary>Deprecated: superseded by <see cref="SourceInfo.ActiveModelId"/> —
+    /// "active" is now a property of the instance running it, not the model itself
+    /// (two instances on the same server can each have a different model active
+    /// simultaneously). Kept in the schema for the upgrade backfill only.</summary>
     public bool IsActive { get; init; }
+
     public int SortOrder { get; init; }
 
     /// <summary>How long this model may sit idle (no proxied requests) before
     /// <c>IdleUnloadService</c> stops its container to free the GPU. Null/0 disables
-    /// idle-unload for this model — it stays loaded until something else swaps it out.</summary>
+    /// idle-unload for this model — it stays loaded until something else swaps it out.
+    /// A property of the model's own tolerance for idling, independent of which
+    /// instance happens to be running it.</summary>
     public int? IdleTtlSeconds { get; init; }
 
-    /// <summary>Explicit opt-in: bring this model's container up when the dashboard
-    /// itself starts, instead of waiting for the first proxied request. Only meaningful
-    /// alongside IsActive — a preload-flagged model that isn't the active one is a no-op.</summary>
+    /// <summary>Deprecated: superseded by <see cref="SourceInfo.PreloadModelId"/> —
+    /// "preload this on startup" is now a property of the instance that should load
+    /// it, not the model itself. Kept in the schema for the upgrade backfill only.</summary>
     public bool PreloadOnStartup { get; init; }
 }

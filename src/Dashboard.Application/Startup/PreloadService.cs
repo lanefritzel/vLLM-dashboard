@@ -7,13 +7,14 @@ using Microsoft.Extensions.Logging;
 namespace Dashboard.Application.Startup;
 
 /// <summary>
-/// Hosted service: once at app startup, brings up any model that's both the active
-/// one for its source AND explicitly flagged PreloadOnStartup — e.g. after a host
-/// reboot or an idle-unload left nothing running, so the first real request doesn't
-/// have to pay the swap cost itself. Explicit opt-in only: a restart never touches a
-/// model that isn't flagged for it. Skips a source entirely if its model already
-/// looks like it's running, the same reconciliation DockerOrchestrator's swap path
-/// uses, so this never tears down an already-healthy container on every deploy.
+/// Hosted service: once at app startup, brings up whichever model each source has
+/// designated as its preload model (<see cref="SourceInfo.PreloadModelId"/>) — e.g.
+/// after a host reboot or an idle-unload left nothing running, so the first real
+/// request doesn't have to pay the swap cost itself. Explicit opt-in only: a source
+/// with no preload model set is never touched. Skips a source entirely if its model
+/// already looks like it's running, the same reconciliation DockerOrchestrator's
+/// swap path uses, so this never tears down an already-healthy container on every
+/// deploy.
 /// </summary>
 public sealed class PreloadService : IHostedService
 {
@@ -74,27 +75,15 @@ public sealed class PreloadService : IHostedService
     private async Task PreloadSourceAsync(
         SourceInfo source, IModelCatalog models, ILaunchSpecStore launchSpecs, IDockerOrchestrator orchestrator, CancellationToken ct)
     {
-        var model = await models.GetActiveAsync(source.Id, ct);
+        var model = await models.GetPreloadModelAsync(source.Id, ct);
         if (model is null)
-        {
-            // No active model at all — if one is flagged PreloadOnStartup anyway, this
-            // is worth a log line: it's the most likely reason preload silently did
-            // nothing (bookkeeping drifted, e.g. from an idle-unload that never got a
-            // follow-up request to reconcile it back to active).
-            var flagged = (await models.GetBySourceAsync(source.Id, ct)).FirstOrDefault(m => m.PreloadOnStartup);
-            if (flagged is not null)
-                _logger.LogWarning(
-                    "Startup preload: {Model} on {Source} is flagged PreloadOnStartup but isn't the active model — skipping. " +
-                    "Activate it on the Models page if you want it preloaded.", flagged.Name, source.Label);
-            return;
-        }
-        if (!model.PreloadOnStartup)
-            return;
+            return; // nothing flagged for preload on this instance
 
         var actuallyRunning = await orchestrator.GetActuallyRunningModelNameAsync(source, ct);
         if (actuallyRunning is not null && string.Equals(actuallyRunning, model.Name, StringComparison.Ordinal))
         {
             _logger.LogInformation("Startup preload: {Model} on {Source} is already running.", model.Name, source.Label);
+            await models.ActivateAsync(source.Id, model.Id, ct); // reconcile bookkeeping
             return;
         }
 
@@ -108,7 +97,7 @@ public sealed class PreloadService : IHostedService
         _logger.LogInformation("Startup preload: bringing up {Model} on {Source}.", model.Name, source.Label);
         var result = await orchestrator.SwapModelAsync(source, model, spec, NoOpProgress.Instance, ct);
         if (result.Success)
-            await models.ActivateAsync(model.Id, ct);
+            await models.ActivateAsync(source.Id, model.Id, ct);
         else
             _logger.LogWarning("Startup preload failed for {Source}: {Error}", source.Label, result.Error);
     }

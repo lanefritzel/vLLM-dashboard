@@ -26,21 +26,30 @@
                     <button class="btn btn-primary btn-sm" @onclick="@(() => _modelWizardOpen = true)">+ Add model</button>
                 </div>
             </div>
+            <p class="text-muted small mb-2">
+                Models are registered on the physical server, shared by every vLLM instance on it — the
+                same model can be picked on any of them. "Active"/"Preload" below describe
+                <strong>@src.Label</strong> specifically; a different instance on the same server tracks
+                its own active/preload model independently.
+            </p>
             <table class="table table-sm">
                 <thead>
-                    <tr><th>Name</th><th>Display name</th><th>Source</th><th>Path / repo</th><th>Idle TTL</th><th>Active</th><th></th></tr>
+                    <tr><th>Name</th><th>Display name</th><th>Weights</th><th>Path / repo</th><th>Idle TTL</th><th>Active on @src.Label</th><th></th></tr>
                 </thead>
                 <tbody>
                     @foreach (var m in _models)
                     {
+                        var isActiveHere = m.Id == src.ActiveModelId;
+                        var isPreloadHere = m.Id == src.PreloadModelId;
+                        var activeElsewhere = _all.FirstOrDefault(s => s.Id != src.Id && s.PhysicalServerId == src.PhysicalServerId && s.ActiveModelId == m.Id);
                         <tr>
                             <td>@m.Name</td>
                             <td>@(m.DisplayName ?? "—")</td>
                             <td>@(m.ModelSource == ModelSource.HuggingFace ? "Hugging Face" : "Local path")</td>
                             <td class="url-cell">@m.ModelPathOrRepoId</td>
-                            <td>@(m.IdleTtlSeconds is { } s ? $"{s / 60} min" : "—")</td>
+                            <td>@(m.IdleTtlSeconds is { } s2 ? $"{s2 / 60} min" : "—")</td>
                             <td>
-                                @if (m.IsActive)
+                                @if (isActiveHere)
                                 {
                                     <span class="chip chip-active">active</span>
                                 }
@@ -48,14 +57,20 @@
                                 {
                                     <span class="text-muted">—</span>
                                 }
-                                @if (m.PreloadOnStartup)
+                                @if (isPreloadHere)
                                 {
-                                    <span class="chip" title="Brought up automatically when the dashboard starts">preload</span>
+                                    <span class="chip" title="Brought up automatically on this instance when the dashboard starts">preload</span>
+                                }
+                                @if (activeElsewhere is not null)
+                                {
+                                    <div class="text-muted small" title="Loading it here too would use this server's VRAM twice for the same weights">
+                                        active on @activeElsewhere.Label
+                                    </div>
                                 }
                             </td>
                             <td class="text-end">
                                 <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditModel(m))">Edit</button>
-                                @if (!m.IsActive)
+                                @if (!isActiveHere)
                                 {
                                     <button class="btn btn-outline btn-sm" disabled="@(_busyModelId != null)"
                                             @onclick="@(() => ActivateAsync(m))">Activate</button>
@@ -68,7 +83,7 @@
                     }
                     @if (_models.Count == 0)
                     {
-                        <tr><td colspan="7" class="text-muted">No models registered for this source.</td></tr>
+                        <tr><td colspan="7" class="text-muted">No models registered on this server yet.</td></tr>
                     }
                 </tbody>
             </table>
@@ -100,13 +115,14 @@
                 </p>
                 <form @onsubmit="@OnModelSubmit" @onsubmit:preventDefault="true" class="row g-3">
                     <div class="col-md-4">
-                        <label class="form-label">Server</label>
-                        <select class="form-select" @bind="_fModelSourceId" @bind:after="RefreshCurrentSpecAsync">
-                            @foreach (var s in _all)
+                        <label class="form-label">Physical server</label>
+                        <select class="form-select" @bind="_fModelPhysicalServerId" @bind:after="RefreshCurrentSpecAsync">
+                            @foreach (var p in _physicalServers)
                             {
-                                <option value="@s.Id">@s.Label</option>
+                                <option value="@p.Id">@p.Label</option>
                             }
                         </select>
+                        <div class="form-text">Which server's shared catalog this model belongs to — every vLLM instance on it can load it.</div>
                     </div>
                     <div class="col-md-4">
                         <label class="form-label">Name (served name / id)</label>
@@ -178,14 +194,14 @@
                     }
                     <div class="col-md-4">
                         <label class="form-label">
-                            <input type="checkbox" class="form-check-input" @bind="_fModelActive" /> set active on save
+                            <input type="checkbox" class="form-check-input" @bind="_fModelActive" /> set active on @(SelectedSource?.Label ?? "this instance") on save
                         </label>
                     </div>
                     <div class="col-md-4">
                         <label class="form-label">
-                            <input type="checkbox" class="form-check-input" @bind="_fModelPreloadOnStartup" /> preload on dashboard startup
+                            <input type="checkbox" class="form-check-input" @bind="_fModelPreloadOnStartup" /> preload on @(SelectedSource?.Label ?? "this instance") at startup
                         </label>
-                        <div class="form-text">Brings this container up automatically when the dashboard starts, if it isn't already running.</div>
+                        <div class="form-text">Brings this container up automatically on @(SelectedSource?.Label ?? "this instance") when the dashboard starts, if it isn't already running.</div>
                     </div>
                     <div class="col-md-4">
                         <label class="form-label">Idle unload after <span class="text-muted">(minutes — blank disables it)</span></label>
@@ -252,6 +268,7 @@
     [Inject] private ISourceCatalog Sources { get; set; } = default!;
     [Inject] private IModelCatalog ModelCatalog { get; set; } = default!;
     [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
+    [Inject] private IPhysicalServerCatalog Servers { get; set; } = default!;
     [Inject] private IDockerOrchestrator Orchestrator { get; set; } = default!;
     [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private SourceSelection Selection { get; set; } = default!;
@@ -259,6 +276,7 @@
     [Inject] private IHuggingFaceModelLookup HfLookup { get; set; } = default!;
 
     private List<SourceInfo> _all = new();
+    private List<PhysicalServerInfo> _physicalServers = new();
     private List<ModelInfo> _models = new();
     private ModelInfo? _editingModel;
     private bool _modelWizardOpen;
@@ -269,24 +287,26 @@
     private bool _disposed;
 
     // Model form.
-    private string _fModelSourceId = "";
+    private string _fModelPhysicalServerId = "";
     private string _fModelName = "";
     private string _fModelDisplay = "";
     private string _fModelImageOverride = "";
     private ModelSource _fModelSource = ModelSource.HuggingFace;
     private string _fModelPathOrRepoId = "";
     private bool _fModelActive;
+    private bool _fModelWasActive;
     private bool _fModelPreloadOnStartup;
+    private bool _fModelWasPreload;
     private int? _fModelIdleTtlMinutes;
     private Dictionary<string, string> _fOptions = new();
 
-    // Live Hugging Face lookup + the current server's LaunchSpec (for its stated
-    // VRAM total) — both drive the dependency hints rendered alongside options like
+    // Live Hugging Face lookup + the current physical server (for its stated VRAM
+    // total) — both drive the dependency hints rendered alongside options like
     // max-model-len/quantization/gpu-memory-utilization.
     private HuggingFaceModelInfo? _hfLookup;
     private bool _hfLookupBusy;
     private bool _hfLookupFailed;
-    private LaunchSpec? _currentSpec;
+    private PhysicalServerInfo? _currentServer;
 
     private static string GroupLabel(VllmOptionGroup g) => g switch
     {
@@ -333,7 +353,7 @@
 
     private async Task RefreshCurrentSpecAsync()
     {
-        _currentSpec = string.IsNullOrWhiteSpace(_fModelSourceId) ? null : await LaunchSpecs.GetBySourceAsync(_fModelSourceId);
+        _currentServer = string.IsNullOrWhiteSpace(_fModelPhysicalServerId) ? null : await Servers.GetByIdAsync(_fModelPhysicalServerId);
     }
 
     private Task OnModelSourceChanged()
@@ -465,7 +485,7 @@
                     else if (opt.Key == "gpu-memory-utilization")
                     {
                         <div class="form-text text-danger">
-                            Not set — vLLM will default to using 90% of this source's GPU VRAM@(_currentSpec?.GpuVramTotalGb is { } vram ? $" (≈{vram * 0.9:0.#} GB of the {vram} GB you've told the dashboard this card has)" : "").
+                            Not set — vLLM will default to using 90% of this server's GPU VRAM@(_currentServer?.GpuVramTotalGb is { } vram ? $" (≈{vram * 0.9:0.#} GB of the {vram} GB you've told the dashboard this card has)" : "").
                             The System RAM limit on the Settings page does not apply to VRAM at all.
                         </div>
                     }
@@ -545,8 +565,11 @@
         try
         {
             _all = (await Sources.GetAllAsync()).ToList();
+            _physicalServers = (await Servers.GetAllAsync()).ToList();
             var src = SelectedSource;
-            _models = src is null ? new List<ModelInfo>() : (await ModelCatalog.GetBySourceAsync(src.Id)).ToList();
+            _models = src?.PhysicalServerId is { } serverId
+                ? (await ModelCatalog.GetByPhysicalServerAsync(serverId)).ToList()
+                : new List<ModelInfo>();
         }
         catch
         {
@@ -559,14 +582,19 @@
     {
         _isCreatingModel = false;
         _editingModel = m;
-        _fModelSourceId = m.SourceId;
+        _fModelPhysicalServerId = m.PhysicalServerId;
         _fModelName = m.Name;
         _fModelDisplay = m.DisplayName ?? "";
         _fModelImageOverride = m.ImageOverride ?? "";
         _fModelSource = m.ModelSource;
         _fModelPathOrRepoId = m.ModelPathOrRepoId;
-        _fModelActive = m.IsActive;
-        _fModelPreloadOnStartup = m.PreloadOnStartup;
+        // "Active"/"preload" describe the currently selected instance specifically —
+        // a model can be active on a different instance on the same server without
+        // that showing up here at all.
+        _fModelWasActive = SelectedSource?.ActiveModelId == m.Id;
+        _fModelActive = _fModelWasActive;
+        _fModelWasPreload = SelectedSource?.PreloadModelId == m.Id;
+        _fModelPreloadOnStartup = _fModelWasPreload;
         _fModelIdleTtlMinutes = m.IdleTtlSeconds is { } s ? Math.Max(1, s / 60) : null;
         _fOptions = new Dictionary<string, string>(m.Options);
         _hfLookup = null;
@@ -601,28 +629,50 @@
         {
             var model = _editingModel with
             {
-                SourceId = _fModelSourceId,
+                PhysicalServerId = _fModelPhysicalServerId,
                 Name = _fModelName.Trim(),
                 DisplayName = string.IsNullOrWhiteSpace(_fModelDisplay) ? null : _fModelDisplay.Trim(),
                 ImageOverride = string.IsNullOrWhiteSpace(_fModelImageOverride) ? null : _fModelImageOverride.Trim(),
                 ModelSource = _fModelSource,
                 ModelPathOrRepoId = _fModelPathOrRepoId.Trim(),
                 IdleTtlSeconds = _fModelIdleTtlMinutes is { } m and > 0 ? m * 60 : null,
-                PreloadOnStartup = _fModelPreloadOnStartup,
                 Options = _fOptions.Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
                     .ToDictionary(kv => kv.Key, kv => kv.Value),
             };
-            if (_isCreatingModel)
-                await ModelCatalog.CreateAsync(model with { IsActive = _fModelActive });
-            else
-                await ModelCatalog.UpdateAsync(model with { IsActive = _fModelActive });
+            var saved = _isCreatingModel
+                ? await ModelCatalog.CreateAsync(model)
+                : await ModelCatalog.UpdateAsync(model);
             _editingModel = null;
 
-            // If the model was saved against a different server than the one currently
-            // shown, jump to that server so the table actually reflects what just
-            // happened, instead of the model silently not appearing in the visible list.
-            if (_fModelSourceId != SelectedSource?.Id)
-                Selection.SetCurrent(_fModelSourceId);
+            // "Active"/"preload" always describe the instance that was selected when
+            // this form was opened — if the model got re-parented to a different
+            // server in this same edit, applying either here would point that
+            // instance at a model outside its own server, so skip both rather than
+            // create an inconsistent pointer.
+            var targetInstance = SelectedSource;
+            if (targetInstance is not null && targetInstance.PhysicalServerId == saved.PhysicalServerId)
+            {
+                if (_fModelActive)
+                    await ModelCatalog.ActivateAsync(targetInstance.Id, saved.Id);
+                else if (_fModelWasActive)
+                    await ModelCatalog.DeactivateAsync(targetInstance.Id);
+
+                if (_fModelPreloadOnStartup)
+                    await ModelCatalog.SetPreloadModelAsync(targetInstance.Id, saved.Id);
+                else if (_fModelWasPreload)
+                    await ModelCatalog.SetPreloadModelAsync(targetInstance.Id, null);
+            }
+
+            // If the model was saved against a different server than the one
+            // currently shown, jump to an instance on that server so the table
+            // actually reflects what just happened, instead of the model silently
+            // not appearing in the visible list.
+            if (saved.PhysicalServerId != SelectedSource?.PhysicalServerId)
+            {
+                var onNewServer = _all.FirstOrDefault(s => s.PhysicalServerId == saved.PhysicalServerId);
+                if (onNewServer is not null)
+                    Selection.SetCurrent(onNewServer.Id);
+            }
 
             await ReloadAsync();
         }
@@ -634,9 +684,10 @@
 
     private async Task ActivateAsync(ModelInfo m)
     {
+        if (SelectedSource is not { } src) return;
         try
         {
-            await ModelCatalog.ActivateAsync(m.Id);
+            await ModelCatalog.ActivateAsync(src.Id, m.Id);
             await ReloadAsync();
         }
         catch (Exception ex)
@@ -685,7 +736,7 @@
         if (!result.Success)
             await AlertAsync("Hot-swap failed: " + result.Error);
         else
-            await ModelCatalog.ActivateAsync(m.Id);
+            await ModelCatalog.ActivateAsync(src.Id, m.Id);
 
         _busyModelId = null;
         await ReloadAsync();

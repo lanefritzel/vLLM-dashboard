@@ -89,7 +89,7 @@ public sealed class IdleUnloadService : IHostedService
 
             var result = await orchestrator.UnloadAsync(source, ct);
             if (result.Success)
-                await models.DeactivateAsync(model.Id, ct);
+                await models.DeactivateAsync(source.Id, ct);
             else
                 _logger.LogWarning("Idle-unload failed for {Source}: {Error}", source.Label, result.Error);
         }

@@ -27,20 +27,24 @@
         }
         else if (_step == StepPickServer)
         {
-            <p class="text-muted small">Which server will run this model?</p>
+            <p class="text-muted small">
+                Which vLLM instance is this for? The model gets registered on that instance's physical
+                server — shared with any other instance on the same server — and becomes this instance's
+                active model if it doesn't have one yet.
+            </p>
             @if (_sources.Count == 0)
             {
                 <div class="alert alert-warning py-2">
-                    No servers configured yet. Use the Server Setup Wizard first.
+                    No vLLM instances configured yet. Use the vLLM Instance Setup Wizard first.
                 </div>
             }
             else
             {
                 <div class="row g-3">
                     <div class="col-md-8">
-                        <label class="form-label">Server</label>
+                        <label class="form-label">vLLM instance</label>
                         <select class="form-select" @bind="_sourceId">
-                            <option value="">-- choose a server --</option>
+                            <option value="">-- choose an instance --</option>
                             @foreach (var s in _sources)
                             {
                                 <option value="@s.Id">@s.Label</option>
@@ -170,7 +174,7 @@
         {
             <p class="text-muted small">Review before saving. You can go back and change anything.</p>
             <ul class="list-unstyled small">
-                <li><strong>Server:</strong> @(_sources.FirstOrDefault(s => s.Id == _sourceId)?.Label ?? "(not set)")</li>
+                <li><strong>vLLM instance:</strong> @(_sources.FirstOrDefault(s => s.Id == _sourceId)?.Label ?? "(not set)")</li>
                 <li><strong>Served model name:</strong> @NoneIfBlank(_name)</li>
                 <li><strong>Source:</strong> @_modelSource — @NoneIfBlank(_repoOrPath)</li>
                 <li><strong>Context length:</strong> @(_maxModelLen?.ToString("N0") ?? "(model default)")</li>
@@ -399,25 +403,39 @@
 
     /// <summary>Creates the model from whatever's been entered so far. Shared by the
     /// normal Save flow and by Switch-to-Advanced, so the advanced form that opens
-    /// afterward reflects precisely what the wizard had.</summary>
+    /// afterward reflects precisely what the wizard had. Models are registered on the
+    /// picked instance's physical server (shared by every instance on it); the picked
+    /// instance itself only matters for deciding whether to auto-activate on save.</summary>
     private async Task<ModelInfo> PersistAsync()
     {
         var options = new Dictionary<string, string>();
         if (_maxModelLen is > 0) options["max-model-len"] = _maxModelLen.Value.ToString();
         if (_gpuMemUtil is > 0) options["gpu-memory-utilization"] = _gpuMemUtil.Value.ToString("0.##");
 
-        var existing = string.IsNullOrWhiteSpace(_sourceId) ? new List<ModelInfo>() : (await Models.GetBySourceAsync(_sourceId)).ToList();
+        var source = _sources.FirstOrDefault(s => s.Id == _sourceId);
+        var physicalServerId = source?.PhysicalServerId ?? "";
+        var existing = string.IsNullOrWhiteSpace(physicalServerId)
+            ? new List<ModelInfo>()
+            : (await Models.GetByPhysicalServerAsync(physicalServerId)).ToList();
         var model = new ModelInfo
         {
-            SourceId = _sourceId,
+            PhysicalServerId = physicalServerId,
             Name = _name.Trim(),
             ModelSource = _modelSource,
             ModelPathOrRepoId = _repoOrPath.Trim(),
             Options = options,
             SortOrder = existing.Count,
-            IsActive = existing.Count == 0,
         };
-        return await Models.CreateAsync(model);
+        var saved = await Models.CreateAsync(model);
+
+        // Auto-activate on save, same as before, but now judged per-instance: if the
+        // instance this wizard was launched from has nothing active yet, this new
+        // model becomes it — regardless of how many other models already exist on
+        // the shared server catalog.
+        if (source is { ActiveModelId: null })
+            await Models.ActivateAsync(source.Id, saved.Id);
+
+        return saved;
     }
 
     private async Task SaveAsync()

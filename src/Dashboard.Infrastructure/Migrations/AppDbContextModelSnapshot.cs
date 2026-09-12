@@ -402,6 +402,9 @@ namespace Dashboard.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("PhysicalServerId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("PreloadOnStartup")
                         .HasColumnType("boolean");
 
@@ -417,7 +420,7 @@ namespace Dashboard.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("SourceId", "Name")
+                    b.HasIndex("PhysicalServerId", "Name")
                         .IsUnique();
 
                     b.ToTable("Models", (string)null);
@@ -475,6 +478,9 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<bool>("Active")
                         .HasColumnType("boolean");
 
+                    b.Property<Guid?>("ActiveModelId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("ContainerName")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
@@ -504,6 +510,9 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<Guid?>("PhysicalServerId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("PreloadModelId")
+                        .HasColumnType("uuid");
+
                     b.Property<int>("ScrapeIntervalSeconds")
                         .HasColumnType("integer");
 
@@ -525,7 +534,11 @@ namespace Dashboard.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ActiveModelId");
+
                     b.HasIndex("PhysicalServerId");
+
+                    b.HasIndex("PreloadModelId");
 
                     b.HasIndex("Slug")
                         .IsUnique();
@@ -699,21 +712,30 @@ namespace Dashboard.Infrastructure.Migrations
 
             modelBuilder.Entity("Dashboard.Infrastructure.Persistence.Model", b =>
                 {
-                    b.HasOne("Dashboard.Infrastructure.Persistence.Source", "Source")
-                        .WithMany("Models")
-                        .HasForeignKey("SourceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                    b.HasOne("Dashboard.Infrastructure.Persistence.PhysicalServer", "PhysicalServer")
+                        .WithMany()
+                        .HasForeignKey("PhysicalServerId")
+                        .OnDelete(DeleteBehavior.Cascade);
 
-                    b.Navigation("Source");
+                    b.Navigation("PhysicalServer");
                 });
 
             modelBuilder.Entity("Dashboard.Infrastructure.Persistence.Source", b =>
                 {
+                    b.HasOne("Dashboard.Infrastructure.Persistence.Model", null)
+                        .WithMany()
+                        .HasForeignKey("ActiveModelId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Dashboard.Infrastructure.Persistence.PhysicalServer", "PhysicalServer")
                         .WithMany("Sources")
                         .HasForeignKey("PhysicalServerId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Dashboard.Infrastructure.Persistence.Model", null)
+                        .WithMany()
+                        .HasForeignKey("PreloadModelId")
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("PhysicalServer");
                 });
@@ -777,8 +799,6 @@ namespace Dashboard.Infrastructure.Migrations
             modelBuilder.Entity("Dashboard.Infrastructure.Persistence.Source", b =>
                 {
                     b.Navigation("LaunchSpec");
-
-                    b.Navigation("Models");
                 });
 #pragma warning restore 612, 618
         }

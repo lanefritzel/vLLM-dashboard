@@ -95,7 +95,7 @@ public sealed class ModelProxyService : IModelProxyService
         // from the registry instead of forwarded.
         if (HttpMethods.IsGet(context.Request.Method) && IsModelsListPath(path))
         {
-            await WriteModelsListAsync(context, source.Id, ct);
+            await WriteModelsListAsync(context, source, ct);
             return;
         }
 
@@ -133,10 +133,13 @@ public sealed class ModelProxyService : IModelProxyService
             if (active is not null && string.Equals(active.Name, requestedModelName, StringComparison.Ordinal))
                 return null;
 
-            var target = (await _models.GetBySourceAsync(source.Id, ct))
+            if (string.IsNullOrWhiteSpace(source.PhysicalServerId))
+                return "This source has no physical server configured — set one up on the Settings page.";
+
+            var target = (await _models.GetByPhysicalServerAsync(source.PhysicalServerId, ct))
                 .FirstOrDefault(m => string.Equals(m.Name, requestedModelName, StringComparison.Ordinal));
             if (target is null)
-                return $"Model '{requestedModelName}' is not registered for this source.";
+                return $"Model '{requestedModelName}' is not registered on this source's physical server.";
 
             // The DB's IsActive flag can drift from reality (e.g. a model started
             // directly via docker compose, outside this app, never gets marked active).
@@ -146,7 +149,7 @@ public sealed class ModelProxyService : IModelProxyService
             var actuallyLoaded = await _orchestrator.GetActuallyRunningModelNameAsync(source, ct);
             if (actuallyLoaded is not null && string.Equals(actuallyLoaded, requestedModelName, StringComparison.Ordinal))
             {
-                await _models.ActivateAsync(target.Id, ct);
+                await _models.ActivateAsync(source.Id, target.Id, ct);
                 return null;
             }
 
@@ -159,7 +162,7 @@ public sealed class ModelProxyService : IModelProxyService
             if (!result.Success)
                 return $"Auto-swap to '{requestedModelName}' failed: {result.Error}";
 
-            await _models.ActivateAsync(target.Id, ct);
+            await _models.ActivateAsync(source.Id, target.Id, ct);
             return null;
         }
         finally
@@ -185,9 +188,11 @@ public sealed class ModelProxyService : IModelProxyService
     internal static bool IsModelsListPath(string path) =>
         string.Equals(path.Trim('/'), "v1/models", StringComparison.OrdinalIgnoreCase);
 
-    private async Task WriteModelsListAsync(HttpContext context, string sourceId, CancellationToken ct)
+    private async Task WriteModelsListAsync(HttpContext context, SourceInfo source, CancellationToken ct)
     {
-        var models = await _models.GetBySourceAsync(sourceId, ct);
+        var models = string.IsNullOrWhiteSpace(source.PhysicalServerId)
+            ? Array.Empty<ModelInfo>()
+            : await _models.GetByPhysicalServerAsync(source.PhysicalServerId, ct);
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         context.Response.ContentType = "application/json";

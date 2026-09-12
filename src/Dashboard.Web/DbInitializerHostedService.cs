@@ -24,6 +24,7 @@ public sealed class DbInitializerHostedService(
             await SeedConfigDefaultsAsync(db, cancellationToken);
             await SeedInitialSourcesAsync(db, cancellationToken);
             await BackfillPhysicalServersAsync(db, cancellationToken);
+            await BackfillModelRegistryAsync(db, cancellationToken);
             logger.LogInformation("Database initialized (migrations applied, config + sources seeded).");
         }
         catch (Exception ex)
@@ -137,6 +138,80 @@ public sealed class DbInitializerHostedService(
         await db.SaveChangesAsync(ct);
         if (created > 0)
             logger.LogInformation("Backfilled {Count} physical server(s) from existing sources' Docker hosts.", created);
+    }
+
+    /// <summary>One-time (idempotent) migration of models from their old per-instance
+    /// ownership (SourceId) onto the owning instance's PhysicalServerId — shared by
+    /// every instance on that server — and of each instance's old IsActive/
+    /// PreloadOnStartup model flags onto the instance itself (ActiveModelId/
+    /// PreloadModelId), before those old columns become permanently unused. Runs
+    /// after <see cref="BackfillPhysicalServersAsync"/> since it depends on sources
+    /// already having their PhysicalServerId resolved.</summary>
+    private async Task BackfillModelRegistryAsync(AppDbContext db, CancellationToken ct)
+    {
+        var unresolvedModels = await db.Models.Where(m => m.PhysicalServerId == null).OrderBy(m => m.Id).ToListAsync(ct);
+        if (unresolvedModels.Count > 0)
+        {
+            var ownerIds = unresolvedModels.Select(m => m.SourceId).Distinct().ToList();
+            var owners = await db.Sources.Where(s => ownerIds.Contains(s.Id)).ToDictionaryAsync(s => s.Id, ct);
+
+            // Two old per-instance copies of "the same" model — exactly the
+            // duplication this migration exists to fix — now collide on the new
+            // shared (PhysicalServerId, Name) uniqueness. Rename the later one rather
+            // than merge/drop it: their settings (Options, IdleTtlSeconds, etc.) may
+            // genuinely differ per old instance, and merging would silently discard
+            // one side. A visible, harmless duplicate the user can consolidate
+            // themselves beats losing configuration silently.
+            var taken = await db.Models.Where(m => m.PhysicalServerId != null)
+                .Select(m => new { m.PhysicalServerId, m.Name })
+                .ToListAsync(ct);
+            var takenNames = new HashSet<(Guid ServerId, string Name)>(taken.Select(t => (t.PhysicalServerId!.Value, t.Name)));
+
+            foreach (var model in unresolvedModels)
+            {
+                if (!owners.TryGetValue(model.SourceId, out var owner) || owner.PhysicalServerId is not { } serverId)
+                    continue; // this instance itself has no physical server yet — leave for a later run
+
+                var name = model.Name;
+                if (takenNames.Contains((serverId, name)))
+                {
+                    var suffix = 2;
+                    string candidate;
+                    do
+                    {
+                        candidate = suffix == 2 ? $"{model.Name} (from {owner.Label})" : $"{model.Name} (from {owner.Label} #{suffix})";
+                        suffix++;
+                    } while (takenNames.Contains((serverId, candidate)));
+                    logger.LogWarning(
+                        "Backfill: renamed duplicate model '{Old}' to '{New}' — another instance on the same physical server already had this exact model name registered separately.",
+                        model.Name, candidate);
+                    name = candidate;
+                }
+
+                model.Name = name;
+                model.PhysicalServerId = serverId;
+                takenNames.Add((serverId, name));
+            }
+        }
+
+        var vllmSources = await db.Sources.Where(s => s.PhysicalServerId != null).ToListAsync(ct);
+        foreach (var source in vllmSources)
+        {
+            if (source.ActiveModelId is null)
+            {
+                var active = await db.Models.FirstOrDefaultAsync(m => m.SourceId == source.Id && m.IsActive, ct);
+                if (active is not null)
+                    source.ActiveModelId = active.Id;
+            }
+            if (source.PreloadModelId is null)
+            {
+                var preload = await db.Models.FirstOrDefaultAsync(m => m.SourceId == source.Id && m.PreloadOnStartup, ct);
+                if (preload is not null)
+                    source.PreloadModelId = preload.Id;
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
     }
 
     private static string NormalizeHost(string dockerHost) => dockerHost.Trim().ToLowerInvariant();

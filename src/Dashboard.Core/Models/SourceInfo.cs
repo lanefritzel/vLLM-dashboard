@@ -22,6 +22,19 @@ public sealed record SourceInfo
     public string? PhysicalServerId { get; init; }
 
     public string? ContainerName { get; init; }
+
+    /// <summary>Which model (from the physical server's shared catalog) this
+    /// instance currently has loaded — null if nothing's loaded, or if reality has
+    /// drifted from this bookkeeping. Distinct instances on the same server track
+    /// this independently, so one can hold a model permanently active while another
+    /// gets hot-swapped freely.</summary>
+    public string? ActiveModelId { get; init; }
+
+    /// <summary>Which model this instance should automatically load when the
+    /// dashboard itself starts, instead of waiting for the first proxied request.
+    /// Null disables preload for this instance.</summary>
+    public string? PreloadModelId { get; init; }
+
     public int ScrapeIntervalSeconds { get; init; } = 5;
     public bool Active { get; init; }
     public int SortOrder { get; init; }

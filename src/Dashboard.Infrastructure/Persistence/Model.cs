@@ -5,7 +5,12 @@ namespace Dashboard.Infrastructure.Persistence;
 public class Model
 {
     public Guid Id { get; set; }
+
+    /// <summary>Deprecated: superseded by <see cref="PhysicalServerId"/>. Kept for
+    /// the upgrade backfill only.</summary>
     public Guid SourceId { get; set; }
+
+    public Guid? PhysicalServerId { get; set; }
     public string Name { get; set; } = "";
     public string? DisplayName { get; set; }
 
@@ -24,23 +29,21 @@ public class Model
     public int? IdleTtlSeconds { get; set; }
     public bool PreloadOnStartup { get; set; }
 
-    public Source? Source { get; set; }
+    public PhysicalServer? PhysicalServer { get; set; }
 
     public Core.Models.ModelInfo ToInfo()
     {
         var info = new Core.Models.ModelInfo
         {
             Id = Id.ToString(),
-            SourceId = SourceId.ToString(),
+            PhysicalServerId = PhysicalServerId?.ToString() ?? "",
             Name = Name,
             DisplayName = DisplayName,
             ModelSource = ModelSourceExtensions.FromStorage(ModelSource),
             ModelPathOrRepoId = ModelPathOrRepoId,
             ImageOverride = ImageOverride,
-            IsActive = IsActive,
             SortOrder = SortOrder,
             IdleTtlSeconds = IdleTtlSeconds,
-            PreloadOnStartup = PreloadOnStartup,
         };
 
         try

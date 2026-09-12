@@ -62,6 +62,18 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
                 .WithMany(p => p.Sources)
                 .HasForeignKey(s => s.PhysicalServerId)
                 .OnDelete(DeleteBehavior.Restrict);
+            // "Active"/"preload" are per-instance state pointing into the physical
+            // server's shared model catalog — SetNull (not Restrict/Cascade) so
+            // deleting a model just clears whichever instances had it active/
+            // preloaded, rather than being blocked or taking the instance down.
+            entity.HasOne<Model>()
+                .WithMany()
+                .HasForeignKey(s => s.ActiveModelId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<Model>()
+                .WithMany()
+                .HasForeignKey(s => s.PreloadModelId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         builder.Entity<Model>(entity =>
@@ -71,10 +83,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.Property(m => m.Name).HasMaxLength(300).IsRequired();
             entity.Property(m => m.DisplayName).HasMaxLength(300);
             entity.Property(m => m.SwapArgs).HasMaxLength(1000);
-            entity.HasIndex(m => new { m.SourceId, m.Name }).IsUnique();
-            entity.HasOne(m => m.Source)
-                .WithMany(s => s.Models)
-                .HasForeignKey(m => m.SourceId)
+            entity.HasIndex(m => new { m.PhysicalServerId, m.Name }).IsUnique();
+            // A model is registered on the physical server, shared by every vLLM
+            // instance on it — deleting the server takes its whole catalog with it.
+            // The old per-instance ownership (SourceId) is deliberately left
+            // unconfigured as a relationship: it's a plain deprecated column now,
+            // read only by the upgrade backfill.
+            entity.HasOne(m => m.PhysicalServer)
+                .WithMany()
+                .HasForeignKey(m => m.PhysicalServerId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
