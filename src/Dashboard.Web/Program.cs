@@ -90,6 +90,10 @@ builder.Services.AddHttpClient("proxy", c => c.Timeout = Timeout.InfiniteTimeSpa
 // Cross-circuit shared UI state (which source the dashboard is showing).
 builder.Services.AddSingleton<SourceSelection>();
 
+// Themed confirm/alert dialogs — scoped, not singleton: each circuit's pending
+// dialog (if any) is its own, never shared across users.
+builder.Services.AddScoped<Dashboard.Web.Components.Shared.IDialogService, Dashboard.Web.Components.Shared.DialogService>();
+
 // Singletons (no DB scope captured).
 builder.Services.AddSingleton<IConfigStore, ConfigStore>();
 builder.Services.AddSingleton<ISampleStore, SampleStore>();

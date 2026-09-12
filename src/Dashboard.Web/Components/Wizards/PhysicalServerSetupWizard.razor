@@ -1,7 +1,9 @@
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
+@using Dashboard.Web.Components.Shared
 @inject IPhysicalServerCatalog Servers
 @inject IDockerOrchestrator Docker
+@inject IDialogService Dialogs
 
 <div class="modal-overlay" @onclick="@RequestCancel">
     <div class="modal-dialog-custom" @onclick:stopPropagation="true">
@@ -255,9 +257,10 @@
         var missing = MissingItems();
         if (missing.Count > 0)
         {
-            var proceed = await JsConfirmAsync(
+            var proceed = await Dialogs.ConfirmAsync(
                 "This setup isn't complete yet:\n\n" + string.Join("\n", missing.Select(m => "- " + m)) +
-                "\n\nSave anyway? You can come back and finish it later.");
+                "\n\nSave anyway? You can come back and finish it later.",
+                confirmText: "Save anyway");
             if (!proceed) return;
         }
 
@@ -277,10 +280,6 @@
             _busy = false;
         }
     }
-
-    [Inject] private Microsoft.JSInterop.IJSRuntime JS { get; set; } = default!;
-
-    private async Task<bool> JsConfirmAsync(string message) => await JS.InvokeAsync<bool>("confirm", message);
 
     /// <summary>Persists whatever's been entered so far (no completeness confirm) and
     /// hands off to the real Edit form loaded from that record.</summary>

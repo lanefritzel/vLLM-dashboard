@@ -1,9 +1,10 @@
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
+@using Dashboard.Web.Components.Shared
 @inject ISourceCatalog Sources
 @inject ILaunchSpecStore LaunchSpecs
 @inject IPhysicalServerCatalog Servers
-@inject IJSRuntime JS
+@inject IDialogService Dialogs
 
 @if (_addingNewServer)
 {
@@ -294,9 +295,10 @@ else
         var missing = MissingItems();
         if (missing.Count > 0)
         {
-            var proceed = await JS.InvokeAsync<bool>("confirm",
+            var proceed = await Dialogs.ConfirmAsync(
                 "This setup isn't complete yet:\n\n" + string.Join("\n", missing.Select(m => "- " + m)) +
-                "\n\nSave anyway? You can come back and finish it later.");
+                "\n\nSave anyway? You can come back and finish it later.",
+                confirmText: "Save anyway");
             if (!proceed) return;
         }
 

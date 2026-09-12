@@ -82,4 +82,27 @@ public sealed record ModelInfo
     /// "preload this on startup" is now a property of the instance that should load
     /// it, not the model itself. Kept in the schema for the upgrade backfill only.</summary>
     public bool PreloadOnStartup { get; init; }
+
+    /// <summary>True when editing from <paramref name="before"/> to <paramref name="after"/>
+    /// changed something that actually feeds the launch command (see
+    /// DockerOrchestrator.BuildCreatePayload) — a container already running this model
+    /// won't pick the change up until it's recreated. DisplayName/SortOrder/IdleTtlSeconds/
+    /// PhysicalServerId don't affect the launch command itself, so they're excluded.</summary>
+    public static bool RequiresReload(ModelInfo before, ModelInfo after) =>
+        !string.Equals(before.Name, after.Name, StringComparison.Ordinal) ||
+        before.ModelSource != after.ModelSource ||
+        !string.Equals(before.ModelPathOrRepoId, after.ModelPathOrRepoId, StringComparison.Ordinal) ||
+        !string.Equals(before.ImageOverride, after.ImageOverride, StringComparison.Ordinal) ||
+        !OptionsEqual(before.Options, after.Options);
+
+    private static bool OptionsEqual(Dictionary<string, string> a, Dictionary<string, string> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var (key, value) in a)
+        {
+            if (!b.TryGetValue(key, out var otherValue) || !string.Equals(value, otherValue, StringComparison.Ordinal))
+                return false;
+        }
+        return true;
+    }
 }

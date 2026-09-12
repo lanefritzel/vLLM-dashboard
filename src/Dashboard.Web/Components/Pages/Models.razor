@@ -4,6 +4,8 @@
 @implements IDisposable
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
+@using Dashboard.Web.Components.Shared
+@inject IDialogService Dialogs
 
 <PageTitle>Models — vLLM Dashboard</PageTitle>
 
@@ -61,6 +63,11 @@
                                 {
                                     <span class="chip" title="Brought up automatically on this instance when the dashboard starts">preload</span>
                                 }
+                                @if (isActiveHere && _pendingReload.Contains((src.Id, m.Id)))
+                                {
+                                    <span class="chip" style="border-color: var(--warn); color: var(--warn);"
+                                          title="Saved settings changed since this was last loaded — click Reload to apply them">changes pending reload</span>
+                                }
                                 @if (activeElsewhere is not null)
                                 {
                                     <div class="text-muted small" title="Loading it here too would use this server's VRAM twice for the same weights">
@@ -70,7 +77,13 @@
                             </td>
                             <td class="text-end">
                                 <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditModel(m))">Edit</button>
-                                @if (!isActiveHere)
+                                @if (isActiveHere)
+                                {
+                                    <button class="btn btn-outline btn-sm" disabled="@(_busyModelId != null)"
+                                            title="Recreate the container with this model's current saved settings — needed after an edit like adding a launch option, which a plain save doesn't apply to an already-running container."
+                                            @onclick="@(() => SwapAsync(m))">Reload</button>
+                                }
+                                else
                                 {
                                     <button class="btn btn-outline btn-sm" disabled="@(_busyModelId != null)"
                                             @onclick="@(() => ActivateAsync(m))">Activate</button>
@@ -270,7 +283,6 @@
     [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
     [Inject] private IPhysicalServerCatalog Servers { get; set; } = default!;
     [Inject] private IDockerOrchestrator Orchestrator { get; set; } = default!;
-    [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private SourceSelection Selection { get; set; } = default!;
     [Inject] private IConfigStore Config { get; set; } = default!;
     [Inject] private IHuggingFaceModelLookup HfLookup { get; set; } = default!;
@@ -284,6 +296,11 @@
     private string? _busyModelId;
     private ModelInfo? _swapTarget;
     private List<SwapStep> _swapSteps = new();
+
+    /// <summary>(sourceId, modelId) pairs where a launch-affecting edit was saved but
+    /// the user chose "Later" instead of reloading immediately — in-memory only, a
+    /// page refresh forgetting this is an acceptable tradeoff over a schema change.</summary>
+    private readonly HashSet<(string SourceId, string ModelId)> _pendingReload = new();
     private bool _disposed;
 
     // Model form.
@@ -625,6 +642,8 @@
     {
         if (_editingModel is null) return;
         if (string.IsNullOrWhiteSpace(_fModelName)) return;
+        var before = _editingModel;
+        var wasCreating = _isCreatingModel;
         try
         {
             var model = _editingModel with
@@ -674,11 +693,43 @@
                     Selection.SetCurrent(onNewServer.Id);
             }
 
+            // A container already running this model won't pick up a launch-affecting
+            // edit (e.g. adding a vLLM option) until it's recreated — a real gap that
+            // meant the only way to apply such a change was to hot-swap away to a
+            // different model and back. _all still reflects state from before this
+            // save, so this finds instances that already had it active going in.
+            if (!wasCreating && ModelInfo.RequiresReload(before, saved))
+            {
+                var activeInstances = _all.Where(s => s.ActiveModelId == saved.Id).ToList();
+                if (activeInstances.Count > 0)
+                {
+                    var names = string.Join(", ", activeInstances.Select(s => s.Label));
+                    var reloadNow = await Dialogs.ConfirmAsync(
+                        $"This model is active on {names}. Reload {(activeInstances.Count > 1 ? "them" : "it")} now to apply these changes?",
+                        title: "Reload needed",
+                        confirmText: "Reload now",
+                        cancelText: "Later");
+                    foreach (var instance in activeInstances)
+                    {
+                        if (reloadNow)
+                        {
+                            var spec = await LaunchSpecs.GetBySourceAsync(instance.Id);
+                            if (spec is not null && !string.IsNullOrWhiteSpace(spec.Image))
+                                await ExecuteSwapAsync(instance, saved, spec);
+                        }
+                        else
+                        {
+                            _pendingReload.Add((instance.Id, saved.Id));
+                        }
+                    }
+                }
+            }
+
             await ReloadAsync();
         }
         catch (Exception ex)
         {
-            await AlertAsync("Save failed: " + ex.Message);
+            await Dialogs.AlertAsync("Save failed: " + ex.Message);
         }
     }
 
@@ -692,13 +743,13 @@
         }
         catch (Exception ex)
         {
-            await AlertAsync("Activate failed: " + ex.Message);
+            await Dialogs.AlertAsync("Activate failed: " + ex.Message);
         }
     }
 
     private async Task DeleteModelAsync(ModelInfo m)
     {
-        var ok = await JS.InvokeAsync<bool>("confirm", $"Delete model '{m.Name}'?");
+        var ok = await Dialogs.ConfirmAsync($"Delete model '{m.Name}'?", confirmText: "Delete");
         if (!ok) return;
         try
         {
@@ -707,7 +758,7 @@
         }
         catch (Exception ex)
         {
-            await AlertAsync("Delete failed: " + ex.Message);
+            await Dialogs.AlertAsync("Delete failed: " + ex.Message);
         }
     }
 
@@ -718,13 +769,27 @@
         var spec = await LaunchSpecs.GetBySourceAsync(src.Id);
         if (spec is null || string.IsNullOrWhiteSpace(spec.Image))
         {
-            await AlertAsync("Set up this server's hot-swap/Docker settings on the Settings page (image is required) before hot-swapping.");
+            await Dialogs.AlertAsync("Set up this server's hot-swap/Docker settings on the Settings page (image is required) before hot-swapping.");
             return;
         }
-        var ok = await JS.InvokeAsync<bool>("confirm",
-            $"Hot-swap '{src.Label}' to model '{m.Name}'? The backend container will be recreated.");
+        var isReload = m.Id == src.ActiveModelId;
+        var ok = await Dialogs.ConfirmAsync(
+            isReload
+                ? $"Reload '{m.Name}' on '{src.Label}' with its current saved settings? The backend container will be recreated."
+                : $"Hot-swap '{src.Label}' to model '{m.Name}'? The backend container will be recreated.",
+            confirmText: isReload ? "Reload" : "Hot-swap");
         if (!ok) return;
 
+        await ExecuteSwapAsync(src, m, spec);
+        await ReloadAsync();
+    }
+
+    /// <summary>The actual stop/recreate/re-activate mechanics, shared by the row's
+    /// Hot-swap/Reload button (one instance, already confirmed) and the save-time
+    /// reload prompt (possibly several instances in a row, already confirmed once for
+    /// all of them) — callers own their own confirmation and post-reload UI refresh.</summary>
+    private async Task ExecuteSwapAsync(SourceInfo src, ModelInfo m, LaunchSpec spec)
+    {
         _busyModelId = m.Id;
         _swapTarget = m;
         _swapSteps = new List<SwapStep>();
@@ -734,17 +799,14 @@
         var result = await Orchestrator.SwapModelAsync(src, m, spec, progress);
 
         if (!result.Success)
-            await AlertAsync("Hot-swap failed: " + result.Error);
+            await Dialogs.AlertAsync("Hot-swap failed: " + result.Error);
         else
+        {
             await ModelCatalog.ActivateAsync(src.Id, m.Id);
+            _pendingReload.Remove((src.Id, m.Id));
+        }
 
         _busyModelId = null;
-        await ReloadAsync();
-    }
-
-    private async Task AlertAsync(string message)
-    {
-        try { await JS.InvokeVoidAsync("alert", message); } catch { }
     }
 
     private Task ReportSwapStep(SwapStep step) => InvokeAsync(() =>

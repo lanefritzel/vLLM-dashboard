@@ -1,0 +1,41 @@
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDialogService DialogServiceImpl
+
+@if (Service.Current is { } request)
+{
+    <div class="modal-overlay" @onclick="@(() => Cancel(request))">
+        <div class="modal-dialog-custom" style="max-width: 480px;" @onclick:stopPropagation="true">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="card-title mb-0">@request.Title</div>
+                <button type="button" class="modal-close-btn" @onclick="@(() => Cancel(request))" aria-label="Close">✕</button>
+            </div>
+            <p class="mb-3" style="white-space: pre-wrap;">@request.Message</p>
+            <div class="d-flex justify-content-end gap-2">
+                @if (!request.IsAlert)
+                {
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@(() => Cancel(request))">@request.CancelText</button>
+                }
+                <button type="button" class="btn btn-primary btn-sm" @onclick="@(() => Confirm(request))">@request.ConfirmText</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private DialogService Service = default!;
+
+    protected override void OnInitialized()
+    {
+        Service = (DialogService)DialogServiceImpl;
+        Service.StateChanged += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void Confirm(DialogRequest request) => Service.Resolve(true);
+
+    private void Cancel(DialogRequest request) => Service.Resolve(false);
+
+    public void Dispose() => Service.StateChanged -= OnStateChanged;
+}

@@ -3,7 +3,9 @@
 @attribute [Authorize]
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
+@using Dashboard.Web.Components.Shared
 @inject NavigationManager Nav
+@inject IDialogService Dialogs
 
 <PageTitle>Settings — vLLM Dashboard</PageTitle>
 
@@ -466,7 +468,6 @@
     [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
     [Inject] private IPhysicalServerCatalog Servers { get; set; } = default!;
     [Inject] private IDockerOrchestrator Docker { get; set; } = default!;
-    [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private Dashboard.Web.Components.SourceSelection Selection { get; set; } = default!;
 
     private List<PhysicalServerInfo> _physicalServers = new();
@@ -754,7 +755,7 @@
             _error = $"Can't delete '{p.Label}' — one or more sources still run on it. Reassign or delete those first.";
             return;
         }
-        var ok = await JS.InvokeAsync<bool>("confirm", $"Delete physical server '{p.Label}'?");
+        var ok = await Dialogs.ConfirmAsync($"Delete physical server '{p.Label}'?", confirmText: "Delete");
         if (!ok) return;
         try
         {
@@ -901,7 +902,7 @@
 
     private async Task DeleteAsync(SourceInfo s)
     {
-        var ok = await JS.InvokeAsync<bool>("confirm", $"Delete source '{s.Label}'? This removes its settings (history is kept).");
+        var ok = await Dialogs.ConfirmAsync($"Delete source '{s.Label}'? This removes its settings (history is kept).", confirmText: "Delete");
         if (!ok) return;
         try
         {
