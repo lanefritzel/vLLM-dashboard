@@ -17,7 +17,7 @@
             @for (var i = 1; i <= 3; i++)
             {
                 var label = i switch { 1 => "Docker host", 2 => "GPU", _ => "Review" };
-                <span class="@(i == _step ? "fw-bold text-body" : "")">@i. @label</span>
+                <span class="@(i == _step ? "wizard-step-active" : "")">@i. @label</span>
                 @if (i < 3) { <text> &nbsp;→&nbsp; </text> }
             }
         </div>

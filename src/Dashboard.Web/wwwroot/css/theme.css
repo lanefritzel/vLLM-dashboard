@@ -115,6 +115,14 @@ a:hover { color: var(--accent-2); }
 .nav-link:hover { color: var(--text); background: var(--card); }
 .nav-link.active { color: var(--text); background: var(--card); box-shadow: inset 2px 0 0 var(--accent); }
 
+.nav-group-label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.7rem 0.75rem 0.15rem; }
+.nav-sub .nav-link { padding-left: 1.5rem; }
+
+/* Bootstrap's own .text-body assumes a light theme (near-black text) and was
+   disappearing against this app's dark background — use this instead for the
+   current-step highlight in wizard step indicators. */
+.wizard-step-active { color: var(--text); font-weight: 700; }
+
 /* Cards */
 .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 6px 18px var(--shadow); }
 .card-body { padding: 1rem 1.25rem; }
