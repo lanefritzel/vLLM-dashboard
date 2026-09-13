@@ -223,30 +223,62 @@
                     </div>
 
                     <div class="col-md-12">
-                        <div class="card-title mb-2">Model options</div>
-                        @foreach (var group in VllmOptionCatalog.ByGroup())
+                        <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+                            <div class="card-title mb-0">Model options</div>
+                            <input class="form-control form-control-sm" style="max-width: 260px;"
+                                   @bind="_optionFilter" @bind:event="oninput"
+                                   placeholder="Search options (e.g. tool, gpu, context)…" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_optionFilter))
                         {
-                            <details class="mb-2" open>
-                                <summary style="cursor:pointer">@GroupLabel(group.Key)</summary>
-                                <div class="row g-2 mt-1">
-                                    @foreach (var opt in group.Where(o => o.Tier == VllmOptionTier.Common))
-                                    {
-                                        @RenderOption(opt)
-                                    }
-                                </div>
-                                @if (group.Any(o => o.Tier == VllmOptionTier.Advanced))
+                            @* Filtering flattens the Common/Advanced split — a match should be
+                               immediately visible, not hidden behind a collapsed "Advanced"
+                               toggle the user has no reason to know to open. *@
+                            var matches = VllmOptionCatalog.All.Where(OptionMatchesFilter).ToList();
+                            @if (matches.Count == 0)
+                            {
+                                <p class="text-muted small">No options match "@_optionFilter".</p>
+                            }
+                            else
+                            {
+                                @foreach (var group in matches.GroupBy(o => o.Group))
                                 {
-                                    <details class="mt-1">
-                                        <summary class="text-muted" style="cursor:pointer">Advanced</summary>
-                                        <div class="row g-2 mt-1">
-                                            @foreach (var opt in group.Where(o => o.Tier == VllmOptionTier.Advanced))
-                                            {
-                                                @RenderOption(opt)
-                                            }
-                                        </div>
-                                    </details>
+                                    <div class="text-muted small mt-2 mb-1">@GroupLabel(group.Key)</div>
+                                    <div class="row g-2">
+                                        @foreach (var opt in group)
+                                        {
+                                            @RenderOption(opt)
+                                        }
+                                    </div>
                                 }
-                            </details>
+                            }
+                        }
+                        else
+                        {
+                            @foreach (var group in VllmOptionCatalog.ByGroup())
+                            {
+                                <details class="mb-2" open>
+                                    <summary style="cursor:pointer">@GroupLabel(group.Key)</summary>
+                                    <div class="row g-2 mt-1">
+                                        @foreach (var opt in group.Where(o => o.Tier == VllmOptionTier.Common))
+                                        {
+                                            @RenderOption(opt)
+                                        }
+                                    </div>
+                                    @if (group.Any(o => o.Tier == VllmOptionTier.Advanced))
+                                    {
+                                        <details class="mt-1">
+                                            <summary class="text-muted" style="cursor:pointer">Advanced</summary>
+                                            <div class="row g-2 mt-1">
+                                                @foreach (var opt in group.Where(o => o.Tier == VllmOptionTier.Advanced))
+                                                {
+                                                    @RenderOption(opt)
+                                                }
+                                            </div>
+                                        </details>
+                                    }
+                                </details>
+                            }
                         }
                     </div>
 
@@ -316,6 +348,16 @@
     private bool _fModelWasPreload;
     private int? _fModelIdleTtlMinutes;
     private Dictionary<string, string> _fOptions = new();
+    private string _optionFilter = "";
+
+    private bool OptionMatchesFilter(VllmOptionDefinition opt)
+    {
+        var term = _optionFilter.Trim();
+        return opt.Label.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || opt.Key.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || opt.CliFlag.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || (opt.Description?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
 
     // Live Hugging Face lookup + the current physical server (for its stated VRAM
     // total) — both drive the dependency hints rendered alongside options like
@@ -614,6 +656,7 @@
         _fModelPreloadOnStartup = _fModelWasPreload;
         _fModelIdleTtlMinutes = m.IdleTtlSeconds is { } s ? Math.Max(1, s / 60) : null;
         _fOptions = new Dictionary<string, string>(m.Options);
+        _optionFilter = "";
         _hfLookup = null;
         _hfLookupFailed = false;
         await RefreshCurrentSpecAsync();
