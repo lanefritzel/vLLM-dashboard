@@ -8,10 +8,10 @@
 
 <PageTitle>History — vLLM Dashboard</PageTitle>
 
-<h1 class="page-title">History</h1>
+<h1 class="page-title">History <span class="text-muted fs-5">/ @(SelectedSource?.Label ?? "no source selected")</span></h1>
 
 <div class="d-flex align-items-center gap-2 mb-3">
-    <select class="form-select window-select" onchange="@OnWindowChanged">
+    <select class="form-select window-select" onchange="@OnWindowChanged" aria-label="History window">
         <option value="1" @selected="@((WindowHours == 1) ? "selected" : null)">Last 1 hour</option>
         <option value="24" @selected="@((WindowHours == 24) ? "selected" : null)">Last 24 hours</option>
         <option value="72" @selected="@((WindowHours == 72) ? "selected" : null)">Last 3 days</option>
@@ -75,12 +75,23 @@
         {
             <p class="text-muted mt-2">No samples in this window yet — data appears once the live loop has been running.</p>
         }
+        else if (_samples.Count > ChartCap)
+        {
+            <p class="text-muted small mt-2">
+                Chart shows the most recent @ChartCap.ToString("N0") of @_samples.Count.ToString("N0") samples in this
+                window — the summary table above still reflects all of them.
+            </p>
+        }
     </div>
 </div>
 
 @code {
     [Inject] private IMetricsHistory HistoryService { get; set; } = default!;
+    [Inject] private ISourceCatalog Sources { get; set; } = default!;
+    [Inject] private SourceSelection Selection { get; set; } = default!;
     [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    private const int ChartCap = 1000;
 
     private int _windowHours = 24;
     private bool _loading = true;
@@ -88,9 +99,12 @@
     private string? _error;
     private List<HistorySummary> _summaries = new();
     private List<MetricsSample> _samples = new();
+    private List<SourceInfo> _all = new();
     private bool _disposed;
 
     private int WindowHours => _windowHours;
+    private SourceInfo? SelectedSource =>
+        _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
     private string RangeText
     {
         get
@@ -99,6 +113,19 @@
             return from.ToString("yyyy-MM-dd HH:mm") + " → now (local)";
         }
     }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Selection.Changed += OnSelectionChanged;
+        try { _all = (await Sources.GetAllAsync()).ToList(); } catch { /* surfaced via ReloadAsync's own error handling */ }
+    }
+
+    private void OnSelectionChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await ReloadAsync();
+        });
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -132,9 +159,10 @@
         {
             var to = DateTime.UtcNow;
             var from = to.AddHours(-_windowHours);
+            var sourceId = SelectedSource?.Id;
 
-            var samplesTask = HistoryService.GetAsync(from, to, null, null);
-            var summariesTask = HistoryService.SummarizeAsync(from, to, null, null);
+            var samplesTask = HistoryService.GetAsync(from, to, sourceId, null);
+            var summariesTask = HistoryService.SummarizeAsync(from, to, sourceId, null);
 
             _samples = (await samplesTask).ToList();
             _summaries = (await summariesTask).ToList();
@@ -149,13 +177,12 @@
             try
             {
                 await JS.InvokeVoidAsync("chart_reset", "hist-gen");
-                var cap = 1000;
-                var points = _samples.Count > cap ? _samples.Skip(_samples.Count - cap) : _samples;
+                var points = _samples.Count > ChartCap ? _samples.Skip(_samples.Count - ChartCap) : _samples;
                 foreach (var s in points)
                 {
                     await JS.InvokeVoidAsync("chart_push", "hist-gen",
                         s.Ts.ToLocalTime().ToString("MM-dd HH:mm"),
-                        new Dictionary<string, double?> { ["gen"] = s.GenTps }, cap);
+                        new Dictionary<string, double?> { ["gen"] = s.GenTps }, ChartCap);
                 }
             }
             catch { /* chart may not exist yet */ }
@@ -163,5 +190,9 @@
         StateHasChanged();
     }
 
-    public void Dispose() => _disposed = true;
+    public void Dispose()
+    {
+        _disposed = true;
+        Selection.Changed -= OnSelectionChanged;
+    }
 }
