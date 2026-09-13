@@ -36,12 +36,23 @@ else
         receives.
     </p>
 
-    @if (_cards.Count == 0)
+    @if (_hubError)
+    {
+        <div class="card status-card status-down"><div class="card-body d-flex align-items-center gap-3 py-2">
+            <span class="dot dot-down"></span>
+            <div>Live updates aren't connecting. Try reloading this page.</div>
+        </div></div>
+    }
+    else if (_cards.Count == 0)
     {
         <div class="card status-card status-wait"><div class="card-body d-flex align-items-center gap-3 py-2">
             <span class="dot dot-off"></span>
             <div class="text-muted">Waiting for the first request through the proxy…</div>
         </div></div>
+    }
+    @if (_cards.Count >= MaxCards)
+    {
+        <p class="text-muted small">Showing the latest @MaxCards requests — older ones scroll off as new ones arrive.</p>
     }
 
     @foreach (var card in _cards)
@@ -109,6 +120,8 @@ else
     private bool _jsReady;
     private bool _disposed;
     private string? _hubJoinedId;
+    private int _hubStartAttempts;
+    private bool _hubError;
 
     private SourceInfo? SelectedSource =>
         _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
@@ -143,11 +156,20 @@ else
                 _hubStarted = true;
             }
             _jsReady = true;
+            _hubError = false;
             await EnsureJoinedAsync();
         }
         catch (Exception)
         {
-            // JS not ready yet (static prerender pass) — retry on the next render.
+            // The first few failures are just static prerendering (JS interop genuinely
+            // isn't available yet) — only treat this as a real connection problem once
+            // it's failed to ever succeed across several renders.
+            _hubStartAttempts++;
+            if (_hubStartAttempts > 5 && !_jsReady)
+            {
+                _hubError = true;
+                StateHasChanged();
+            }
         }
     }
 

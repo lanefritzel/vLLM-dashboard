@@ -16,7 +16,13 @@
     <h1 class="page-title mb-0">Logs <span class="text-muted fs-5">/ @(SelectedSource?.Label ?? "no source selected")</span></h1>
     @if (SelectedSource is not null)
     {
-        <button class="btn btn-outline-secondary btn-sm" @onclick="ClearLines">Clear</button>
+        <div class="d-flex align-items-center gap-2">
+            <label class="text-muted small d-flex align-items-center gap-1" style="cursor: pointer;">
+                <input type="checkbox" checked="@_followTail" @onchange="OnFollowTailChanged" />
+                Follow tail
+            </label>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="ClearLines">Clear</button>
+        </div>
     }
 </div>
 
@@ -32,6 +38,14 @@ else
         Live stdout/stderr from this source's backend container. Streaming starts while this page is open and
         stops when you leave — no background load when nobody's watching.
     </p>
+
+    @if (_hubError)
+    {
+        <div class="card status-card status-down mb-3"><div class="card-body d-flex align-items-center gap-3 py-2">
+            <span class="dot dot-down"></span>
+            <div>Live updates aren't connecting. Try reloading this page.</div>
+        </div></div>
+    }
 
     <div class="card">
         <div class="card-body">
@@ -50,6 +64,9 @@ else
     private bool _jsReady;
     private bool _disposed;
     private string? _hubJoinedId;
+    private int _hubStartAttempts;
+    private bool _hubError;
+    private bool _followTail = true;
 
     private SourceInfo? SelectedSource =>
         _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
@@ -83,13 +100,24 @@ else
                 _hubStarted = true;
             }
             _jsReady = true;
+            _hubError = false;
             await EnsureJoinedAsync();
         }
         catch (Exception)
         {
-            // JS not ready yet (static prerender pass) — retry on the next render.
+            // The first few failures are just static prerendering (JS interop genuinely
+            // isn't available yet) — only treat this as a real connection problem once
+            // it's failed to ever succeed across several renders.
+            _hubStartAttempts++;
+            if (_hubStartAttempts > 5 && !_jsReady)
+            {
+                _hubError = true;
+                StateHasChanged();
+            }
         }
     }
+
+    private void OnFollowTailChanged(ChangeEventArgs e) => _followTail = e.Value is bool b && b;
 
     private void OnSelectionChanged(object? sender, EventArgs e) =>
         _ = InvokeAsync(async () =>
@@ -120,7 +148,8 @@ else
         while (_lines.Count > MaxLines)
             _lines.RemoveFirst();
         StateHasChanged();
-        await JS.InvokeVoidAsync("logs_scroll_bottom", "logs-console");
+        if (_followTail)
+            await JS.InvokeVoidAsync("logs_scroll_bottom", "logs-console");
     });
 
     private void ClearLines()

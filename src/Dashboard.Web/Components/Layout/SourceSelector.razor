@@ -15,14 +15,19 @@
             value="@_selectedServerKey"
             @onchange="@OnServerChanged"
             title="Select which physical server"
+            aria-label="Physical server"
             disabled="@(Loading || _groups.Count == 0)">
         @if (Loading)
         {
             <option>Loading…</option>
         }
+        else if (_error)
+        {
+            <option>Couldn't load sources</option>
+        }
         else if (_groups.Count == 0)
         {
-            <option>No vLLM instances — add one in Settings</option>
+            <option>No vLLM instances configured</option>
         }
         else
         {
@@ -36,13 +41,28 @@
     <select class="source-selector"
             value="@Selection.CurrentSourceId"
             @onchange="@OnInstanceChanged"
-            title="Select which vLLM instance to monitor"
+            title="Select which vLLM instance to monitor — also drives Quick Test, hot-swap, Live Traffic, and Logs"
+            aria-label="vLLM instance"
             disabled="@(Loading || CurrentGroupInstances.Count == 0)">
-        @foreach (var s in CurrentGroupInstances)
+        @if (Loading)
         {
-            <option value="@s.Id">@s.Label</option>
+            <option>Loading…</option>
+        }
+        else
+        {
+            @foreach (var s in CurrentGroupInstances)
+            {
+                <option value="@s.Id">@s.Label</option>
+            }
         }
     </select>
+
+    @if (!Loading && (_error || _groups.Count == 0))
+    {
+        <span class="text-muted small">
+            @(_error ? "Couldn't load sources." : "No sources yet.") <a href="settings">Set up one in Settings</a>
+        </span>
+    }
 </div>
 
 @code {
@@ -56,6 +76,7 @@
     }
 
     private bool _loading = true;
+    private bool _error;
     private List<ServerGroup> _groups = new();
     private string _selectedServerKey = "";
     private bool _disposed;
@@ -82,6 +103,7 @@
     {
         try
         {
+            _error = false;
             var vllmSources = (await Sources.GetAllAsync()).Where(s => s.Type == SourceType.Vllm).ToList();
             var servers = (await Servers.GetAllAsync()).ToDictionary(p => p.Id);
 
@@ -128,6 +150,7 @@
         catch
         {
             _groups = new List<ServerGroup>();
+            _error = true;
         }
         _loading = false;
         try { await InvokeAsync(StateHasChanged); } catch { }
