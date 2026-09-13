@@ -3,14 +3,21 @@
 @inject UserManager<ApplicationUser> UserManager
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
-<select id="theme-switcher" class="theme-switcher" onchange="@OnThemeChanged" title="Theme">
-    <option value="dark" @selected="@Selected("dark")">Dark</option>
-    <option value="light" @selected="@Selected("light")">Light</option>
-    <option value="system" @selected="@Selected("system")">System</option>
-</select>
+<span class="d-inline-flex align-items-center gap-1">
+    <select id="theme-switcher" class="theme-switcher" onchange="@OnThemeChanged" title="Theme" aria-label="Theme">
+        <option value="dark" @selected="@Selected("dark")">Dark</option>
+        <option value="light" @selected="@Selected("light")">Light</option>
+        <option value="system" @selected="@Selected("system")">System</option>
+    </select>
+    @if (_saveError)
+    {
+        <span class="text-danger" title="Applied for this session, but couldn't be saved to your profile — it may revert next time you log in.">⚠</span>
+    }
+</span>
 
 @code {
     private string Current { get; set; } = "dark";
+    private bool _saveError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -36,19 +43,27 @@
     {
         var mode = e.Value?.ToString() ?? "dark";
         Current = mode;
+        _saveError = false;
+
+        try { await JS.InvokeAsync<string>("window.applyTheme", mode); } catch { /* JS not ready — theme still applies visually via CSS var already set */ }
+
         try
         {
-            await JS.InvokeAsync<string>("window.applyTheme", mode);
             var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
             var user = await UserManager.GetUserAsync(state.User);
             if (user is not null)
             {
                 user.ThemeMode = mode;
-                await UserManager.UpdateAsync(user);
+                var result = await UserManager.UpdateAsync(user);
+                _saveError = !result.Succeeded;
             }
         }
         catch
         {
+            // Applied for this session regardless — surfaced so the user knows it
+            // might not survive a re-login, rather than silently reverting later
+            // with no explanation.
+            _saveError = true;
         }
     }
 
