@@ -5,7 +5,14 @@
 
 <h1 class="page-title">Help</h1>
 
-<div class="card mb-4">
+<ul class="mb-4">
+    <li><a href="#getting-started">Getting started</a></li>
+    <li><a href="#docker-port">Opening the Docker TCP port (for hot-swap)</a></li>
+    <li><a href="#walkthrough">Walkthrough example</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+</ul>
+
+<div class="card mb-4" id="getting-started">
     <div class="card-body">
         <div class="card-title">Getting started</div>
         <p>
@@ -87,7 +94,7 @@ sudo systemctl restart docker</code></pre>
     </div>
 </div>
 
-<div class="card mb-4">
+<div class="card mb-4" id="walkthrough">
     <div class="card-body">
         <div class="card-title">Walkthrough example</div>
         <p>A concrete example of what to enter in the Server Setup Wizard for a typical single-box vLLM setup:</p>
@@ -113,7 +120,7 @@ sudo systemctl restart docker</code></pre>
     </div>
 </div>
 
-<div class="card">
+<div class="card" id="troubleshooting">
     <div class="card-body">
         <div class="card-title">Troubleshooting</div>
         <ul class="mb-0">
