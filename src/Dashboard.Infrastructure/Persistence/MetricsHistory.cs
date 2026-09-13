@@ -143,4 +143,34 @@ public sealed class MetricsHistory : IMetricsHistory
 
         return grouped;
     }
+
+    public async Task<GenerationThroughputStats?> GetActiveGenerationStatsAsync(
+        string sourceId, TimeSpan window, CancellationToken ct = default)
+    {
+        if (!Guid.TryParse(sourceId, out var sid))
+            return null;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var cutoff = DateTime.UtcNow - window;
+
+        // Deliberately raw MetricsSamples only, never MetricsRollups — an hourly
+        // AvgGenTps/PeakGenTps already blends in idle 0-throughput scrapes (the
+        // scraper reports a real 0, not null, when nothing is generating), which
+        // would understate "average while generating" and make "low" meaningless.
+        // This only sees as far back as retention keeps raw samples; a window longer
+        // than that just yields fewer samples, not an error.
+        var agg = await db.MetricsSamples.AsNoTracking()
+            .Where(s => s.SourceId == sid && s.Ts >= cutoff && s.GenTps > 0)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Peak = g.Max(s => s.GenTps!.Value),
+                Avg = g.Average(s => s.GenTps!.Value),
+                Low = g.Min(s => s.GenTps!.Value),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        return agg is null ? null : new GenerationThroughputStats { Peak = agg.Peak, Avg = agg.Avg, Low = agg.Low };
+    }
 }

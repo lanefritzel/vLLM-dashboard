@@ -185,6 +185,9 @@ a:hover { color: var(--accent-2); }
 .kpi-value.small { font-size: 1.05rem; }
 .kpi-unit { color: var(--muted); font-size: 0.72rem; }
 
+/* Peak/avg/low alongside the live Generation tok/s value */
+.gen-stats { font-size: 0.68rem; line-height: 1.4; color: var(--muted); text-align: right; white-space: nowrap; }
+
 /* Live charts */
 .chart-wrap { position: relative; height: 240px; }
 .window-select { width: auto; display: inline-block; }

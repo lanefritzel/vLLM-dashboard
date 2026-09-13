@@ -10,6 +10,22 @@ public interface IMetricsHistory
 
     Task<IReadOnlyList<HistorySummary>> SummarizeAsync(
         DateTime from, DateTime to, string? sourceId, string? modelName, CancellationToken ct = default);
+
+    /// <summary>Peak/avg/low generation throughput over the given rolling window,
+    /// computed from raw per-scrape samples (not hourly rollup averages) and only
+    /// over samples where generation was actually happening (GenTps > 0) — an idle
+    /// source reading 0 shouldn't drag the average down or count as the "low".
+    /// Returns null if the source has no qualifying samples in the window (e.g. it's
+    /// never generated anything, or the window exceeds the configured retention).</summary>
+    Task<GenerationThroughputStats?> GetActiveGenerationStatsAsync(
+        string sourceId, TimeSpan window, CancellationToken ct = default);
+}
+
+public sealed record GenerationThroughputStats
+{
+    public double Peak { get; init; }
+    public double Avg { get; init; }
+    public double Low { get; init; }
 }
 
 public sealed record HistorySummary

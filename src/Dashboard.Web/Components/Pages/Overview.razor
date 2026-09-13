@@ -9,6 +9,7 @@
 @inject IJSRuntime JS
 @inject ISampleStore Samples
 @inject ISourceCatalog Sources
+@inject IMetricsHistory History
 @inject SourceSelection Selection
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
@@ -123,12 +124,21 @@
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-lg-2">
+            <div class="col-6 col-lg-3">
                 <div class="card kpi-card h-100">
                     <div class="card-body py-2">
                         <div class="kpi-label">Generation</div>
-                        <div class="kpi-value">@Fmt(Latest?.GenTps)</div>
-                        <div class="kpi-unit">tok/s</div>
+                        <div class="d-flex align-items-end justify-content-between gap-2">
+                            <div>
+                                <div class="kpi-value">@Fmt(Latest?.GenTps)</div>
+                                <div class="kpi-unit">tok/s</div>
+                            </div>
+                            <div class="gen-stats">
+                                <div title="Peak generation throughput in the last 30 days">▲ @Fmt(_genStats?.Peak)</div>
+                                <div title="Average generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Avg) avg</div>
+                                <div title="Lowest generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Low) low</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -266,6 +276,10 @@
     private bool _showGen = true;
     private bool _showPrompt = false;
 
+    private static readonly TimeSpan GenStatsWindow = TimeSpan.FromDays(30);
+    private GenerationThroughputStats? _genStats;
+    private DateTime _genStatsLastRefresh = DateTime.MinValue;
+
     private SourceInfo? SelectedSource =>
         _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
 
@@ -318,8 +332,37 @@
 
         lock (_lock) _latest = s;
         await PushToCharts(s);
+
+        // Peak/low only ever need a running max/min against the live value — cheap
+        // and instant, no need to wait for the periodic DB refresh below for those.
+        // Avg can't be maintained incrementally without also removing samples that
+        // age out of the rolling window, so it's just re-queried periodically instead
+        // (only while samples are actually arriving — nothing changes while idle).
+        if (s.GenTps is > 0)
+        {
+            _genStats = _genStats is null
+                ? new GenerationThroughputStats { Peak = s.GenTps.Value, Avg = s.GenTps.Value, Low = s.GenTps.Value }
+                : _genStats with { Peak = Math.Max(_genStats.Peak, s.GenTps.Value), Low = Math.Min(_genStats.Low, s.GenTps.Value) };
+            await RefreshGenStatsAsync(s.SourceId, force: false);
+        }
+
         StateHasChanged();
     });
+
+    private async Task RefreshGenStatsAsync(string sourceId, bool force)
+    {
+        if (!force && DateTime.UtcNow - _genStatsLastRefresh < TimeSpan.FromSeconds(60))
+            return;
+        _genStatsLastRefresh = DateTime.UtcNow;
+        try
+        {
+            _genStats = await History.GetActiveGenerationStatsAsync(sourceId, GenStatsWindow);
+        }
+        catch
+        {
+            // Best-effort — keep whatever we already had rather than blanking the card.
+        }
+    }
 
     [JSInvokable]
     public Task OnConfigUpdated() => InvokeAsync(async () =>
@@ -376,6 +419,11 @@
         {
             await JS.InvokeVoidAsync("hub_join", src.Id);
             _hubJoinedId = src.Id;
+            if (src.Type != SourceType.Ollama)
+            {
+                _genStats = null;
+                await RefreshGenStatsAsync(src.Id, force: true);
+            }
         }
 
         if (src.Type == SourceType.Ollama)
