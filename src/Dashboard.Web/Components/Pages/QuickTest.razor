@@ -1,6 +1,7 @@
 @page "/quick-test"
 @rendermode InteractiveServer
 @attribute [Authorize]
+@implements IDisposable
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
 
@@ -22,16 +23,29 @@
             <div class="card-title mb-3">Probe <code>@(src.InferenceUrl)/v1/chat/completions</code></div>
             <form @onsubmit="@OnSubmit" @onsubmit:preventDefault="true" class="row g-3">
                 <div class="col-md-8">
-                    <label class="form-label">Prompt</label>
-                    <textarea class="form-control" rows="3" @bind="_prompt">Say hello in one short sentence.</textarea>
+                    <label class="form-label" for="qt-prompt">Prompt</label>
+                    <textarea id="qt-prompt" class="form-control" rows="3" @bind="_prompt">Say hello in one short sentence.</textarea>
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label">Max tokens</label>
-                    <input class="form-control" type="number" min="1" @bind="_maxTokens" />
+                    <label class="form-label" for="qt-max-tokens">Max tokens</label>
+                    <input id="qt-max-tokens" class="form-control" type="number" min="1" @bind="_maxTokens" />
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label">Model (optional)</label>
-                    <input class="form-control" @bind="_model" placeholder="default" />
+                    <label class="form-label" for="qt-model">Model (optional)</label>
+                    @if (src.Type == SourceType.Vllm && _models.Count > 0)
+                    {
+                        <select id="qt-model" class="form-select" @bind="_model">
+                            <option value="">default (currently active)</option>
+                            @foreach (var m in _models)
+                            {
+                                <option value="@m.Name">@m.Name</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <input id="qt-model" class="form-control" @bind="_model" placeholder="default" />
+                    }
                 </div>
                 <div class="col-md-12">
                     <button type="submit" class="btn btn-primary btn-sm" disabled="@_busy">
@@ -73,22 +87,59 @@
 
 @code {
     [Inject] private ISourceCatalog Sources { get; set; } = default!;
+    [Inject] private IModelCatalog ModelCatalog { get; set; } = default!;
     [Inject] private IInferenceProbe Probe { get; set; } = default!;
     [Inject] private SourceSelection Selection { get; set; } = default!;
 
     private List<SourceInfo> _all = new();
+    private List<ModelInfo> _models = new();
     private string _prompt = "Say hello in one short sentence.";
     private int _maxTokens = 128;
     private string _model = "";
     private bool _busy;
     private InferenceResult? _result;
+    private bool _disposed;
 
     private SourceInfo? SelectedSource =>
         _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
 
     protected override async Task OnInitializedAsync()
     {
+        Selection.Changed += OnSelectionChanged;
         _all = (await Sources.GetAllAsync()).ToList();
+        await ReloadModelsAsync();
+    }
+
+    private void OnSelectionChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await ReloadModelsAsync();
+            StateHasChanged();
+        });
+
+    // A model name valid on the previous instance/server might not exist on the newly
+    // selected one, so this resets to "default" on every switch rather than carrying a
+    // possibly-invalid value forward silently.
+    private async Task ReloadModelsAsync()
+    {
+        var src = SelectedSource;
+        _model = "";
+        if (src is { Type: SourceType.Vllm } && !string.IsNullOrWhiteSpace(src.PhysicalServerId))
+        {
+            try { _models = (await ModelCatalog.GetByPhysicalServerAsync(src.PhysicalServerId)).ToList(); }
+            catch { _models = new(); }
+        }
+        else
+        {
+            _models = new();
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Selection.Changed -= OnSelectionChanged;
     }
 
     private async Task OnSubmit()
