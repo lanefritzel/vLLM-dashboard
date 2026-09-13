@@ -10,7 +10,7 @@
                 <div class="card-title mb-0">@request.Title</div>
                 <button type="button" class="modal-close-btn" @onclick="@(() => Cancel(request))" aria-label="Close">✕</button>
             </div>
-            <p class="mb-3" style="white-space: pre-wrap;">@request.Message</p>
+            <p class="mb-3" style="white-space: pre-wrap; max-height: 55vh; overflow-y: auto;">@request.Message</p>
             <div class="d-flex justify-content-end gap-2">
                 @if (!request.IsAlert)
                 {
