@@ -265,7 +265,7 @@ else
             InferenceUrl = _inferenceUrl.Trim(),
             PhysicalServerId = string.IsNullOrWhiteSpace(_physicalServerId) ? null : _physicalServerId,
             ContainerName = string.IsNullOrWhiteSpace(_containerName) ? null : _containerName.Trim(),
-            ScrapeIntervalSeconds = 5,
+            ScrapeIntervalSeconds = 2,
             Active = true,
         };
         var saved = await Sources.CreateAsync(source);

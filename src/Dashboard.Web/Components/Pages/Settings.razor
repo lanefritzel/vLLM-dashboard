@@ -601,7 +601,7 @@
         {
             Id = Guid.NewGuid().ToString(),
             Type = SourceType.Vllm,
-            ScrapeIntervalSeconds = 5,
+            ScrapeIntervalSeconds = 2,
             Active = true,
             SortOrder = _sources.Count,
         };
@@ -612,7 +612,7 @@
         _fInferenceUrl = "";
         _fPhysicalServerId = "";
         _fContainerName = "";
-        _fInterval = 5;
+        _fInterval = 2;
         _fActive = true;
         ResetLaunchFields(null);
         _error = null;

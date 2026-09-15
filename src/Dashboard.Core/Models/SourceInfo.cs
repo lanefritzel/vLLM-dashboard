@@ -35,7 +35,7 @@ public sealed record SourceInfo
     /// Null disables preload for this instance.</summary>
     public string? PreloadModelId { get; init; }
 
-    public int ScrapeIntervalSeconds { get; init; } = 5;
+    public int ScrapeIntervalSeconds { get; init; } = 2;
     public bool Active { get; init; }
     public int SortOrder { get; init; }
     public DateTime CreatedAt { get; init; }

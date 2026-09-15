@@ -145,6 +145,18 @@ public sealed class MetricsPollingService : IHostedService, IDisposable
                     break;
                 }
             }
+            else
+            {
+                // The scrape itself took as long as (or longer than) the requested
+                // interval, so the loop can't actually go any faster than the scrape's
+                // own latency — the configured interval becomes a no-op floor rather
+                // than the real cadence. Without this, a user picking a faster poll
+                // interval sees no error, just the UI silently settling back to
+                // whatever cadence the backend's response time allows.
+                _logger.LogWarning(
+                    "Scrape for {Source} took {Elapsed}ms, >= the configured {Interval}s interval — actual cadence is bounded by scrape latency, not the configured interval.",
+                    src.Label, sw.ElapsedMilliseconds, src.ScrapeIntervalSeconds);
+            }
         }
     }
 
