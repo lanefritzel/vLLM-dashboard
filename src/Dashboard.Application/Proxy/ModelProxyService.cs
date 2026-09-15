@@ -32,6 +32,7 @@ public sealed class ModelProxyService : IModelProxyService
     private readonly IDockerOrchestrator _orchestrator;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IHubContext<TrafficHub> _traffic;
+    private readonly IInFlightTrafficTracker _inFlight;
     private readonly IActivityTracker _activity;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<ModelProxyService> _logger;
@@ -65,6 +66,7 @@ public sealed class ModelProxyService : IModelProxyService
         IDockerOrchestrator orchestrator,
         IHttpClientFactory httpFactory,
         IHubContext<TrafficHub> traffic,
+        IInFlightTrafficTracker inFlight,
         IActivityTracker activity,
         IHostApplicationLifetime lifetime,
         ILogger<ModelProxyService> logger)
@@ -75,6 +77,7 @@ public sealed class ModelProxyService : IModelProxyService
         _orchestrator = orchestrator;
         _httpFactory = httpFactory;
         _traffic = traffic;
+        _inFlight = inFlight;
         _activity = activity;
         _lifetime = lifetime;
         _logger = logger;
@@ -95,6 +98,13 @@ public sealed class ModelProxyService : IModelProxyService
             await WriteErrorAsync(context, StatusCodes.Status502BadGateway, "Source has no inference URL configured.");
             return;
         }
+
+        // Touched here, at request start, not just on completion below: IdleUnloadService
+        // only sees this source as "still busy" via this timestamp, and a long-running
+        // streamed generation could otherwise sit for minutes with the source's last-touch
+        // still pointing at whenever the *previous* request finished — long enough to look
+        // idle and get its container torn down mid-stream by the 30s idle-unload check.
+        _activity.Touch(source.Id);
 
         // Model discovery (e.g. OpenWebUI populating its model picker) must list every
         // model registered for this source, not just whichever one happens to be
@@ -584,7 +594,7 @@ public sealed class ModelProxyService : IModelProxyService
     // still reaches the live view even when the real client has already disconnected.
     private void BroadcastStarted(string sourceId, string requestId, string method, string path, string? model, string requestBody)
     {
-        _ = SendTrafficEventAsync(sourceId, TrafficHub.StartedEvent, new TrafficRequestStarted
+        var e = new TrafficRequestStarted
         {
             RequestId = requestId,
             SourceId = sourceId,
@@ -593,11 +603,27 @@ public sealed class ModelProxyService : IModelProxyService
             Model = model,
             Messages = ExtractMessages(requestBody),
             StartedAt = DateTimeOffset.UtcNow,
-        });
+        };
+        _inFlight.Started(e);
+        _ = SendTrafficEventAsync(sourceId, TrafficHub.StartedEvent, e);
     }
 
-    private void BroadcastChunk(string sourceId, string requestId, string text, TrafficChunkKind kind) =>
+    private void BroadcastChunk(string sourceId, string requestId, string text, TrafficChunkKind kind)
+    {
+        _inFlight.Append(requestId, text, kind);
         _ = SendTrafficEventAsync(sourceId, TrafficHub.ChunkEvent, new TrafficChunk { RequestId = requestId, SourceId = sourceId, Text = text, Kind = kind });
+    }
+
+    // A coding-agent client (e.g. OpenCode) resends its ENTIRE conversation history on
+    // every single turn, exactly like every stateless chat-completions API — a session
+    // with tens of thousands of tokens of context turns this into a message list that's
+    // hundreds of KB of JSON. Unlike the streamed response/reasoning text (already
+    // capped via MaxBroadcastCharsPerRequest), this had no cap at all: it's sent once
+    // per request AND replayed by TrafficHub's catch-up on every single viewer join/
+    // reconnect, which is a live incident of its own — a live incident where the Live
+    // Traffic page's own Blazor circuit kept dying and reloading turned out to trace
+    // back to exactly this, once an in-progress request's history got large enough.
+    private const int MaxMessagesCharsPerRequest = 20_000;
 
     /// <summary>Pulls the OpenAI-style <c>messages</c> array out of a chat/completions
     /// request body — the system prompt, prior turns, and the new user message exactly
@@ -617,12 +643,27 @@ public sealed class ModelProxyService : IModelProxyService
                 messages.ValueKind != JsonValueKind.Array)
                 return result;
 
+            var charsSoFar = 0;
             foreach (var m in messages.EnumerateArray())
             {
                 if (m.ValueKind != JsonValueKind.Object) continue;
                 var role = m.TryGetProperty("role", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() ?? "" : "";
                 var content = ExtractMessageContent(m);
                 if (role.Length == 0 && content.Length == 0) continue;
+
+                if (charsSoFar >= MaxMessagesCharsPerRequest)
+                {
+                    result.Add(new TrafficMessage
+                    {
+                        Role = "system",
+                        Content = "…(earlier messages omitted from this live view — the full conversation was still sent to the model)",
+                    });
+                    break;
+                }
+                if (charsSoFar + content.Length > MaxMessagesCharsPerRequest)
+                    content = content[..(MaxMessagesCharsPerRequest - charsSoFar)] + "…";
+
+                charsSoFar += content.Length;
                 result.Add(new TrafficMessage { Role = role, Content = content });
             }
         }
@@ -657,7 +698,9 @@ public sealed class ModelProxyService : IModelProxyService
         return string.Join("\n", parts);
     }
 
-    private void BroadcastFinished(string sourceId, string requestId, int statusCode, long elapsedMs, string? error) =>
+    private void BroadcastFinished(string sourceId, string requestId, int statusCode, long elapsedMs, string? error)
+    {
+        _inFlight.Finished(requestId);
         _ = SendTrafficEventAsync(sourceId, TrafficHub.FinishedEvent, new TrafficFinished
         {
             RequestId = requestId,
@@ -666,6 +709,7 @@ public sealed class ModelProxyService : IModelProxyService
             ElapsedMs = elapsedMs,
             Error = error,
         });
+    }
 
     private async Task SendTrafficEventAsync(string sourceId, string eventName, object payload)
     {

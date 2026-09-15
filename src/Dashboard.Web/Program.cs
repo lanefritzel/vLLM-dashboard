@@ -117,6 +117,7 @@ builder.Services.AddSingleton<IInferenceProbe, Dashboard.Application.Metrics.Inf
 builder.Services.AddSingleton<IGpuProvisionerFactory, Dashboard.Infrastructure.Docker.GpuProvisionerFactory>();
 builder.Services.AddSingleton<IDockerOrchestrator, Dashboard.Infrastructure.Docker.DockerOrchestrator>();
 builder.Services.AddSingleton<Dashboard.Application.Proxy.IModelProxyService, Dashboard.Application.Proxy.ModelProxyService>();
+builder.Services.AddSingleton<Dashboard.Application.Proxy.IInFlightTrafficTracker, Dashboard.Application.Proxy.InFlightTrafficTracker>();
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IActivityTracker, Dashboard.Application.Idle.ActivityTracker>();
 builder.Services.AddSingleton<Dashboard.Application.Logs.ILogStreamManager, Dashboard.Application.Logs.LogStreamManager>();
 

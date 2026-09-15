@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 
 namespace Dashboard.Application.Proxy;
 
@@ -15,9 +16,63 @@ public sealed class TrafficHub : Hub
     public const string ChunkEvent = "trafficChunk";
     public const string FinishedEvent = "trafficFinished";
 
+    private readonly IInFlightTrafficTracker _inFlight;
+    private readonly ILogger<TrafficHub> _logger;
+
+    public TrafficHub(IInFlightTrafficTracker inFlight, ILogger<TrafficHub> logger)
+    {
+        _inFlight = inFlight;
+        _logger = logger;
+    }
+
     public static string GroupFor(string sourceId) => "traffic_" + sourceId;
 
-    public Task JoinSource(string sourceId) => Groups.AddToGroupAsync(Context.ConnectionId, GroupFor(sourceId));
+    public async Task JoinSource(string sourceId)
+    {
+        // Whole body wrapped, including the group join itself: an unhandled exception
+        // anywhere in a Hub method kills the connection outright with no detail sent to
+        // the client (confirmed live — the browser only ever saw a bare "connection
+        // closed with an error"). Whatever the cause, that must never happen here, since
+        // it silently takes the group membership down with it — losing not just the
+        // catch-up but every *future* live broadcast for this connection too.
+        try
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, GroupFor(sourceId));
+
+            // Catch this connection up on whatever's already mid-stream for this source —
+            // without this, a viewer who opens Live Traffic (or switches source) after a
+            // request's "started" broadcast already went out sees nothing for it: every
+            // later chunk references a request id their card list never heard of.
+            foreach (var snap in _inFlight.GetForSource(sourceId))
+            {
+                await Clients.Caller.SendAsync(StartedEvent, snap.Started);
+                if (snap.ReasoningText.Length > 0)
+                {
+                    await Clients.Caller.SendAsync(ChunkEvent, new TrafficChunk
+                    {
+                        RequestId = snap.Started.RequestId,
+                        SourceId = sourceId,
+                        Text = snap.ReasoningText,
+                        Kind = TrafficChunkKind.Reasoning,
+                    });
+                }
+                if (snap.ContentText.Length > 0)
+                {
+                    await Clients.Caller.SendAsync(ChunkEvent, new TrafficChunk
+                    {
+                        RequestId = snap.Started.RequestId,
+                        SourceId = sourceId,
+                        Text = snap.ContentText,
+                        Kind = TrafficChunkKind.Content,
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Live Traffic catch-up replay failed for source {SourceId} (connection {ConnectionId}).", sourceId, Context.ConnectionId);
+        }
+    }
 
     public Task LeaveSource(string sourceId) => Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupFor(sourceId));
 }

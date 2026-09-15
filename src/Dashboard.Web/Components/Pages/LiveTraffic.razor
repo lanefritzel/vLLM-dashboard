@@ -117,9 +117,11 @@ else
     private readonly LinkedList<TrafficCard> _cards = new();
     private readonly Dictionary<string, TrafficCard> _cardsById = new();
     private bool _hubStarted;
+    private Task? _hubStartTask;
     private bool _jsReady;
     private bool _disposed;
     private string? _hubJoinedId;
+    private bool _joining;
     private int _hubStartAttempts;
     private bool _hubError;
 
@@ -152,7 +154,15 @@ else
         {
             if (!_hubStarted)
             {
-                await JS.InvokeVoidAsync("traffichub_start", _receiver!);
+                // Blazor can re-enter OnAfterRenderAsync before this await returns (e.g.
+                // the prerender pass followed almost immediately by the first interactive
+                // render) — without caching the in-flight task, a second re-entrant call
+                // would also see _hubStarted == false and fire a second traffichub_start,
+                // which stops/aborts the first connection's negotiation mid-flight
+                // ("connection was stopped during negotiation") and was the real cause of
+                // the live traffic connection dying right after it opened.
+                _hubStartTask ??= JS.InvokeVoidAsync("traffichub_start", _receiver!).AsTask();
+                await _hubStartTask;
                 _hubStarted = true;
             }
             _jsReady = true;
@@ -164,6 +174,7 @@ else
             // The first few failures are just static prerendering (JS interop genuinely
             // isn't available yet) — only treat this as a real connection problem once
             // it's failed to ever succeed across several renders.
+            _hubStartTask = null; // let the next render retry instead of getting stuck
             _hubStartAttempts++;
             if (_hubStartAttempts > 5 && !_jsReady)
             {
@@ -185,13 +196,26 @@ else
     private async Task EnsureJoinedAsync()
     {
         var src = SelectedSource;
-        if (src is null || !_jsReady) return;
+        // _joining guards the same re-entrancy hazard as _hubStartTask above: without
+        // it, two overlapping calls (e.g. two renders in quick succession) both see
+        // _hubJoinedId as not-yet-set and both invoke traffichub_join concurrently. A
+        // dropped call here is harmless — the next render calls this again once
+        // _joining clears, and _hubJoinedId still reflects the truth at that point.
+        if (src is null || !_jsReady || _joining) return;
         if (_hubJoinedId == src.Id) return;
 
-        if (_hubJoinedId is not null)
-            await JS.InvokeVoidAsync("traffichub_leave", _hubJoinedId);
-        await JS.InvokeVoidAsync("traffichub_join", src.Id);
-        _hubJoinedId = src.Id;
+        _joining = true;
+        try
+        {
+            if (_hubJoinedId is not null)
+                await JS.InvokeVoidAsync("traffichub_leave", _hubJoinedId);
+            await JS.InvokeVoidAsync("traffichub_join", src.Id);
+            _hubJoinedId = src.Id;
+        }
+        finally
+        {
+            _joining = false;
+        }
     }
 
     [JSInvokable]
@@ -200,6 +224,10 @@ else
         if (_disposed) return;
         var e = Deserialize<TrafficRequestStarted>(json);
         if (e is null || e.SourceId != SelectedSource?.Id) return;
+        // Joining the hub group replays any request already mid-stream, which can very
+        // rarely race with that same request's live "started" broadcast landing right
+        // after — without this guard that'd add a second, empty duplicate card for it.
+        if (_cardsById.ContainsKey(e.RequestId)) return;
 
         var card = new TrafficCard
         {
