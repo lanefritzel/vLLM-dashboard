@@ -45,6 +45,11 @@ public sealed class ModelProxyService : IModelProxyService
     // flood the browser or the SignalR connection.
     private const int MaxBroadcastCharsPerRequest = 20_000;
 
+    // A normal single streamed SSE delta is tens to low hundreds of characters. Anything
+    // this large signals an abnormal payload (e.g. a reasoning parser resending the full
+    // cumulative text instead of an incremental delta) — see StreamWithTeeAsync.
+    private const int MaxTeeParsePayloadChars = 32_768;
+
     // Headers that must never be copied verbatim between the inbound request/outbound
     // response — either because HttpClient sets them itself from the content, or
     // because they describe THIS hop's transport, not the proxied one.
@@ -332,6 +337,20 @@ public sealed class ModelProxyService : IModelProxyService
         var broadcastCharsSent = 0;
         var truncationNoted = false;
 
+        // Live Traffic only shows an in-flight stream live, in someone's open browser
+        // tab — nothing about it was ever written anywhere durable. A live incident
+        // (a long generation going silent partway through, reproducible only through
+        // this proxy and not against vLLM directly) had no server-side trail at all to
+        // look at after the fact, forcing live packet capture on production to get any
+        // evidence. This heartbeat + oversized-payload warning exist so the same class
+        // of incident leaves an actual record in the dashboard's own logs next time.
+        var sw = Stopwatch.StartNew();
+        var lastHeartbeat = TimeSpan.Zero;
+        long totalBytesForwarded = 0;
+        var maxPayloadCharsSeen = 0;
+        var oversizedPayloadsSkipped = 0;
+        _logger.LogInformation("Proxy stream {RequestId} for source {SourceId} starting.", requestId, sourceId);
+
         void EmitText(string text, TrafficChunkKind kind)
         {
             if (text.Length == 0 || broadcastCharsSent >= MaxBroadcastCharsPerRequest)
@@ -349,6 +368,36 @@ public sealed class ModelProxyService : IModelProxyService
 
         void ProcessPayload(string payload)
         {
+            // A normal single SSE delta is a handful of characters. If a reasoning
+            // parser ever sends the FULL cumulative text on every event instead of an
+            // incremental delta (a real bug class, and the leading suspect for a live
+            // incident where long-running generations went silent specifically when
+            // proxied through this app but not against vLLM directly), re-parsing that
+            // ever-growing JSON string on every single token turns this mirror-only
+            // logic into O(n^2) work over the length of the whole response. The real
+            // client already got its bytes above, untouched — skipping the mirror for
+            // an abnormally large single line costs nothing but Live Traffic fidelity
+            // for that one line, and completely removes the runaway-cost risk.
+            if (payload.Length > maxPayloadCharsSeen)
+                maxPayloadCharsSeen = payload.Length;
+
+            if (payload.Length > MaxTeeParsePayloadChars)
+            {
+                oversizedPayloadsSkipped++;
+                // Only the first occurrence gets a full snippet — if this is truly a
+                // parser resending cumulative text, it'll repeat on every subsequent
+                // token for the rest of the response, and logging a growing JSON blob
+                // every time would just recreate the exact cost problem this guards
+                // against, in the logger instead of the JSON parser.
+                if (oversizedPayloadsSkipped == 1)
+                {
+                    _logger.LogWarning(
+                        "Proxy stream {RequestId}: skipped mirroring an abnormally large SSE payload ({Length} chars, cap is {Cap}) — first 300 chars: {Snippet}",
+                        requestId, payload.Length, MaxTeeParsePayloadChars, payload[..Math.Min(300, payload.Length)]);
+                }
+                return;
+            }
+
             // Reasoning arrives first in practice (the model "thinks" before it
             // answers), so emit it ahead of any content this same line also carries.
             var reasoning = TryExtractReasoningText(payload);
@@ -372,39 +421,76 @@ public sealed class ModelProxyService : IModelProxyService
             ProcessPayload(payload);
         }
 
-        await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(ct);
-        var buffer = new byte[8192];
-        int read;
-        while ((read = await upstreamStream.ReadAsync(buffer, ct)) > 0)
+        try
         {
-            await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
-            await context.Response.Body.FlushAsync(ct);
-
-            var charCount = decoder.GetCharCount(buffer, 0, read, flush: false);
-            if (charCount == 0) continue;
-            var chars = new char[charCount];
-            decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
-
-            lineBuffer.Append(chars);
-            if (rawFallback.Length < MaxBroadcastCharsPerRequest)
-                rawFallback.Append(chars);
-
-            int newlineIndex;
-            while ((newlineIndex = IndexOfNewline(lineBuffer)) >= 0)
+            await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(ct);
+            var buffer = new byte[8192];
+            int read;
+            while ((read = await upstreamStream.ReadAsync(buffer, ct)) > 0)
             {
-                var line = lineBuffer.ToString(0, newlineIndex);
-                lineBuffer.Remove(0, newlineIndex + 1);
-                ProcessLine(line);
+                totalBytesForwarded += read;
+                await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+                await context.Response.Body.FlushAsync(ct);
+
+                var charCount = decoder.GetCharCount(buffer, 0, read, flush: false);
+                if (charCount > 0)
+                {
+                    var chars = new char[charCount];
+                    decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
+
+                    lineBuffer.Append(chars);
+                    if (rawFallback.Length < MaxBroadcastCharsPerRequest)
+                        rawFallback.Append(chars);
+
+                    int newlineIndex;
+                    while ((newlineIndex = IndexOfNewline(lineBuffer)) >= 0)
+                    {
+                        var line = lineBuffer.ToString(0, newlineIndex);
+                        lineBuffer.Remove(0, newlineIndex + 1);
+                        ProcessLine(line);
+                    }
+                }
+
+                if (sw.Elapsed - lastHeartbeat > TimeSpan.FromSeconds(30))
+                {
+                    lastHeartbeat = sw.Elapsed;
+                    _logger.LogInformation(
+                        "Proxy stream {RequestId}: {Elapsed:0}s elapsed, {Bytes} bytes forwarded, largest single SSE payload seen {MaxPayload} chars, {Skipped} oversized payload(s) skipped from mirroring.",
+                        requestId, sw.Elapsed.TotalSeconds, totalBytesForwarded, maxPayloadCharsSeen, oversizedPayloadsSkipped);
+                }
             }
+
+            if (lineBuffer.Length > 0)
+                ProcessLine(lineBuffer.ToString());
+
+            // Non-streaming responses (stream:false) are one JSON object, not "data:" lines —
+            // fall back to parsing the whole body once nothing SSE-shaped was seen.
+            if (!sawSseLine)
+                ProcessPayload(rawFallback.ToString());
+
+            _logger.LogInformation(
+                "Proxy stream {RequestId} finished: {Elapsed:0}s, {Bytes} bytes forwarded, largest single SSE payload {MaxPayload} chars.",
+                requestId, sw.Elapsed.TotalSeconds, totalBytesForwarded, maxPayloadCharsSeen);
         }
-
-        if (lineBuffer.Length > 0)
-            ProcessLine(lineBuffer.ToString());
-
-        // Non-streaming responses (stream:false) are one JSON object, not "data:" lines —
-        // fall back to parsing the whole body once nothing SSE-shaped was seen.
-        if (!sawSseLine)
-            ProcessPayload(rawFallback.ToString());
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation(
+                "Proxy stream {RequestId} cancelled after {Elapsed:0}s, {Bytes} bytes forwarded (client disconnected or request cancelled).",
+                requestId, sw.Elapsed.TotalSeconds, totalBytesForwarded);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Previously unguarded: an exception anywhere in this loop (a bad decode, a
+            // write to an already-closed response, anything) propagated silently out of
+            // ForwardAsync with nothing logging what happened or how far the stream had
+            // gotten — exactly the blind spot that made a live incident require raw
+            // packet capture on production to get any evidence at all.
+            _logger.LogError(ex,
+                "Proxy stream {RequestId} failed after {Elapsed:0}s, {Bytes} bytes forwarded.",
+                requestId, sw.Elapsed.TotalSeconds, totalBytesForwarded);
+            throw;
+        }
     }
 
     private static int IndexOfNewline(StringBuilder sb)

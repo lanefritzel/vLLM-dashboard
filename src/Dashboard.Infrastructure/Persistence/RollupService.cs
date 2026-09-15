@@ -138,6 +138,17 @@ public sealed class RollupService : IRetentionService, IHostedService
             await Task.Delay(50, ct);
         } while (deleted > 0);
 
+        // Same retention window as metrics — DbLoggerProvider writes here continuously,
+        // so without pruning this would grow forever, exactly the "physical files that
+        // fill up the disk" problem moved into the database instead of solved.
+        int deletedLogs;
+        do
+        {
+            deletedLogs = await db.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM \"AppLogs\" WHERE \"Id\" IN (SELECT \"Id\" FROM \"AppLogs\" WHERE \"TimestampUtc\" < {cutoff} LIMIT {batchSize})", ct);
+            await Task.Delay(50, ct);
+        } while (deletedLogs > 0);
+
         _logger.LogInformation("Retention run complete (cutoff {Cutoff}, retention {Days}d, pruned ~done).", cutoff, retentionDays);
     }
 

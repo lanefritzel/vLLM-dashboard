@@ -117,6 +117,41 @@ namespace Dashboard.Infrastructure.Migrations
                     b.ToTable("Configs");
                 });
 
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.AppLogEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("Exception")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("TimestampUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TimestampUtc");
+
+                    b.ToTable("AppLogs", (string)null);
+                });
+
             modelBuilder.Entity("Dashboard.Infrastructure.Persistence.LaunchSpecEntity", b =>
                 {
                     b.Property<Guid>("Id")

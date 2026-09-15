@@ -159,7 +159,12 @@ public static class PrometheusParser
             case "vllm:num_requests_running": m.Running = value; return true;
             case "vllm:num_requests_waiting": m.Waiting = value; return true;
 
-            case "vllm:kv_cache_usage_perc": m.KvPct = value; return true;
+            // Despite the "_perc" name, vLLM emits this as a 0-1 fraction ("1 means 100
+            // percent usage" per its own HELP text) — a real incident found the
+            // dashboard silently displaying e.g. 21% KV usage as "0.2%" for as long as
+            // this went unscaled, with existing tests actively asserting the wrong
+            // (unscaled) value rather than catching it.
+            case "vllm:kv_cache_usage_perc": m.KvPct = value * 100.0; return true;
             case "vllm:gpu_cache_usage_avg":
                 m.KvPct ??= value * 100.0; // legacy 0-1 scale, only if primary absent
                 return true;

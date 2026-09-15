@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Dashboard.Web.Components;
 using Dashboard.Web.Components.Account;
 using Dashboard.Web.Middleware;
@@ -17,6 +18,17 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? Environment.GetEnvironmentVariable("DB_CONNECTION")
     ?? "Host=localhost;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard";
+
+// Durable log capture: docker logs is tied to the container's lifetime and is wiped
+// on every redeploy — a real incident needed evidence to survive that. DbLogger writes
+// into this channel (never blocking/awaiting), DbLogWriterService batches it into the
+// database in the background, and RollupService prunes it on the same retention
+// window as metrics, so this never grows unbounded.
+var dbLogChannel = System.Threading.Channels.Channel.CreateUnbounded<Dashboard.Infrastructure.Logging.AppLogRecord>();
+builder.Services.AddSingleton(dbLogChannel.Reader);
+builder.Logging.AddProvider(new Dashboard.Infrastructure.Logging.DbLoggerProvider(
+    dbLogChannel.Writer, minLevelForApp: LogLevel.Information, minLevelForOther: LogLevel.Warning));
+builder.Services.AddHostedService<Dashboard.Infrastructure.Logging.DbLogWriterService>();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();

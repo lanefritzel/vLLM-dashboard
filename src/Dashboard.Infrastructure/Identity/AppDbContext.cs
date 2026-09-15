@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
     public DbSet<LaunchSpecEntity> LaunchSpecs => Set<LaunchSpecEntity>();
     public DbSet<MetricsSampleEntity> MetricsSamples => Set<MetricsSampleEntity>();
     public DbSet<MetricsRollupEntity> MetricsRollups => Set<MetricsRollupEntity>();
+    public DbSet<AppLogEntity> AppLogs => Set<AppLogEntity>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -145,6 +146,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
                 .WithMany()
                 .HasForeignKey(r => r.SourceId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<AppLogEntity>(entity =>
+        {
+            entity.ToTable("AppLogs");
+            entity.HasKey(l => l.Id);
+            entity.Property(l => l.Id).ValueGeneratedOnAdd();
+            entity.Property(l => l.Level).HasMaxLength(20).IsRequired();
+            entity.Property(l => l.Category).HasMaxLength(300).IsRequired();
+            entity.Property(l => l.Message).IsRequired();
+            // Retention pruning (RollupService) deletes by age; browsing by recency is
+            // the other natural access pattern — both want this index.
+            entity.HasIndex(l => l.TimestampUtc);
         });
     }
 }

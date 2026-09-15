@@ -26,7 +26,7 @@ public class PrometheusParserTests
         var m = result.Models["qwen3.8-vllm"];
         Assert.NotNull(m.Running); Assert.Equal(5, m.Running!.Value, 1e-6);       // 3 + 2 across engines
         Assert.NotNull(m.Waiting); Assert.Equal(0, m.Waiting!.Value, 1e-6);
-        Assert.NotNull(m.KvPct); Assert.Equal(0.42, m.KvPct!.Value, 1e-6);
+        Assert.NotNull(m.KvPct); Assert.Equal(42.0, m.KvPct!.Value, 1e-6);
         Assert.NotNull(m.GenTokensTotal); Assert.Equal(150, m.GenTokensTotal!.Value, 1e-6); // 100 + 50
         Assert.NotNull(m.TtftSum); Assert.Equal(1.5, m.TtftSum!.Value, 1e-6);
         Assert.NotNull(m.TtftCount); Assert.Equal(3, m.TtftCount!.Value, 1e-6);
@@ -64,7 +64,7 @@ public class PrometheusParserTests
             "vllm:gpu_cache_usage_avg{model_name=\"m\"} 0.5\n").PickPrimary();
         Assert.NotNull(both);
         Assert.NotNull(both!.KvPct);
-        Assert.Equal(0.7, both.KvPct!.Value, 1e-6); // primary wins over legacy
+        Assert.Equal(70.0, both.KvPct!.Value, 1e-6); // primary wins over legacy
     }
 
     [Fact]
