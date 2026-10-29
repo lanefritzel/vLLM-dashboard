@@ -173,4 +173,16 @@ public sealed class MetricsHistory : IMetricsHistory
 
         return agg is null ? null : new GenerationThroughputStats { Peak = agg.Peak, Avg = agg.Avg, Low = agg.Low };
     }
+
+    public async Task ClearAsync(string sourceId, CancellationToken ct = default)
+    {
+        if (!Guid.TryParse(sourceId, out var sid))
+            return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        await db.MetricsSamples.Where(s => s.SourceId == sid).ExecuteDeleteAsync(ct);
+        await db.MetricsRollups.Where(r => r.SourceId == sid).ExecuteDeleteAsync(ct);
+    }
 }

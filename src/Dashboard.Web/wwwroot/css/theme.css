@@ -187,6 +187,8 @@ a:hover { color: var(--accent-2); }
 
 /* Peak/avg/low alongside the live Generation tok/s value */
 .gen-stats { font-size: 0.68rem; line-height: 1.4; color: var(--muted); text-align: right; white-space: nowrap; }
+.gen-stats-reset { display: block; color: var(--muted); text-decoration: underline; text-decoration-style: dotted; }
+.gen-stats-reset:hover { color: var(--red); }
 
 /* Live charts */
 .chart-wrap { position: relative; height: 240px; }

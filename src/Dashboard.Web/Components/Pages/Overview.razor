@@ -11,6 +11,7 @@
 @inject ISourceCatalog Sources
 @inject IMetricsHistory History
 @inject SourceSelection Selection
+@inject Dashboard.Web.Components.Shared.IDialogService Dialogs
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
 
@@ -137,6 +138,7 @@
                                 <div title="Peak generation throughput in the last 30 days">▲ @Fmt(_genStats?.Peak)</div>
                                 <div title="Average generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Avg) avg</div>
                                 <div title="Lowest generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Low) low</div>
+                                <a href="javascript:void(0)" class="gen-stats-reset" title="Delete generation history and reset these stats" @onclick="ResetGenStatsAsync">reset</a>
                             </div>
                         </div>
                     </div>
@@ -348,6 +350,31 @@
 
         StateHasChanged();
     });
+
+    private async Task ResetGenStatsAsync()
+    {
+        var src = SelectedSource;
+        if (src is null) return;
+
+        var ok = await Dialogs.ConfirmAsync(
+            "This permanently deletes all generation history for this source — the Peak/Avg/Low stats above and the History/Logs views for it will be empty until new data comes in. This cannot be undone.",
+            title: "Clear generation stats?",
+            confirmText: "Clear");
+        if (!ok) return;
+
+        try
+        {
+            await History.ClearAsync(src.Id);
+        }
+        catch
+        {
+            return;
+        }
+
+        _genStats = null;
+        await RefreshGenStatsAsync(src.Id, force: true);
+        StateHasChanged();
+    }
 
     private async Task RefreshGenStatsAsync(string sourceId, bool force)
     {

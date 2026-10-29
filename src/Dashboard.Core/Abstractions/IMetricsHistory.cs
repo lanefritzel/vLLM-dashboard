@@ -19,6 +19,11 @@ public interface IMetricsHistory
     /// never generated anything, or the window exceeds the configured retention).</summary>
     Task<GenerationThroughputStats?> GetActiveGenerationStatsAsync(
         string sourceId, TimeSpan window, CancellationToken ct = default);
+
+    /// <summary>Permanently deletes all raw samples and rollups for the given
+    /// source — used to reset the generation throughput stats shown on Overview.
+    /// Irreversible; callers must confirm with the user first.</summary>
+    Task ClearAsync(string sourceId, CancellationToken ct = default);
 }
 
 public sealed record GenerationThroughputStats

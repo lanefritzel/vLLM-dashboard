@@ -28,14 +28,22 @@ services:
     environment:
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
       ASPNETCORE_ENVIRONMENT: Production
-      ASPNETCORE_URLS: "http://+:8080"
       DATAPROTECTION_KEYS_DIR: /data/dataprotection
       # Only needed for a source you want to hot-swap models on, e.g. tcp://<servername-or-ip>:2375
       DOCKER_HOST: ""
+      # HTTPS, served alongside HTTP on 8080 (not a redirect -- both stay live).
+      # Certificate/KeyPath here is for a PEM cert+key pair; swap for
+      # Certificate__Path + Certificate__Password if yours is a PFX instead.
+      Kestrel__Endpoints__Https__Url: "https://+:8445"
+      Kestrel__Endpoints__Https__Certificate__Path: /certs/tes.home.pem
+      Kestrel__Endpoints__Https__Certificate__KeyPath: /certs/tes.home.key
     ports:
       - "8080:8080"
+      - "8445:8445"
     volumes:
       - dataprotection:/data
+      # Host directory holding the cert/key issued by your home CA.
+      - ../certs:/certs:ro
 
 volumes:
   pgdata:
