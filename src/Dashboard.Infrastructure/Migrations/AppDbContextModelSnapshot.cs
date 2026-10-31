@@ -865,6 +865,9 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<bool>("SpeculativeDecoding")
                         .HasColumnType("boolean");
 
+                    b.Property<int?>("SpeculativeTokens")
+                        .HasColumnType("integer");
+
                     b.Property<string>("ToolCallParser")
                         .HasColumnType("text");
 

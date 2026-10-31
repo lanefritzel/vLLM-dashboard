@@ -6,6 +6,7 @@ Tracked here, not in the Outline KB, per the Build Plan's working rules.
 |---|---|---|---|
 | P00 | done | 2026-10-31 | See below. |
 | P01a | done | 2026-10-31 | See below. |
+| P09a | done | 2026-10-31 | Done out of table order, before P01b -- see below. |
 
 ## P00 -- Baseline & test harness
 
@@ -125,6 +126,51 @@ Postgres that silently skips if unset).
 
 Out of scope, not touched: reading/writing these tables from UI/API (P09b+),
 the legacy tables, conversion (P01b).
+
+## P09a -- Arg builder + compatibility pass
+
+Done out of the table's listed order. P01b's own Definition of done needs a
+golden test comparing a converted recipe's arg-builder output to the oracle
+argv -- but P01b is listed as needing only P01a, and P09a (the arg builder)
+didn't exist yet. Flagged this to the owner rather than stub it; owner chose
+to do P09a first, then come back to P01b.
+
+Open point (a) from the phase page (owner-confirmed 2026-10-31, before
+coding): added `recipes.speculative_tokens` (nullable int) via a follow-up
+migration (`AddRecipeSpeculativeTokens`); `ArgBuilder` hard-codes the
+speculative-config method to `"mtp"` (the only method the schema supports).
+
+Open point (b) from the phase page (not actionable yet, logged for later):
+P03a's deploy body will need an `env` map so `extra_env` actually reaches
+the child process -- P03a doesn't exist yet in this repo, so this is a
+one-line follow-up to make when P03a is built, not something to act on now.
+
+Done:
+- `Dashboard.Core.Recipes.ArgBuilder.Build(model, recipe, instance, server)`
+  -- pure, no I/O -- plus plain input records (`Recipe`, `RecipeModel`,
+  `RecipeInstance`, `RecipeServer`, `RecipeExtraArg`, `RecipeEnvOverride`)
+  deliberately decoupled from the EF `V2.*` entities, so this stays pure
+  code with zero DB dependency as the phase page requires; a caller maps
+  from the persisted recipe once that wiring exists (P09b+).
+- `Dashboard.Core.Recipes.CompatibilityPass.Check(model, recipe, server)` --
+  hard-blocks (tensor-parallel-size > GPU count, missing model path, model
+  not "available") and soft-warnings (oversized max_model_len, GPU memory
+  utilization too low for the model's weight size). Decides, doesn't
+  enforce -- that's P09b/P10a/the UI's job.
+- Golden-table tests (`tests/Dashboard.Core.Tests/ArgBuilderTests.cs`,
+  `CompatibilityPassTests.cs`): every DoD bullet, including the live-qwen
+  fixture compared against the oracle as a flag->value dictionary rather
+  than positionally -- the oracle command places `--port` right after
+  `--served-model-name` (the old app's own convention), while this
+  builder's fixed precedence always injects `--port` last, so a strict
+  positional match would fail even on fully correct output. Noted this
+  interpretation explicitly in the test's doc comment since it's a
+  judgment call on what "flag-for-flag" means.
+- `./scripts/gate.sh` still passes (142 Core.Tests, up from 123 -- 19 new;
+  10 Infrastructure.Tests; 6 fake-vllm smoke tests).
+
+Out of scope, not touched: persistence, UI, calling the supervisor (P10a),
+save-time validation rules (P09b).
 
 ## Deviations / findings worth flagging
 

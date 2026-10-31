@@ -28,6 +28,12 @@ public class Recipe
     public int BlockSize { get; set; } = 16;
     public bool SpeculativeDecoding { get; set; }
 
+    /// <summary>num_speculative_tokens for --speculative-config; method is hard-coded
+    /// to "mtp" (P09a, owner-confirmed 2026-10-31) since that's the only method the
+    /// recipe schema supports today. Null when speculative decoding has no token
+    /// count configured yet, even if SpeculativeDecoding is true.</summary>
+    public int? SpeculativeTokens { get; set; }
+
     // 4 - Tools & reasoning
     public bool EnableAutoToolChoice { get; set; }
     public string? ToolCallParser { get; set; }
