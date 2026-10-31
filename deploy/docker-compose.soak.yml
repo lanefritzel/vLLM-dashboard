@@ -1,0 +1,30 @@
+# P01c: postgres <-> soak harness on one bridge network, with NO published
+# port anywhere in the path -- that's the entire point of this test (production
+# runs host-networked specifically because the published-port/NAT path once
+# silently corrupted an idle pooled connection; this checks whether the bridge
+# avoids that).
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dashboard
+      POSTGRES_USER: dashboard
+      POSTGRES_PASSWORD: dashboard
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "5432"
+
+  postgres-soak:
+    build:
+      context: ../tests/integration/postgres-soak
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SOAK_DB_CONNECTION: "Host=postgres;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"

@@ -8,6 +8,7 @@ Tracked here, not in the Outline KB, per the Build Plan's working rules.
 | P01a | done | 2026-10-31 | See below. |
 | P09a | done | 2026-10-31 | Done out of table order, before P01b -- see below. |
 | P01b | code + tests done; report awaiting owner sign-off | 2026-10-31 | See below. |
+| P01c | done -- soak passed | 2026-10-31 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -225,6 +226,68 @@ Done:
 Out of scope, not touched: dropping the legacy tables and wiring this into
 the real migration chain (P16a), moving model files on disk, registering
 supervisors (P15b).
+
+## P01c -- Postgres-over-bridge soak test
+
+Design decision: the page's two bullets ("open a pooled connection -> idle ->
+query -> repeat" and "include a Blazor-like pattern: a long-lived circuit
+that touches the DB only occasionally") describe the same thing, not two
+separate tests -- a long-lived connection, opened once, touched only
+occasionally. Implemented as one harness: a single `NpgsqlConnection` opened
+once and held open for the whole run (never returned to the pool between
+cycles), queried once per idle gap. This also meant `Connection Idle
+Lifetime=0` (my first attempt, to stop Npgsql's own pool-pruning from
+masking a real network reset) was pointless and actively wrong -- Npgsql's
+idle-pruning only applies to connections sitting idle *in the pool* after
+Close/Dispose, never to one the application is still holding open, and
+Npgsql also flatly rejects `0` as a value (crashed on startup: "Connection
+Idle Lifetime 00:00:00 under ConnectionPruningInterval 00:00:10"). Removed
+the setting entirely once I understood why it didn't apply here.
+
+Done:
+- `tests/integration/postgres-soak/` (standalone console app, plain Npgsql,
+  not part of the main solution -- it's Docker-only integration tooling, not
+  a unit test `dotnet test`/`gate.sh` should ever run): opens one connection,
+  idles, queries, repeats for N cycles; recovers with a fresh connection
+  after a failed cycle so one broken cycle doesn't hide whether later ones
+  also fail; prints a pass/fail summary and a matching exit code.
+- `deploy/docker-compose.soak.yml`: postgres + the harness on one bridge
+  network. Postgres has no `ports:` entry at all -- `expose` only -- so
+  there is no published-port/NAT path anywhere in the test, which is the
+  entire point.
+- `scripts/soak-postgres-bridge.sh [idle-minutes] [cycles]`: one command,
+  parameterised, builds+runs+tears down. Defaults match the page's spec
+  (10 min x 3 cycles); sanity-checked first with `0.1 2` (passed, 0 errors)
+  before committing to the full-length run.
+- Official run (10 min x 3 cycles, ~30+ min) kicked off in the background
+  with the owner's go-ahead; result below once it finishes.
+
+### Official soak result
+
+**PASSED.** 3 cycles x 10 minute idle gaps, bridge-only Postgres (no
+published port anywhere in the path), zero connection errors, exit code 0:
+
+```
+postgres-soak: 3 cycle(s) x 10 minute(s) idle, connecting to host 'postgres'.
+postgres-soak: opened the long-lived connection (Blazor-circuit-like -- held open for the whole run).
+postgres-soak: initial query, before any idling -> 1
+postgres-soak: cycle 1/3 -- idling 10 minute(s)...
+postgres-soak: cycle 1 post-idle query -> 1
+postgres-soak: cycle 2/3 -- idling 10 minute(s)...
+postgres-soak: cycle 2 post-idle query -> 1
+postgres-soak: cycle 3/3 -- idling 10 minute(s)...
+postgres-soak: cycle 3 post-idle query -> 1
+postgres-soak: PASSED -- zero connection errors across 3 cycle(s), idle gap 10 minute(s) each.
+```
+
+The production incident this guards against (a pooled connection silently
+reset while idle, reached through Docker's published-port/NAT path) does
+not reproduce over a bridge network with no published port in the path --
+the new design's bridge topology is **not blocked** by this risk. No
+fallback to host networking needed for Postgres<->dashboard. (A benign
+Npgsql GSS-auth-library warning -- `Cannot load library libgssapi_krb5.so.2`
+-- appears in the log; it's a fallback-path warning, not an error, and
+every query still succeeded.)
 
 ## Deviations / findings worth flagging
 
