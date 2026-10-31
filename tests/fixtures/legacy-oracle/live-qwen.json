@@ -1,0 +1,77 @@
+{
+  "description": "The live qwen row (tes.home / tes-home / qwen3.8-vllm), captured from a restored copy of the live DB on 2026-10-31 for P01b. The owner confirmed this mostly isn't set via the dashboard's UI -- values are set directly in the production compose file instead -- so the DB row has drifted from what's actually running: gpu-memory-utilization .80 vs the compose's 0.90; missing enforce-eager/kv-cache-dtype/block-size/max-num-batched-tokens/speculative-config; an extra mm-encoder-tp-mode with no recipe dial; and modelPathOrRepoId below is a STALE path -- the real compose mounts /home/lanef/hf-models/Qwen3.8-27B-INT4, not this one (which is commented out in the real compose). All of this drift is intentional fixture fidelity, not a bug -- it's exactly what the conversion report exists to surface.",
+  "physicalServer": {
+    "label": "tes.home",
+    "dockerHost": "tcp://tes.home:2375",
+    "gpuVendor": "intel",
+    "gpuVramTotalGb": null,
+    "hfCacheHostPath": "/media/external6tb/llm-models/hf-cache",
+    "hfToken": null
+  },
+  "sources": [
+    {
+      "slug": "tes-home",
+      "label": "tes — main vLLM",
+      "type": "vllm",
+      "metricsUrl": "http://tes.home:9999",
+      "inferenceUrl": "http://tes.home:9999",
+      "dockerHost": "tcp://tes.home:2375",
+      "active": true,
+      "launchSpec": {
+        "image": "intel/llm-scaler-vllm:0.21.0-b3",
+        "restartPolicy": "unless-stopped",
+        "servingPort": 9999,
+        "networkMode": "host",
+        "ipcMode": "host",
+        "privileged": true,
+        "entrypoint": "vllm",
+        "devices": [{ "hostPath": "/dev/dri", "containerPath": "/dev/dri" }],
+        "volumes": [{ "host": "/dev/dri/by-path", "container": "/dev/dri/by-path", "readOnly": false }]
+      },
+      "models": [
+        {
+          "name": "qwen3.8-vllm",
+          "displayName": "Qwen3.8 (vLLM)",
+          "modelSource": "local",
+          "modelPathOrRepoId": "/media/external6tb/llm-models/hf-cache/Qwen3.8-27B-INT4",
+          "isActive": true,
+          "optionsJson": {
+            "dtype": "float16",
+            "enable-auto-tool-choice": "true",
+            "tool-call-parser": "qwen3_coder",
+            "reasoning-parser": "qwen3",
+            "max-model-len": "131072",
+            "gpu-memory-utilization": ".80",
+            "mm-encoder-tp-mode": "data"
+          }
+        },
+        {
+          "name": "Qwen3.8-27B-GSQ-RCO",
+          "displayName": "Qwen3.8-27B-GSQ-RCO",
+          "modelSource": "huggingface",
+          "modelPathOrRepoId": "ls",
+          "isActive": false,
+          "optionsJson": {
+            "max-model-len": "131072",
+            "gpu-memory-utilization": "0.9",
+            "dtype": "float16",
+            "enable-auto-tool-choice": "true",
+            "tool-call-parser": "qwen3_coder",
+            "reasoning-parser": "qwen3"
+          }
+        },
+        {
+          "name": "ggml-org/Qwen3.8-27B-GGUF",
+          "displayName": null,
+          "modelSource": "huggingface",
+          "modelPathOrRepoId": "ggml-org/Qwen3.8-27B-GGUF",
+          "isActive": false,
+          "optionsJson": {
+            "max-model-len": "131072",
+            "gpu-memory-utilization": "0.8"
+          }
+        }
+      ]
+    }
+  ]
+}

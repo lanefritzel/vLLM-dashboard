@@ -32,7 +32,11 @@ public static class ArgBuilder
         // 2 - recipe dials
         AppendFlag(argv, "--served-model-name", recipe.ServedModelName);
         AppendFlag(argv, "--max-model-len", recipe.MaxModelLen.ToString(CultureInfo.InvariantCulture));
-        AppendFlag(argv, "--gpu-memory-utilization", recipe.GpuMemoryUtilization.ToString(CultureInfo.InvariantCulture));
+        // "0.####": a plain ToString() on a value that started life as a float
+        // (e.g. Postgres "real", widened to this field's double) can print up to
+        // 17 garbage digits (0.8f -> "0.800000011920929") -- rounds that away
+        // while still showing up to 4 real decimal places.
+        AppendFlag(argv, "--gpu-memory-utilization", recipe.GpuMemoryUtilization.ToString("0.####", CultureInfo.InvariantCulture));
         if (!IsAuto(recipe.KvCacheDtype))
             AppendFlag(argv, "--kv-cache-dtype", recipe.KvCacheDtype);
         if (!IsAuto(recipe.Dtype))

@@ -23,6 +23,9 @@
     <!-- Lets Dashboard.Core.Tests unit-test internal, pure helpers (e.g.
          DockerOrchestrator.BuildCreatePayload) without a live Docker daemon. -->
     <InternalsVisibleTo Include="Dashboard.Core.Tests" />
+    <!-- P01b's golden test needs BuildCreatePayload as the oracle, alongside the
+         (DB-backed) conversion routine tests that already live in this project. -->
+    <InternalsVisibleTo Include="Dashboard.Infrastructure.Tests" />
   </ItemGroup>
 
 </Project>

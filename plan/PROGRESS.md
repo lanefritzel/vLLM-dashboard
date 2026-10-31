@@ -7,6 +7,7 @@ Tracked here, not in the Outline KB, per the Build Plan's working rules.
 | P00 | done | 2026-10-31 | See below. |
 | P01a | done | 2026-10-31 | See below. |
 | P09a | done | 2026-10-31 | Done out of table order, before P01b -- see below. |
+| P01b | code + tests done; report awaiting owner sign-off | 2026-10-31 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -171,6 +172,59 @@ Done:
 
 Out of scope, not touched: persistence, UI, calling the supervisor (P10a),
 save-time validation rules (P09b).
+
+## P01b -- Conversion migration (old rows -> new)
+
+Needs a copy of the live DB -- owner pulled one via SSH + `pg_dump` (not read
+directly by me; restored locally, converted/verified, then the throwaway
+container and dump file were deleted, per the page's "do not read the live
+DB yourself" rule).
+
+Key findings along the way (all owner-confirmed before coding/finalizing):
+- `plan/conversion-mapping.md` -- old column -> new column, approved before
+  any code was written, including two resolved open questions (status for
+  never-downloaded models -> `download_failed` with a report note; the path
+  scheme note was about the container-side mount, not the stored host path).
+- Owner shared the real production compose file: confirmed the DB's stored
+  model options and path for `qwen3.8-vllm` have drifted from what's
+  actually running (owner sets values via compose directly, rarely uses the
+  dashboard's model UI). This isn't a bug to fix -- it's exactly what the
+  conversion report exists to surface, and now does (see
+  `plan/p01b-conversion-report-live-db.md`).
+- The golden test needed two comparison exclusions beyond the page's own
+  "modulo the instance port and compose-owned settings" wording, both
+  owner-confirmed: the container model path (old resolves it from the
+  model's *served name*, new resolves it from the model's *host path* --
+  genuinely different, redesigned schemes, not a bug) and flags the new
+  arg builder always emits with a default (`--max-num-batched-tokens`,
+  `--block-size`) even when the legacy row never configured them -- a
+  subset match (every oracle flag must match) rather than set equality.
+
+Done:
+- `src/Dashboard.Infrastructure/Conversion/`: `LegacyConversionService`
+  (transactional, idempotent -- keyed by the same natural keys the new
+  schema already enforces uniqueness on, so a second run finds everything
+  already there and inserts nothing), `ConversionReport`/`ConversionReportLine`,
+  `ILegacyConversionService`.
+- `tests/fixtures/legacy-oracle/*.json`: `live-qwen.json` (the real live row,
+  including its known drift), `ollama-source.json`, `two-sources-one-server.json`.
+- `tests/Dashboard.Infrastructure.Tests/`: `LegacyOracleFixture`/`LegacyOracleFixtureSeeder`
+  (load + seed the above), `LegacyConversionServiceTests` (7 tests covering
+  every DoD bullet), `LiveDbConversionManualCheck` (env-var-gated, skipped by
+  default -- re-run instructions in its doc comment for when this needs
+  re-verifying, e.g. before P16a).
+- Ran the routine against the actual restored live DB copy: 2 servers, 1
+  instance, 4 models (1 available, 3 `download_failed` -- never downloaded,
+  not a real failure), 4 recipes, 0 Ollama sources, idempotent on a second
+  run, Identity row (1 user) unchanged. Full report:
+  `plan/p01b-conversion-report-live-db.md` -- **awaiting owner review**, per
+  the DoD's last bullet.
+- `./scripts/gate.sh` still passes (142 Core.Tests, 17 Infrastructure.Tests
+  [10 + 6 new + 1 env-gated skip], 6 fake-vllm smoke tests).
+
+Out of scope, not touched: dropping the legacy tables and wiring this into
+the real migration chain (P16a), moving model files on disk, registering
+supervisors (P15b).
 
 ## Deviations / findings worth flagging
 

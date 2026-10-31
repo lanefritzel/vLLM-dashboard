@@ -1,0 +1,26 @@
+{
+  "description": "A physical-server-less Ollama source. Ollama sources and their models are dropped entirely during conversion (no destination in the new schema) -- this fixture exercises that path and that it's correctly reported.",
+  "physicalServer": null,
+  "sources": [
+    {
+      "slug": "home-ollama",
+      "label": "Home Ollama",
+      "type": "ollama",
+      "metricsUrl": "http://ollama.home:11434",
+      "inferenceUrl": "http://ollama.home:11434",
+      "dockerHost": null,
+      "active": false,
+      "launchSpec": null,
+      "models": [
+        {
+          "name": "llama3.1:8b",
+          "displayName": null,
+          "modelSource": "huggingface",
+          "modelPathOrRepoId": "llama3.1:8b",
+          "isActive": false,
+          "optionsJson": {}
+        }
+      ]
+    }
+  ]
+}

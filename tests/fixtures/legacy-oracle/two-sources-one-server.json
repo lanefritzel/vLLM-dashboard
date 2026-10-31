@@ -1,0 +1,73 @@
+{
+  "description": "Two vLLM sources on one physical server (e.g. two GPUs, or two instances sharing one box) -- must convert to exactly one servers row and two instances rows, each keeping its own proxy_slug byte-for-byte.",
+  "physicalServer": {
+    "label": "multi-gpu-box",
+    "dockerHost": "tcp://multi-gpu-box:2375",
+    "gpuVendor": "nvidia",
+    "gpuVramTotalGb": 48,
+    "hfCacheHostPath": "/data/hf-cache",
+    "hfToken": null
+  },
+  "sources": [
+    {
+      "slug": "gpu0-main",
+      "label": "GPU0 main",
+      "type": "vllm",
+      "metricsUrl": "http://multi-gpu-box:9001",
+      "inferenceUrl": "http://multi-gpu-box:9001",
+      "dockerHost": "tcp://multi-gpu-box:2375",
+      "active": true,
+      "launchSpec": {
+        "image": "vllm/vllm-openai:latest",
+        "restartPolicy": "unless-stopped",
+        "servingPort": 9001,
+        "networkMode": "bridge",
+        "ipcMode": null,
+        "privileged": false,
+        "entrypoint": null,
+        "devices": [],
+        "volumes": []
+      },
+      "models": [
+        {
+          "name": "llama-3.1-8b",
+          "displayName": "Llama 3.1 8B",
+          "modelSource": "huggingface",
+          "modelPathOrRepoId": "meta-llama/Llama-3.1-8B-Instruct",
+          "isActive": true,
+          "optionsJson": { "dtype": "auto" }
+        }
+      ]
+    },
+    {
+      "slug": "gpu1-coder",
+      "label": "GPU1 coder",
+      "type": "vllm",
+      "metricsUrl": "http://multi-gpu-box:9002",
+      "inferenceUrl": "http://multi-gpu-box:9002",
+      "dockerHost": "tcp://multi-gpu-box:2375",
+      "active": true,
+      "launchSpec": {
+        "image": "vllm/vllm-openai:latest",
+        "restartPolicy": "unless-stopped",
+        "servingPort": 9002,
+        "networkMode": "bridge",
+        "ipcMode": null,
+        "privileged": false,
+        "entrypoint": null,
+        "devices": [],
+        "volumes": []
+      },
+      "models": [
+        {
+          "name": "qwen2.5-coder-7b",
+          "displayName": "Qwen2.5 Coder 7B",
+          "modelSource": "huggingface",
+          "modelPathOrRepoId": "Qwen/Qwen2.5-Coder-7B-Instruct",
+          "isActive": true,
+          "optionsJson": { "dtype": "bfloat16" }
+        }
+      ]
+    }
+  ]
+}
