@@ -581,6 +581,342 @@ namespace Dashboard.Infrastructure.Migrations
                     b.ToTable("Sources", (string)null);
                 });
 
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Deployment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("ArgsSnapshot")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<int?>("ExitCode")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<int>("InstanceId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("LogTail")
+                        .HasColumnType("text");
+
+                    b.Property<int>("ModelId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("RecipeId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("StopReason")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTime?>("StoppedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstanceId")
+                        .IsUnique()
+                        .HasDatabaseName("one_active_per_instance")
+                        .HasFilter("\"Status\" IN ('pending','active')");
+
+                    b.HasIndex("ModelId");
+
+                    b.HasIndex("RecipeId");
+
+                    b.ToTable("deployments", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_deployments_failure_reason", "\"FailureReason\" IN ('process_exited','health_timeout','bad_args','out_of_memory')");
+
+                            t.HasCheckConstraint("ck_deployments_status", "\"Status\" IN ('pending','active','stopped','failed')");
+
+                            t.HasCheckConstraint("ck_deployments_stop_reason", "\"StopReason\" IN ('swapped','rollback','manual','crash','cancelled')");
+                        });
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.DeploymentEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("DeploymentId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("EventAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<int>("Seq")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeploymentId", "Seq")
+                        .IsUnique();
+
+                    b.ToTable("deployment_events", (string)null);
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Instance", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AdminUrl")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("PollIntervalMs")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ProxySlug")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("ServerId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProxySlug")
+                        .IsUnique();
+
+                    b.HasIndex("ServerId");
+
+                    b.ToTable("instances", (string)null);
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Model", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Config")
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("LoadFormat")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Quantization")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RepoId")
+                        .HasColumnType("text");
+
+                    b.Property<int>("ServerId")
+                        .HasColumnType("integer");
+
+                    b.Property<long?>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ServerId");
+
+                    b.ToTable("models", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_models_source_type", "\"SourceType\" IN ('local','huggingface')");
+
+                            t.HasCheckConstraint("ck_models_status", "\"Status\" IN ('available','downloading','download_failed')");
+                        });
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Recipe", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BlockSize")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Dtype")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("EnableAutoToolChoice")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("EnforceEager")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ExtraArgs")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("ExtraEnv")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<float>("GpuMemoryUtilization")
+                        .HasColumnType("real");
+
+                    b.Property<string>("KvCacheDtype")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("MaxModelLen")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("MaxNumBatchedTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ReasoningParser")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ServedModelName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("ServerId")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("SpeculativeDecoding")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ToolCallParser")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ServerId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("recipes", (string)null);
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Server", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("DockerHost")
+                        .HasColumnType("text");
+
+                    b.Property<int>("GpuCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("GpuMemGb")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("GpuName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ModelsDir")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Label")
+                        .IsUnique();
+
+                    b.ToTable("servers", (string)null);
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>
                 {
                     b.Property<string>("Id")
@@ -773,6 +1109,77 @@ namespace Dashboard.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("PhysicalServer");
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Deployment", b =>
+                {
+                    b.HasOne("Dashboard.Infrastructure.Persistence.V2.Instance", "Instance")
+                        .WithMany()
+                        .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Dashboard.Infrastructure.Persistence.V2.Model", "Model")
+                        .WithMany()
+                        .HasForeignKey("ModelId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Dashboard.Infrastructure.Persistence.V2.Recipe", "Recipe")
+                        .WithMany()
+                        .HasForeignKey("RecipeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Instance");
+
+                    b.Navigation("Model");
+
+                    b.Navigation("Recipe");
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.DeploymentEvent", b =>
+                {
+                    b.HasOne("Dashboard.Infrastructure.Persistence.V2.Deployment", "Deployment")
+                        .WithMany()
+                        .HasForeignKey("DeploymentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Deployment");
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Instance", b =>
+                {
+                    b.HasOne("Dashboard.Infrastructure.Persistence.V2.Server", "Server")
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Server");
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Model", b =>
+                {
+                    b.HasOne("Dashboard.Infrastructure.Persistence.V2.Server", "Server")
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Server");
+                });
+
+            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.V2.Recipe", b =>
+                {
+                    b.HasOne("Dashboard.Infrastructure.Persistence.V2.Server", "Server")
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Server");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

@@ -1,4 +1,5 @@
 using Dashboard.Infrastructure.Persistence;
+using V2 = Dashboard.Infrastructure.Persistence.V2;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,6 +15,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
     public DbSet<MetricsSampleEntity> MetricsSamples => Set<MetricsSampleEntity>();
     public DbSet<MetricsRollupEntity> MetricsRollups => Set<MetricsRollupEntity>();
     public DbSet<AppLogEntity> AppLogs => Set<AppLogEntity>();
+
+    // New schema (P01a) -- additive only, not yet read/written outside tests. "V2"
+    // suffix distinguishes these from the legacy tables above, which the old
+    // swap-era code paths keep using until P16.
+    public DbSet<V2.Server> ServersV2 => Set<V2.Server>();
+    public DbSet<V2.Instance> InstancesV2 => Set<V2.Instance>();
+    public DbSet<V2.Model> ModelsV2 => Set<V2.Model>();
+    public DbSet<V2.Recipe> RecipesV2 => Set<V2.Recipe>();
+    public DbSet<V2.Deployment> DeploymentsV2 => Set<V2.Deployment>();
+    public DbSet<V2.DeploymentEvent> DeploymentEventsV2 => Set<V2.DeploymentEvent>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -159,6 +170,140 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             // Retention pruning (RollupService) deletes by age; browsing by recency is
             // the other natural access pattern — both want this index.
             entity.HasIndex(l => l.TimestampUtc);
+        });
+
+        ConfigureV2Schema(builder);
+    }
+
+    /// <summary>New schema (P01a) — additive only. Per the phase page, these use
+    /// GENERATED ALWAYS AS IDENTITY (not this project's usual IDENTITY BY DEFAULT)
+    /// so a seed fixture or conversion migration can't silently collide with a
+    /// value Postgres already handed out.</summary>
+    private static void ConfigureV2Schema(ModelBuilder builder)
+    {
+        builder.Entity<V2.Server>(entity =>
+        {
+            entity.ToTable("servers");
+            entity.HasKey(s => s.Id);
+            entity.Property(s => s.Id).UseIdentityAlwaysColumn();
+            entity.Property(s => s.Label).IsRequired();
+            entity.HasIndex(s => s.Label).IsUnique();
+            entity.Property(s => s.ModelsDir).IsRequired();
+            entity.Property(s => s.CreatedAt).HasDefaultValueSql("now()");
+        });
+
+        builder.Entity<V2.Instance>(entity =>
+        {
+            entity.ToTable("instances");
+            entity.HasKey(i => i.Id);
+            entity.Property(i => i.Id).UseIdentityAlwaysColumn();
+            entity.Property(i => i.Label).IsRequired();
+            entity.Property(i => i.ProxySlug).IsRequired();
+            entity.HasIndex(i => i.ProxySlug).IsUnique();
+            entity.Property(i => i.CreatedAt).HasDefaultValueSql("now()");
+            // Restrict: a server with instances on it shouldn't vanish out from under
+            // them — the operator reassigns/deletes the instance first, same rationale
+            // as the legacy Source -> PhysicalServer relationship above.
+            entity.HasOne(i => i.Server)
+                .WithMany()
+                .HasForeignKey(i => i.ServerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<V2.Model>(entity =>
+        {
+            entity.ToTable("models");
+            entity.HasKey(m => m.Id);
+            entity.Property(m => m.Id).UseIdentityAlwaysColumn();
+            entity.Property(m => m.Name).IsRequired();
+            entity.Property(m => m.SourceType).HasMaxLength(20).IsRequired();
+            entity.Property(m => m.Path).IsRequired();
+            entity.Property(m => m.LoadFormat).IsRequired();
+            entity.Property(m => m.Config).HasColumnType("jsonb");
+            entity.Property(m => m.Status).HasMaxLength(20).IsRequired();
+            entity.Property(m => m.CreatedAt).HasDefaultValueSql("now()");
+            entity.ToTable(t =>
+            {
+                t.HasCheckConstraint("ck_models_source_type", "\"SourceType\" IN ('local','huggingface')");
+                t.HasCheckConstraint("ck_models_status", "\"Status\" IN ('available','downloading','download_failed')");
+            });
+            entity.HasOne(m => m.Server)
+                .WithMany()
+                .HasForeignKey(m => m.ServerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<V2.Recipe>(entity =>
+        {
+            entity.ToTable("recipes");
+            entity.HasKey(r => r.Id);
+            entity.Property(r => r.Id).UseIdentityAlwaysColumn();
+            entity.Property(r => r.Name).IsRequired();
+            entity.Property(r => r.ServedModelName).IsRequired();
+            entity.Property(r => r.KvCacheDtype).IsRequired();
+            entity.Property(r => r.Dtype).IsRequired();
+            entity.Property(r => r.ExtraArgs).HasColumnType("jsonb");
+            entity.Property(r => r.ExtraEnv).HasColumnType("jsonb");
+            entity.Property(r => r.CreatedAt).HasDefaultValueSql("now()");
+            entity.HasIndex(r => new { r.ServerId, r.Name }).IsUnique();
+            entity.HasOne(r => r.Server)
+                .WithMany()
+                .HasForeignKey(r => r.ServerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<V2.Deployment>(entity =>
+        {
+            entity.ToTable("deployments");
+            entity.HasKey(d => d.Id);
+            entity.Property(d => d.Id).UseIdentityAlwaysColumn();
+            entity.Property(d => d.ArgsSnapshot).HasColumnType("jsonb").IsRequired();
+            entity.Property(d => d.Status).HasMaxLength(20).IsRequired();
+            entity.Property(d => d.StopReason).HasMaxLength(20);
+            entity.Property(d => d.FailureReason).HasMaxLength(20);
+            entity.Property(d => d.CreatedAt).HasDefaultValueSql("now()");
+            entity.ToTable(t =>
+            {
+                t.HasCheckConstraint("ck_deployments_status", "\"Status\" IN ('pending','active','stopped','failed')");
+                t.HasCheckConstraint("ck_deployments_stop_reason", "\"StopReason\" IN ('swapped','rollback','manual','crash','cancelled')");
+                t.HasCheckConstraint("ck_deployments_failure_reason", "\"FailureReason\" IN ('process_exited','health_timeout','bad_args','out_of_memory')");
+            });
+            // Partial unique index: at most one pending/active deployment per
+            // instance — makes a second concurrent swap impossible at the DB level,
+            // not just in application code (doc 4).
+            entity.HasIndex(d => d.InstanceId)
+                .IsUnique()
+                .HasDatabaseName("one_active_per_instance")
+                .HasFilter("\"Status\" IN ('pending','active')");
+            entity.HasOne(d => d.Instance)
+                .WithMany()
+                .HasForeignKey(d => d.InstanceId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(d => d.Model)
+                .WithMany()
+                .HasForeignKey(d => d.ModelId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(d => d.Recipe)
+                .WithMany()
+                .HasForeignKey(d => d.RecipeId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<V2.DeploymentEvent>(entity =>
+        {
+            entity.ToTable("deployment_events");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).UseIdentityAlwaysColumn();
+            entity.Property(e => e.State).IsRequired();
+            entity.Property(e => e.EventAt).HasDefaultValueSql("now()");
+            entity.HasIndex(e => new { e.DeploymentId, e.Seq }).IsUnique();
+            // Cascade: an event log has no meaning once its own deployment is gone —
+            // unlike the Restrict relationships above, which guard against losing a
+            // still-meaningful parent (a server, a model, a recipe).
+            entity.HasOne(e => e.Deployment)
+                .WithMany()
+                .HasForeignKey(e => e.DeploymentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
