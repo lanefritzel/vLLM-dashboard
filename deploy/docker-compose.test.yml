@@ -1,0 +1,52 @@
+# Test-environment compose for P00's gate: postgres + dashboard (built from
+# the working tree) + fake vLLM, all on one bridge network. No GPU, no real
+# model. The supervisor container joins this in P02. Not used in production --
+# see deploy/docker-compose.yml for that.
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dashboard
+      POSTGRES_USER: dashboard
+      POSTGRES_PASSWORD: dashboard
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "5432"
+
+  fake-vllm:
+    build:
+      context: ../tests/fake-vllm
+      dockerfile: Dockerfile
+    # No restart policy: a test double that silently restarts hides
+    # --fake-crash/--fake-exit-after behavior from whatever's testing against it.
+    restart: "no"
+    command: ["--host", "0.0.0.0", "--port", "9999", "--served-model-name", "fake-model"]
+    expose:
+      - "9999"
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      fake-vllm:
+        condition: service_started
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
+      ASPNETCORE_ENVIRONMENT: Development
+      DATAPROTECTION_KEYS_DIR: /data/dataprotection
+    ports:
+      - "8080:8080"
+    volumes:
+      - test-dataprotection:/data
+
+volumes:
+  test-dataprotection:
