@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Dashboard.Core.Recipes;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -41,8 +40,6 @@ public interface IRecipeService
 /// <summary>CRUD for the new-schema <see cref="Recipe"/> table (P09b).</summary>
 public sealed class RecipeService : IRecipeService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-
     private readonly IServiceScopeFactory _scopeFactory;
 
     public RecipeService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
@@ -62,7 +59,7 @@ public sealed class RecipeService : IRecipeService
     /// exception.</summary>
     private static void ValidateFieldRulesForSave(Recipe recipe, Server server)
     {
-        var result = CompatibilityPass.CheckRecipe(ToCoreRecipe(recipe), ToCoreServer(server));
+        var result = CompatibilityPass.CheckRecipe(CoreRecipeMappers.ToCoreRecipe(recipe), CoreRecipeMappers.ToCoreServer(server));
         if (result.HardBlocks.Count > 0)
             throw new ArgumentException(string.Join(" ", result.HardBlocks.Select(i => i.Message)));
     }
@@ -158,7 +155,7 @@ public sealed class RecipeService : IRecipeService
         {
             ServerId = model.ServerId,
             Name = name,
-            MaxModelLen = ReadNativeContextLength(model.Config) ?? new Recipe().MaxModelLen,
+            MaxModelLen = CoreRecipeMappers.ReadNativeContextLength(model.Config) ?? new Recipe().MaxModelLen,
             GpuMemoryUtilization = 0.90f,
         };
         return await CreateAsync(recipe, ct);
@@ -174,7 +171,8 @@ public sealed class RecipeService : IRecipeService
             ?? throw new KeyNotFoundException($"No model with id {modelId}.");
         var server = await RequireServerAsync(db, recipe.ServerId, ct);
 
-        return CompatibilityPass.Check(ToCoreModel(model), ToCoreRecipe(recipe), ToCoreServer(server));
+        return CompatibilityPass.Check(
+            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(recipe), CoreRecipeMappers.ToCoreServer(server));
     }
 
     private static async Task<Server> RequireServerAsync(AppDbContext db, int serverId, CancellationToken ct) =>
@@ -216,70 +214,4 @@ public sealed class RecipeService : IRecipeService
         ExtraEnv = source.ExtraEnv,
     };
 
-    /// <summary>config.json's max_position_embeddings, if the model's stored
-    /// config has one -- the "native context" CreateFromModelAsync pre-fills
-    /// max_model_len with (doc 8 §4).</summary>
-    private static int? ReadNativeContextLength(string? config)
-    {
-        if (string.IsNullOrWhiteSpace(config))
-            return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(config);
-            if (doc.RootElement.TryGetProperty("max_position_embeddings", out var value) && value.TryGetInt64(out var length))
-                return (int)Math.Clamp(length, int.MinValue, int.MaxValue);
-        }
-        catch (JsonException)
-        {
-            // Unreadable config -- fall back to the recipe schema's own default,
-            // same "downloaded but config unreadable" tolerance P08 uses.
-        }
-        return null;
-    }
-
-    private static IReadOnlyList<RecipeExtraArg> ParseExtraArgs(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-            return Array.Empty<RecipeExtraArg>();
-        var raw = JsonSerializer.Deserialize<List<Dictionary<string, string?>>>(json, JsonOptions) ?? new();
-        return raw
-            .Where(d => d.TryGetValue("key", out var k) && !string.IsNullOrWhiteSpace(k))
-            .Select(d => new RecipeExtraArg(d["key"]!, d.GetValueOrDefault("value")))
-            .ToList();
-    }
-
-    private static Dashboard.Core.Recipes.Recipe ToCoreRecipe(Recipe recipe) => new()
-    {
-        ServedModelName = recipe.ServedModelName,
-        MaxModelLen = recipe.MaxModelLen,
-        GpuMemoryUtilization = recipe.GpuMemoryUtilization,
-        KvCacheDtype = recipe.KvCacheDtype,
-        Dtype = recipe.Dtype,
-        EnforceEager = recipe.EnforceEager,
-        MaxNumBatchedTokens = recipe.MaxNumBatchedTokens,
-        BlockSize = recipe.BlockSize,
-        SpeculativeDecoding = recipe.SpeculativeDecoding,
-        SpeculativeTokens = recipe.SpeculativeTokens,
-        EnableAutoToolChoice = recipe.EnableAutoToolChoice,
-        ToolCallParser = recipe.ToolCallParser,
-        ReasoningParser = recipe.ReasoningParser,
-        ExtraArgs = ParseExtraArgs(recipe.ExtraArgs),
-    };
-
-    private static RecipeServer ToCoreServer(Server server) => new()
-    {
-        ModelsDir = server.ModelsDir,
-        GpuCount = server.GpuCount,
-        GpuMemGb = server.GpuMemGb,
-        GpuName = server.GpuName,
-    };
-
-    private static RecipeModel ToCoreModel(Model model) => new()
-    {
-        Path = model.Path,
-        LoadFormat = model.LoadFormat,
-        Status = model.Status,
-        SizeBytes = model.SizeBytes,
-        ConfigMaxPositionEmbeddings = ReadNativeContextLength(model.Config),
-    };
 }

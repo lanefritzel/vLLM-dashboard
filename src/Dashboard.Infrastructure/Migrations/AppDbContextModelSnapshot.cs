@@ -636,8 +636,8 @@ namespace Dashboard.Infrastructure.Migrations
 
                     b.HasIndex("InstanceId")
                         .IsUnique()
-                        .HasDatabaseName("one_active_per_instance")
-                        .HasFilter("\"Status\" IN ('pending','active')");
+                        .HasDatabaseName("one_pending_per_instance")
+                        .HasFilter("\"Status\" = 'pending'");
 
                     b.HasIndex("ModelId");
 

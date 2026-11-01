@@ -29,6 +29,13 @@ class SettingsRequest(BaseModel):
     AUTO_START: str
 
 
+class RestartRequest(BaseModel):
+    # P10a: lets the caller correlate this restart with its own id (e.g. a
+    # dashboard deployments row), exactly like /admin/deploy's own optional
+    # id. Omitted (or no body at all) -- one is generated the usual way.
+    deployment_id: Optional[str] = None
+
+
 class InspectRequest(BaseModel):
     repo_id: str
 
@@ -157,11 +164,11 @@ def create_app(
             raise HTTPException(status_code=409, detail={"deployment_id": exc.deployment_id}) from exc
 
     @admin.post("/admin/restart")
-    async def restart() -> dict:
+    async def restart(body: RestartRequest = RestartRequest()) -> dict:
         # Stop + start the current argv, no config change (P07) -- only
         # valid while actually serving, same rule as /admin/smoke-test.
         try:
-            deployment_id = deploy_runner.restart()
+            deployment_id = deploy_runner.restart(deployment_id=body.deployment_id)
         except NotServingError as exc:
             raise HTTPException(status_code=409, detail={"state": exc.state}) from exc
         except DeployInProgressError as exc:

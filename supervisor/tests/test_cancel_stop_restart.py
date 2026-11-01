@@ -276,6 +276,34 @@ def test_restart_gets_a_new_pid_with_the_same_argv_and_reaches_ready(tmp_path):
         pm.stop()
 
 
+def test_restart_honors_a_caller_supplied_deployment_id(tmp_path):
+    """P10a: a caller (the dashboard) needs to correlate a restart with its
+    own id, exactly like /admin/deploy's own optional deployment_id."""
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+
+    async def scenario():
+        ok = await runner.deploy_and_wait(fake_argv(port, "model-a"), deployment_id="d1", health_timeout=10)
+        assert ok is True
+
+        deployment_id = runner.restart(deployment_id="dashboard-row-42")
+        assert deployment_id == "dashboard-row-42"
+        for _ in range(100):
+            if runner.state == "ready" and runner.current_deployment_id is None:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            raise AssertionError("restart never reached ready")
+
+        states = [e.state for e in runner.events_for("dashboard-row-42")]
+        assert states == ["stopping", "releasing_gpu", "starting", "loading", "waiting_health", "ready", "smoke"]
+
+    try:
+        run(scenario())
+    finally:
+        pm.stop()
+
+
 def test_restart_while_idle_raises_not_serving(tmp_path):
     runner, pm = new_runner(tmp_path)
     try:

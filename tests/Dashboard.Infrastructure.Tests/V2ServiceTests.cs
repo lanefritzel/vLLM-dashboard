@@ -226,10 +226,15 @@ public class V2ServiceTests(PostgresFixture postgres)
         var model = await modelService.CreateAsync(new Model { ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen" });
         var recipe = await recipeService.CreateAsync(new Recipe { ServerId = server.Id, Name = "default", ServedModelName = "main" });
 
+        // The index is narrowed to 'pending' only (P10a): a swap's new pending
+        // row must coexist with the previous active one, so what's actually
+        // "a second concurrent swap" is a second PENDING row, not pending
+        // alongside an existing active one (which the test below exercises
+        // separately as the real swap-in-progress case this error is for).
         await deploymentService.CreateAsync(new Deployment
         {
             InstanceId = instance.Id, ModelId = model.Id, RecipeId = recipe.Id,
-            ArgsSnapshot = "[]", Status = "active",
+            ArgsSnapshot = "[]", Status = "pending",
         });
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => deploymentService.CreateAsync(new Deployment

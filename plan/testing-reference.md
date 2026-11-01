@@ -140,6 +140,35 @@ availability/sizing) is only meaningful once a model is actually picked --
 exposed as `IRecipeService.ValidateAsync(recipeId, modelId)`, non-throwing,
 for deploy pre-flight (P10a) and the UI.
 
+## Swap orchestration against a real supervisor container (P10a)
+
+```bash
+# Just this phase's integration tests -- builds supervisor/Dockerfile.test
+# once (Testcontainers), then one fresh container per test:
+dotnet test tests/Dashboard.Infrastructure.Tests --filter FullyQualifiedName~SwapServiceTests
+```
+
+No manual curl needed -- `SwapServiceTests.cs` drives `ISwapService`
+directly against the real container + fake vLLM, covering every DoD
+bullet. If you need to debug one by hand instead, the pattern is the same
+as P02's own "Supervisor Docker image" section above (`docker build -f
+supervisor/Dockerfile.test -t supervisor-test .`, then `docker run` with
+`SUPERVISOR_TOKEN`), driving `/admin/deploy` etc. with
+`deployment_id` set to whatever Postgres `deployments.id` you're
+correlating against.
+
+Two schema facts worth knowing before touching `deployments` again:
+- The partial unique index (`one_pending_per_instance`) now covers only
+  `status = 'pending'`, not `'active'` too -- narrowed by this phase
+  specifically so a swap's new pending row can coexist with the previous
+  active one until the new one reaches ready. Don't "fix" this back to
+  covering both without re-reading this phase's PROGRESS.md entry first.
+- `RollbackAsync` replays the deployment BEFORE the current active one
+  (the one it itself replaced), found the hard way when a first version
+  replayed the active row's own args_snapshot (a no-op). If you're
+  touching rollback logic, write a test with THREE swaps (A, then B, then
+  rollback) so a same-row bug like that one can't hide behind only two.
+
 ## Postgres-over-bridge soak test (P01c)
 
 ```bash

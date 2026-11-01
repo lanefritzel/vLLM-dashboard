@@ -51,7 +51,33 @@ public class V2SchemaConstraintTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task PartialUniqueIndex_RejectsASecondPendingOrActiveDeploymentOnTheSameInstance()
+    public async Task PartialUniqueIndex_RejectsASecondPendingDeploymentOnTheSameInstance()
+    {
+        // Narrowed by P10a: only 'pending' is covered, not 'active' -- a swap's
+        // new pending row must coexist with the previous active row until the
+        // new one reaches ready (when they flip together, in one transaction),
+        // so active+pending together must NOT violate this index.
+        var (db, instance, model, recipe) = await SeedForDeploymentsAsync();
+        using var _ = db;
+
+        db.DeploymentsV2.Add(new Deployment
+        {
+            InstanceId = instance.Id, ModelId = model.Id, RecipeId = recipe.Id,
+            ArgsSnapshot = "[]", Status = "pending",
+        });
+        await db.SaveChangesAsync();
+
+        db.DeploymentsV2.Add(new Deployment
+        {
+            InstanceId = instance.Id, ModelId = model.Id, RecipeId = recipe.Id,
+            ArgsSnapshot = "[]", Status = "pending",
+        });
+        var ex = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+        AssertPostgresError(ex, "23505"); // unique_violation
+    }
+
+    [Fact]
+    public async Task ActiveAndPendingDeployments_CanCoexistOnTheSameInstance()
     {
         var (db, instance, model, recipe) = await SeedForDeploymentsAsync();
         using var _ = db;
@@ -68,8 +94,9 @@ public class V2SchemaConstraintTests(PostgresFixture postgres)
             InstanceId = instance.Id, ModelId = model.Id, RecipeId = recipe.Id,
             ArgsSnapshot = "[]", Status = "pending",
         });
-        var ex = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
-        AssertPostgresError(ex, "23505"); // unique_violation
+        await db.SaveChangesAsync(); // must NOT throw
+
+        Assert.Equal(2, await db.DeploymentsV2.CountAsync(d => d.InstanceId == instance.Id));
     }
 
     [Theory]

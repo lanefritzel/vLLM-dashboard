@@ -506,16 +506,20 @@ class DeployRunner:
         self._state_store.save(state)
         return {"state": "idle", "vram": {"released": released, "used_mb": current.used_mb, "total_mb": current.total_mb}}
 
-    def restart(self) -> str:
+    def restart(self, deployment_id: Optional[str] = None) -> str:
         """POST /admin/restart (P07): stop + start the CURRENT argv, no
         config change -- goes through the normal deploy pipeline (same
         events, same smoke test) via start_deploy, which re-admits through
         _begin() and so already 409s if a deploy is somehow in flight.
-        Only valid while actually serving, same rule as run_smoke_test_now."""
+        Only valid while actually serving, same rule as run_smoke_test_now.
+        `deployment_id` (P10a) lets a caller correlate this restart with
+        its own id (e.g. a dashboard's own deployments row), exactly like
+        /admin/deploy's own optional id -- omitted, one is generated the
+        same way start_deploy always does."""
         info = self._process_manager.info
         if self._state != "ready" or info is None or not self._process_manager.is_running():
             raise NotServingError(self._state)
-        return self.start_deploy(list(info.argv), env=self._current_env)
+        return self.start_deploy(list(info.argv), env=self._current_env, deployment_id=deployment_id)
 
     def _poll_gpu_release(self, before: GpuInfo) -> GpuInfo:
         """The polling loop behind both the deploy swap's GPU-release wait

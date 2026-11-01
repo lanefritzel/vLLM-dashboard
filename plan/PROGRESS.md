@@ -22,6 +22,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P07 | done | 2026-11-01 | See below. |
 | P08 | done | 2026-11-01 | See below. |
 | P09b | done | 2026-11-01 | See below. |
+| P10a | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -1077,6 +1078,156 @@ Out of scope, not touched: calling the supervisor (P10a). UI (P13).
 | Integration: creating a deployment stores `args_snapshot` exactly as given and refuses later edits to it | Yes | `DeploymentService_ArgsSnapshotIsFrozenAtCreateTime_TransitionNeverTouchesIt` (compared parsed, since jsonb reformats whitespace on storage) |
 | Integration: the partial unique index surfaces as a friendly "a swap is already in progress" error | Yes | `DeploymentService_SecondConcurrentSwap_SurfacesAsFriendlyError` |
 | Validating a converted/legacy-shaped recipe returns issues without throwing | Yes | `RecipeService_ValidateAsync_OnALegacyShapedRow_ReturnsIssuesWithoutThrowing`, against the P01a seed fixture's own non-hf-cache model path |
+
+## P10a -- Swap orchestration (dispatch, gates)
+
+Hit a real schema conflict partway through and confirmed the fix with the
+owner before proceeding: P01a's partial unique index on `deployments` was
+`UNIQUE(instance_id) WHERE status IN ('pending','active')` -- literally at
+most one row, pending OR active, per instance, ever. But this phase's own
+flow requires a NEW pending row to coexist with the PREVIOUS active row
+until the new one reaches ready (when they flip together, in one
+transaction) -- those two rows can never coexist under the index as
+written; every real swap attempt hit a 23505 unique-violation inserting
+the second row. **Fixed by narrowing the index to `WHERE status =
+'pending'` only** (owner-confirmed 2026-11-01) via a new migration
+(`NarrowDeploymentsPendingIndex`, index renamed `one_pending_per_instance`
+since "one active" was no longer what it enforced) -- it still makes a
+second CONCURRENT SWAP ATTEMPT impossible at the DB level (two 'pending'
+rows), which was the actual intent; it just no longer also forbids a
+pending row from existing alongside the active row it's about to replace.
+Updated the one pre-existing test that depended on the old (active +
+pending)-conflicts behavior, and added a new one asserting they now
+explicitly coexist without error.
+
+Found and fixed a real bug in my own first pass at `RollbackAsync`, caught
+by the real integration test (not reasoned out in advance): it replayed
+the CURRENTLY ACTIVE deployment's own `args_snapshot` -- a no-op replay of
+whatever's already running, not an actual rollback. "The previous
+deployment" (doc 7) means the row the current active one itself replaced
+-- fixed to walk this instance's deployment history for the most
+recently stopped row (excluding the current active one) and replay THAT
+row's `args_snapshot`/model/recipe ids instead.
+
+Also fixed a real P07 gap this phase's own design exposed: `/admin/restart`
+didn't accept a caller-supplied `deployment_id`, but correlating the
+dashboard's own Postgres row id with the supervisor's event stream (the
+same convention `/admin/deploy` already uses) needs exactly that for a
+Restart. Added an optional `deployment_id` to both
+`DeployRunner.restart()` and the `/admin/restart` request body (backward
+compatible -- omitted, one is generated the same way as before).
+
+And a third real gap, found running the actual integration harness for
+the first time: `tests/fake-vllm/fake_vllm.py`'s argparse only understood
+its own `--fake-*`/`--port`/`--served-model-name` flags -- any REAL
+`ArgBuilder`-generated argv (which always emits `--max-model-len`,
+`--gpu-memory-utilization`, `--max-num-batched-tokens`, `--block-size` at
+minimum, for every recipe) got rejected as `bad_args`, since argparse
+doesn't know those flags. Fixed by adding every vLLM flag `ArgBuilder` can
+emit as accepted-but-ignored arguments -- deliberately NOT a catch-all
+(`parse_known_args`), since an actually-unrecognized flag failing fast is
+itself a real test case elsewhere in this suite (`--this-flag-does-not-exist`).
+`extra_args` stays unsupported by design (open-ended; a test exercising it
+picks flags this double already understands).
+
+Design decisions made while implementing, not fully spelled out on the
+page:
+- The served-name gate and "not registered"/"nothing to cancel"/etc.
+  cases are modeled as typed exceptions at the SERVICE layer
+  (`ServedNameChangeRequiresAcknowledgementException`,
+  `SupervisorNotRegisteredException`, `InvalidOperationException`,
+  `KeyNotFoundException`) rather than literal HTTP responses -- there's no
+  API controller layer yet in this codebase's style (Blazor components
+  call services directly via DI, confirmed in P09b); whatever surfaces
+  these as actual HTTP 409s is a later phase's (or P14's UI) concern. The
+  served-name exception carries both the old and new names, exactly what
+  a 409 body would need.
+- Failure categorisation (`reason`/`exit_code`/`log_tail`) is extracted
+  from the terminal event's `detail` payload and returned in `SwapResult`
+  in memory only, per the page's own explicit scope note -- not written
+  to the `deployments` row's own failure columns (P10b wires that up
+  alongside the push receiver).
+- `IDeploymentTracker` is a separate interface from `ISupervisorClient`
+  specifically so P10b can swap polling for a push-fed implementation
+  without `SwapService` changing at all -- it only ever calls
+  `TrackToTerminalAsync`, never touches `GetEventsAsync` directly.
+
+Done:
+- `src/Dashboard.Core/Supervisor/`: `SupervisorModels.cs` (DTOs mirroring
+  the supervisor's JSON exactly, via `JsonNamingPolicy.SnakeCaseLower`),
+  `SwapResult.cs` (`SwapResult`,
+  `ServedNameChangeRequiresAcknowledgementException`,
+  `SupervisorNotRegisteredException`).
+- `src/Dashboard.Core/Abstractions/`: `ISupervisorClient`,
+  `IDeploymentTracker`, `ISwapService`.
+- `src/Dashboard.Infrastructure/Supervisor/`: `SupervisorClient` (typed
+  HTTP client, named-client + per-call-absolute-URL pattern matching
+  `DockerOrchestrator`'s own style), `PollingDeploymentTracker`.
+- `src/Dashboard.Infrastructure/Persistence/V2/SwapService.cs` (new): the
+  full flow -- pre-flight via `CompatibilityPass.Check`, `ArgBuilder.Build`,
+  insert pending row, `POST /admin/deploy`, track to terminal, resolve
+  (activate+stop-previous one-transaction / failed / cancelled). Also
+  `RollbackAsync`, `StopAsync`, `CancelAsync` (with the phase-2
+  previous-row bookkeeping from P07's own owner-confirmed decision),
+  `RestartAsync`.
+- `src/Dashboard.Infrastructure/Persistence/V2/CoreRecipeMappers.cs` (new):
+  the EF-entity-to-pure-input mappers, extracted out of `RecipeService`
+  (P09b) so `SwapService` can reuse them without duplicating the mapping
+  logic.
+- `DeploymentService` extended: `GetActiveAsync`, `GetPendingAsync`,
+  `ActivateAndStopPreviousAsync` (stops the old row, THEN activates the
+  new one, in that order within one transaction -- the partial unique
+  index is checked per-statement, not deferred).
+- `src/Dashboard.Infrastructure/Migrations/..._NarrowDeploymentsPendingIndex.cs`
+  (new, see above).
+- `src/Dashboard.Web/Program.cs`: `SupervisorClient`/`PollingDeploymentTracker`/
+  `SwapService` registered; a new named `"supervisor"` HTTP client (30s
+  timeout -- a real deploy is tracked via polling, never one held-open
+  request the way `docker-pull`'s streaming calls are).
+- `supervisor/supervisor/deploy_runner.py` + `admin_api.py`: `restart()`
+  and `POST /admin/restart` now accept an optional `deployment_id` (see
+  above).
+- `tests/fake-vllm/fake_vllm.py`: accepts (and ignores) every vLLM flag
+  `ArgBuilder` can emit (see above).
+- New test infrastructure: `tests/Dashboard.Infrastructure.Tests/SupervisorFixture.cs`
+  builds the REAL `supervisor/Dockerfile.test` image ONCE per test run
+  (Testcontainers' `ImageFromDockerfileBuilder`, build context = repo
+  root -- resolved by walking up to the nearest `.git`, since this repo
+  has no `.sln` for Testcontainers' own solution-dir helper to anchor on)
+  and starts a FRESH container per test from that image (a shared
+  container would leak deploy state and deployment-id numbering across
+  tests, since each test gets its own fresh Postgres database starting
+  ids at 1 again).
+- 7 new integration tests (`SwapServiceTests.cs`, against the real
+  container + fake vLLM) covering every DoD bullet below, plus 2 new/
+  updated `V2SchemaConstraintTests.cs` tests for the narrowed index and 1
+  updated `V2ServiceTests.cs` test, plus 2 new Python tests
+  (`test_restart_honors_a_caller_supplied_deployment_id` in both
+  `test_cancel_stop_restart.py` and `test_admin_api.py`). Also fixed one
+  pre-existing flaky Python test (`test_downloads_endpoints_round_trip...`,
+  P08) found while re-running the suite -- a ~1KB fake download could
+  finish before the 409-concurrency check ran under full-suite timing
+  load; gave it a small `chunk_delay` like the other download tests
+  already use. 177 Core + 41 Infrastructure .NET tests, 127 Python tests;
+  `./scripts/gate.sh` green (now also builds the supervisor Docker image
+  as part of `dotnet test`, since `Dashboard.Infrastructure.Tests` does).
+
+Out of scope, not touched: push receiver, gap catch-up, persisted failure
+report (P10b). UI (P14). Dashboard-startup reconciliation (P12).
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Swap A→B: row pending → active, previous row stopped/swapped, args_snapshot equals the argv sent, client proxy path unaffected | Yes | `Swap_AToB_FlipsRowsAndFreezesArgsSnapshot` (proxy path: trivially true -- nothing in the swap flow ever touches `Instance.ProxySlug`) |
+| Different served_model_name without acknowledge → 409 with both names; with the flag → completes | Yes, as a typed exception (no API layer yet) | `Swap_DifferentServedModelNameWithoutAcknowledge_ThrowsWithBothNames` -- `ServedNameChangeRequiresAcknowledgementException` carries both names; a future API layer maps it to 409 |
+| Swap to a `--fake-crash` model → row failed, previous record intact, previous model not silently restored | Yes | `Swap_ToACrashingModel_RowFailed_PreviousRecordIntactAndNotRestored` |
+| Same (model, recipe) again → "already active", no new row | Yes | `Swap_SameModelAndRecipeAlreadyActive_ReturnsAlreadyActiveWithNoNewRow` |
+| Rollback replays the earlier args_snapshot byte-for-byte | Yes (after fixing a real bug caught by this test) | `Rollback_ReplaysThePreviousArgsSnapshotByteForByte` |
+| Stop → instance idle (no pending/active row), stop_reason='manual' | Yes | `Stop_LeavesInstanceIdleWithNoPendingOrActiveRow` |
+| Cancel in phase 2 → idle, stop_reason='cancelled' | Yes | `Cancel_Phase2_GoesIdleAndStopsThePreviousRowToo` (also stops the previous-active row, per the owner-confirmed decision earlier this phase) |
+| Restarting the dashboard process with the supervisor idle → the dashboard starts nothing | Met by scope, not directly tested | No reconciliation-on-startup code exists anywhere yet (P12's own job); nothing in this phase runs at dashboard startup at all |
+| No code path in the swap flow touches the Docker API | Yes, confirmed by inspection | `grep -n Docker` across every P10a file -- only doc-comment prose references, zero `IDockerOrchestrator`/Docker Engine API usage |
 
 ## Deviations / findings worth flagging
 

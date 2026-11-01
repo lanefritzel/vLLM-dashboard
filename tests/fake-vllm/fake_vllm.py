@@ -127,6 +127,31 @@ def main() -> None:
     parser.add_argument("--fake-crash", action="store_true", help="exit non-zero immediately instead of serving")
     parser.add_argument("--fake-exit-after", type=float, default=None, metavar="SECS", help="die mid-run")
     parser.add_argument("--fake-bad-output", action="store_true", help="omit 'OK' from completions")
+
+    # Accepted-but-ignored (P10a): ArgBuilder (Dashboard.Core.Recipes) always
+    # emits --max-model-len/--gpu-memory-utilization/--max-num-batched-tokens/
+    # --block-size for every recipe, and conditionally the rest below --
+    # argparse would otherwise reject real recipe-driven argv as "bad_args"
+    # (exit code 2), which is also exactly the mechanism --this-flag-does-
+    # not-exist uses to simulate that failure on purpose elsewhere in this
+    # suite. Deliberately NOT a catch-all (no parse_known_args): an actually
+    # unrecognized flag must keep failing fast, so only vLLM's own flags
+    # that ArgBuilder can emit are named here. extra_args is open-ended by
+    # design and isn't covered -- a test exercising those picks flags this
+    # double already understands, or accepts the resulting bad_args.
+    parser.add_argument("--max-model-len")
+    parser.add_argument("--gpu-memory-utilization")
+    parser.add_argument("--max-num-batched-tokens")
+    parser.add_argument("--block-size")
+    parser.add_argument("--kv-cache-dtype")
+    parser.add_argument("--dtype")
+    parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument("--enable-auto-tool-choice", action="store_true")
+    parser.add_argument("--tool-call-parser")
+    parser.add_argument("--reasoning-parser")
+    parser.add_argument("--speculative-config")
+    parser.add_argument("--load-format")
+    parser.add_argument("--trust-remote-code", action="store_true")
     args = parser.parse_args()
 
     if args.fake_crash:

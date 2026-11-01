@@ -268,13 +268,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
                 t.HasCheckConstraint("ck_deployments_stop_reason", "\"StopReason\" IN ('swapped','rollback','manual','crash','cancelled')");
                 t.HasCheckConstraint("ck_deployments_failure_reason", "\"FailureReason\" IN ('process_exited','health_timeout','bad_args','out_of_memory')");
             });
-            // Partial unique index: at most one pending/active deployment per
-            // instance — makes a second concurrent swap impossible at the DB level,
-            // not just in application code (doc 4).
+            // Partial unique index: at most one PENDING deployment per instance —
+            // makes a second concurrent swap impossible at the DB level, not just
+            // in application code (doc 4). Originally also covered 'active', but
+            // P10a's own swap flow needs the new 'pending' row to coexist with the
+            // previous 'active' one until the new one reaches ready (when they
+            // flip together, in one transaction) — a row that's merely active
+            // and not being swapped away from isn't "a swap in progress" the way
+            // a second 'pending' row would be, so only 'pending' needs excluding
+            // a duplicate (narrowed by P10a, see its own migration).
             entity.HasIndex(d => d.InstanceId)
                 .IsUnique()
-                .HasDatabaseName("one_active_per_instance")
-                .HasFilter("\"Status\" IN ('pending','active')");
+                .HasDatabaseName("one_pending_per_instance")
+                .HasFilter("\"Status\" = 'pending'");
             entity.HasOne(d => d.Instance)
                 .WithMany()
                 .HasForeignKey(d => d.InstanceId)

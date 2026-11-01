@@ -88,6 +88,10 @@ builder.Services.AddHttpClient("docker-logs", c => c.Timeout = Timeout.InfiniteT
 // kill the request outright while the pull was still genuinely progressing.
 builder.Services.AddHttpClient("docker-pull", c => c.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient("inference", c => c.Timeout = TimeSpan.FromSeconds(30));
+// The supervisor's own admin API (P10a) -- short timeout per call; a real
+// deploy taking longer than this is tracked via polling (events?after=),
+// never by holding one request open the way docker-pull's streaming calls do.
+builder.Services.AddHttpClient("supervisor", c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("huggingface", c =>
 {
     c.Timeout = TimeSpan.FromSeconds(15);
@@ -138,6 +142,11 @@ builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IModelServ
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IRecipeService, Dashboard.Infrastructure.Persistence.V2.RecipeService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IDeploymentService, Dashboard.Infrastructure.Persistence.V2.DeploymentService>();
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorTokenProvider, Dashboard.Infrastructure.Persistence.V2.ConfigSupervisorTokenProvider>();
+
+// Swap orchestration (P10a).
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorClient, Dashboard.Infrastructure.Supervisor.SupervisorClient>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IDeploymentTracker, Dashboard.Infrastructure.Supervisor.PollingDeploymentTracker>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISwapService, Dashboard.Infrastructure.Persistence.V2.SwapService>();
 
 // Hosted services. Order matters: hosted services start in registration order,
 // so the DB initializer (migrations + seed) must start before the metrics

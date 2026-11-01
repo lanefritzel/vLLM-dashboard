@@ -263,6 +263,32 @@ def test_restart_endpoint_translates_to_a_new_deployment_id(tmp_path):
         pm.stop()
 
 
+def test_restart_endpoint_honors_a_caller_supplied_deployment_id(tmp_path):
+    import asyncio
+
+    fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    client = TestClient(app)
+
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    try:
+        argv = [sys.executable, fake_vllm, "--port", str(port), "--served-model-name", "model-a"]
+        ok = asyncio.run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+        assert ok is True
+
+        resp = client.post("/admin/restart", headers=auth_headers(), json={"deployment_id": "dashboard-row-7"})
+        assert resp.status_code == 200
+        assert resp.json()["deployment_id"] == "dashboard-row-7"
+    finally:
+        pm.stop()
+
+
 def test_stop_endpoint_against_a_real_child_releases_it(tmp_path):
     import asyncio
 
@@ -299,7 +325,11 @@ def test_downloads_endpoints_round_trip_through_the_admin_api(tmp_path):
     (repo / "model.safetensors").write_bytes(b"x" * 1024)
     (repo / "config.json").write_text(json.dumps({"k": "v"}))
 
-    manager = DownloadManager(FakeHfClient({"org/model-a": repo}), models_root=tmp_path / "models")
+    # A small chunk_delay keeps the download reliably "downloading" for the
+    # 409 check below under any test-suite timing load -- without it, a
+    # ~1KB copy can finish before the second POST ever runs (found flaky
+    # under the full suite, passing in isolation).
+    manager = DownloadManager(FakeHfClient({"org/model-a": repo}, chunk_delay=0.05), models_root=tmp_path / "models")
     client = new_client(tmp_path, download_manager=manager)
 
     resp = client.post("/admin/downloads/inspect", headers=auth_headers(), json={"repo_id": "org/model-a"})

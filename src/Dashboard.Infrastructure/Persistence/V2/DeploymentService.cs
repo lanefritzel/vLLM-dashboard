@@ -9,6 +9,8 @@ public interface IDeploymentService
 {
     Task<IReadOnlyList<Deployment>> ListByInstanceAsync(int instanceId, CancellationToken ct = default);
     Task<Deployment?> GetAsync(int id, CancellationToken ct = default);
+    Task<Deployment?> GetActiveAsync(int instanceId, CancellationToken ct = default);
+    Task<Deployment?> GetPendingAsync(int instanceId, CancellationToken ct = default);
 
     /// <summary>Inserts a new "pending" deployment with its <c>args_snapshot</c>
     /// frozen at exactly the given argv -- the partial unique index on
@@ -25,6 +27,14 @@ public interface IDeploymentService
         int id, string status, string? stopReason = null, string? failureReason = null,
         int? exitCode = null, string? logTail = null, DateTime? startedAt = null, DateTime? stoppedAt = null,
         CancellationToken ct = default);
+
+    /// <summary>One transaction (P10a doc 7: "on ready -> new row active,
+    /// previous active row stopped ... (one transaction)"): stops whatever
+    /// else is active on this deployment's instance, THEN activates this
+    /// one -- in that order, since the partial unique index
+    /// (one_active_per_instance) is checked per-statement, not deferred;
+    /// activating first would violate it while the old row is still active.</summary>
+    Task<Deployment> ActivateAndStopPreviousAsync(int deploymentId, string previousStopReason, CancellationToken ct = default);
 }
 
 /// <summary>CRUD (create + status transitions only) for the new-schema
@@ -51,6 +61,20 @@ public sealed class DeploymentService : IDeploymentService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         return await db.DeploymentsV2.FindAsync([id], ct);
+    }
+
+    public async Task<Deployment?> GetActiveAsync(int instanceId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await db.DeploymentsV2.FirstOrDefaultAsync(d => d.InstanceId == instanceId && d.Status == "active", ct);
+    }
+
+    public async Task<Deployment?> GetPendingAsync(int instanceId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await db.DeploymentsV2.FirstOrDefaultAsync(d => d.InstanceId == instanceId && d.Status == "pending", ct);
     }
 
     public async Task<Deployment> CreateAsync(Deployment deployment, CancellationToken ct = default)
@@ -104,6 +128,34 @@ public sealed class DeploymentService : IDeploymentService
         {
             throw new InvalidOperationException("A swap is already in progress on this instance.", ex);
         }
+        return deployment;
+    }
+
+    public async Task<Deployment> ActivateAndStopPreviousAsync(int deploymentId, string previousStopReason, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+
+        var deployment = await db.DeploymentsV2.FindAsync([deploymentId], ct)
+            ?? throw new KeyNotFoundException($"No deployment with id {deploymentId}.");
+
+        var previous = await db.DeploymentsV2
+            .FirstOrDefaultAsync(d => d.InstanceId == deployment.InstanceId && d.Status == "active" && d.Id != deploymentId, ct);
+
+        if (previous is not null)
+        {
+            previous.Status = "stopped";
+            previous.StopReason = previousStopReason;
+            previous.StoppedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct); // stop the old row first, see the interface doc comment
+        }
+
+        deployment.Status = "active";
+        deployment.StartedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        await transaction.CommitAsync(ct);
         return deployment;
     }
 }
