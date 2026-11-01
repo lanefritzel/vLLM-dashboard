@@ -37,7 +37,7 @@ class ProcessManager:
     def exit_code(self) -> Optional[int]:
         return self._process.poll() if self._process is not None else None
 
-    def spawn(self, argv: list[str]) -> ChildInfo:
+    def spawn(self, argv: list[str], env: Optional[dict[str, str]] = None) -> ChildInfo:
         if self.is_running():
             raise RuntimeError("a child is already running")
         process = subprocess.Popen(
@@ -46,6 +46,10 @@ class ProcessManager:
             # whole group -- the child plus anything IT spawns -- without
             # ever hitting the supervisor itself, which stays in its own.
             start_new_session=True,
+            # A deploy's `env` (the recipe's extra_env) is merged OVER this
+            # container's own env, never replacing it (doc 5) -- None here
+            # means "inherit unchanged", same as before env support existed.
+            env={**os.environ, **env} if env else None,
         )
         self._process = process
         self._info = ChildInfo(pid=process.pid, argv=list(argv), started_at=time.time())

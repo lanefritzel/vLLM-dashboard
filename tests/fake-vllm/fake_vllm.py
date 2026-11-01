@@ -82,6 +82,11 @@ def make_handler(state: FakeVllmState) -> type[BaseHTTPRequestHandler]:
                     }],
                 })
                 return
+            if self.path == "/debug/env":
+                # P03a: lets a test confirm a deploy's `env` actually reached
+                # this process, without needing to grep container log lines.
+                self._write_json(200, dict(os.environ))
+                return
             self._write_json(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802

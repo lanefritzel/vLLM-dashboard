@@ -1,6 +1,9 @@
 # Refactor progress
 
 Tracked here, not in the Outline KB, per the Build Plan's working rules.
+Copy-pasteable commands/vars for re-running manual verification (ports,
+tokens, SSH/pg_dump commands, Docker build/run invocations) live in
+`plan/testing-reference.md`, not duplicated here.
 
 | Phase | Status | Date | Notes |
 |---|---|---|---|
@@ -10,6 +13,7 @@ Tracked here, not in the Outline KB, per the Build Plan's working rules.
 | P01b | code + tests done; report awaiting owner sign-off | 2026-10-31 | See below. |
 | P01c | done -- soak passed | 2026-10-31 | See below. |
 | P02 | done | 2026-10-31 | See below. |
+| P03a | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -374,6 +378,71 @@ Done:
 
 Out of scope, not touched: deploy API, the full state machine, auth, GPU,
 log retention, event push -- all P03a onward.
+
+## P03a -- Admin API + state machine (happy path, auth)
+
+One state machine implementation (`deploy_runner.py`), two callers: the
+boot-replay retry loop from P02 (now refactored to call it directly instead
+of duplicating spawn/health-check logic) and the new `POST /admin/deploy`
+HTTP handler -- same transitions, same event recording, whichever path
+triggered it.
+
+One real bug caught while writing the HTTP layer, before it ever ran: the
+`/admin/deploy` handler must be `async def`, not a plain `def` -- FastAPI
+runs sync routes in a worker thread, where `DeployRunner.start_deploy()`'s
+internal `asyncio.create_task()` call would have no running event loop on
+that thread to attach to. Caught by actually calling the endpoint in a
+test, not by inspection.
+
+One test-design dead end worth recording so it isn't retried: tried to
+test the 409-on-concurrent-deploy behavior through TestClient with a real
+slow deploy in flight across two separate `client.post()` calls. Empirically,
+TestClient drives its event loop to completion per call, so a background
+task scheduled during the first request had already finished (clearing the
+in-flight id) before the second request ran -- the HTTP-layer test couldn't
+observe the race at all. Real concurrency is exercised directly against
+`DeployRunner` in `test_deploy_runner.py` (one asyncio event loop held open
+for the whole scenario); the admin-API-level test was narrowed to just the
+HTTP translation (`DeployInProgressError` -> 409 with the id in the body),
+monkeypatching `start_deploy` to raise it directly.
+
+Verified every DoD bullet two ways: 33 pytest tests (real subprocesses --
+the actual fake vLLM test double, real HTTP health checks, no mocks for
+the state machine itself) and by hand against the real `Dockerfile.test`
+image via `docker run` + `curl` (deploy from idle, redeploy with the full
+stopping/releasing_gpu sequence, env propagation, 409, `events?after=`,
+401/200 auth, and `AUTO_START=off` surviving an actual container restart).
+
+Done:
+- `supervisor/supervisor/deploy_runner.py`: `DeployRunner` -- `start_deploy`
+  (synchronous admission check + fire-and-forget background task, for the
+  HTTP handler) and `deploy_and_wait` (same admission + state machine,
+  awaited inline, for the boot sequence). States recorded as
+  `{deployment_id, seq, ts, state, detail}`, `seq` per-deployment strictly
+  increasing from 1, kept in memory (persistence is P05).
+- `supervisor/supervisor/process_manager.py`: `spawn` now takes an optional
+  `env` dict, merged over the container's own env (doc 5) -- needed for a
+  recipe's `extra_env`.
+- `supervisor/supervisor/admin_api.py`: bearer-token `Depends` on every
+  `/admin/*` route except `/admin/health` (which stays token-free);
+  `POST /admin/deploy`, `GET /admin/deployments/{id}/events?after=`,
+  `GET`/`PUT /admin/settings`; `/admin/status` now reports
+  `{state, child, vllm_healthy, exit_code, current_deployment_id}`.
+- `supervisor.py`: boot sequence now calls `deploy_runner.deploy_and_wait`
+  in its retry loop instead of duplicating spawn/health-check code.
+- Added `GET /debug/env` to `tests/fake-vllm/fake_vllm.py` (P00's test
+  double) so a deploy's `env` can be verified reaching the child without
+  parsing log lines.
+- 14 new pytest tests (`test_deploy_runner.py`, `test_admin_api.py`), on
+  top of P02's 19 (33 total); `./scripts/gate.sh` still green (142 + 17 +
+  6 + 33).
+
+Out of scope, not touched: failure classification/reason codes (P03b --
+a timed-out health check just records a plain `"failed"` event here),
+event push to the dashboard (P03c -- events are polled, not pushed), real
+GPU release checking (P04 -- still a fixed ~2s sleep), log retention (P05),
+the smoke test (P06 -- the request body's `smoke` field is accepted and
+ignored), cancel/stop/restart (P07).
 
 ## Deviations / findings worth flagging
 
