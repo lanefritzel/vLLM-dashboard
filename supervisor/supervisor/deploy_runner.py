@@ -22,6 +22,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
+from .event_push import EventPusher, PushItem
 from .failure_report import FailureReport, build_report
 from .process_manager import ProcessManager
 from .state import StateStore, SupervisorState
@@ -29,6 +30,7 @@ from .state import StateStore, SupervisorState
 RELEASING_GPU_WAIT_SECONDS = 2.0
 HEALTH_POLL_INTERVAL_SECONDS = 1.0
 CRASH_WATCH_POLL_INTERVAL_SECONDS = 1.0
+LOG_BATCH_INTERVAL_SECONDS = 1.0
 DEFAULT_CHILD_PORT = 9999
 
 
@@ -57,9 +59,15 @@ class DeployInProgressError(Exception):
 
 
 class DeployRunner:
-    def __init__(self, process_manager: ProcessManager, state_store: StateStore) -> None:
+    def __init__(
+        self,
+        process_manager: ProcessManager,
+        state_store: StateStore,
+        event_pusher: Optional[EventPusher] = None,
+    ) -> None:
         self._process_manager = process_manager
         self._state_store = state_store
+        self._event_pusher = event_pusher or EventPusher(url=None, token=None)
         self._state = "idle"
         self._current_deployment_id: Optional[str] = None
         self._events: dict[str, list[DeploymentEvent]] = {}
@@ -121,17 +129,54 @@ class DeployRunner:
         if self._post_ready_watcher is not None:
             self._post_ready_watcher.cancel()
             self._post_ready_watcher = None
+        self._event_pusher.start()  # no-op if disabled or already started
         deployment_id = deployment_id or str(uuid.uuid4())
         self._current_deployment_id = deployment_id
         self._events[deployment_id] = []
         self._seq_counters[deployment_id] = itertools.count(1)
         return deployment_id
 
+    def _next_seq(self, deployment_id: str) -> int:
+        # Shared across state/report/log pushes for a deployment (doc 5:
+        # "seq increases monotonically per deployment across all kinds").
+        return next(self._seq_counters[deployment_id])
+
     def _record(self, deployment_id: str, state: str, detail: Optional[dict] = None) -> None:
-        counter = self._seq_counters[deployment_id]
-        event = DeploymentEvent(deployment_id=deployment_id, seq=next(counter), ts=time.time(), state=state, detail=detail)
+        now = time.time()
+        seq = self._next_seq(deployment_id)
+        event = DeploymentEvent(deployment_id=deployment_id, seq=seq, ts=now, state=state, detail=detail)
         self._events[deployment_id].append(event)
         self._state = state
+        self._event_pusher.push(PushItem(
+            deployment_id=deployment_id, seq=seq, ts=now, kind="state",
+            payload={"state": state, "detail": detail}, droppable=False,
+        ))
+
+    def _push_report(self, deployment_id: str, report: FailureReport) -> None:
+        # A separate push, distinct from the state event above (doc 5:
+        # kind "report" -> {report:{reason, exit_code, log_tail}}, sent
+        # alongside failed/crashed) -- the GET /events catch-up API still
+        # only needs the state event's own `detail` (unchanged, P03a/b).
+        self._event_pusher.push(PushItem(
+            deployment_id=deployment_id, seq=self._next_seq(deployment_id), ts=time.time(), kind="report",
+            payload={"report": report.to_dict()}, droppable=False,
+        ))
+
+    async def _run_log_batch(self, deployment_id: str) -> None:
+        """Batches the child's new output lines about once a second while
+        a deploy is in flight (doc 5) -- started right after spawn,
+        cancelled once the deploy concludes (ready or failed)."""
+        try:
+            while True:
+                await asyncio.sleep(LOG_BATCH_INTERVAL_SECONDS)
+                lines = self._process_manager.drain_pending_log_lines()
+                if lines:
+                    self._event_pusher.push(PushItem(
+                        deployment_id=deployment_id, seq=self._next_seq(deployment_id), ts=time.time(), kind="log",
+                        payload={"lines": lines}, droppable=True,
+                    ))
+        except asyncio.CancelledError:
+            pass
 
     async def _run_deploy(
         self,
@@ -141,6 +186,7 @@ class DeployRunner:
         graceful_timeout: float,
         health_timeout: float,
     ) -> bool:
+        log_batch_task: Optional[asyncio.Task] = None
         try:
             if self._process_manager.is_running():
                 self._record(deployment_id, "stopping")
@@ -150,6 +196,7 @@ class DeployRunner:
 
             self._record(deployment_id, "starting")
             await asyncio.to_thread(self._process_manager.spawn, argv, env)
+            log_batch_task = asyncio.create_task(self._run_log_batch(deployment_id))
             self._record(deployment_id, "loading")
             self._record(deployment_id, "waiting_health")
 
@@ -173,6 +220,7 @@ class DeployRunner:
                     await asyncio.to_thread(self._process_manager.stop)
                 self._last_failure_report = report
                 self._record(deployment_id, "failed", report.to_dict())
+                self._push_report(deployment_id, report)
                 state = self._state_store.load() or SupervisorState()
                 state.last_argv = argv
                 state.last_run_outcome = "failed"
@@ -193,6 +241,8 @@ class DeployRunner:
             self._post_ready_watcher = asyncio.create_task(self._watch_for_crash(deployment_id))
             return True
         finally:
+            if log_batch_task is not None:
+                log_batch_task.cancel()  # only runs "while a deployment is in flight" (doc 5)
             self._current_deployment_id = None
 
     async def _watch_for_crash(self, deployment_id: str) -> None:
@@ -211,6 +261,7 @@ class DeployRunner:
                     )
                     self._last_failure_report = report
                     self._record(deployment_id, "crashed", report.to_dict())
+                    self._push_report(deployment_id, report)
                     state = self._state_store.load() or SupervisorState()
                     state.last_run_outcome = "crashed"
                     state.last_failure_report = report.to_dict()

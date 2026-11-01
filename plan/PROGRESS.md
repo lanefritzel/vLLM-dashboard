@@ -15,6 +15,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P02 | done | 2026-10-31 | See below. |
 | P03a | done | 2026-11-01 | See below. |
 | P03b | done | 2026-11-01 | See below. |
+| P03c | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -509,6 +510,56 @@ revisited.
 
 Out of scope, not touched: pushing the report to the dashboard (P03c),
 storing it in the DB (P10b).
+
+## P03c -- Event push (supervisor -> dashboard)
+
+Hit the same class of bug a FOURTH time this build, finally fixed at the
+root instead of patched around again: `supervisor.py` used to run the boot
+sequence under its own `asyncio.run()` call and then hand off to the
+synchronous `uvicorn.run()` for the server -- `asyncio.run()` tears down
+its event loop (and anything still scheduled on it, e.g. the event
+pusher's sender task, started during boot) the moment its own coroutine
+returns. Restructured so the ENTIRE process -- boot sequence, the event
+pusher's background task, and the admin API's server -- runs on one
+event loop for its whole lifetime (`uvicorn.Config`/`uvicorn.Server(...).serve()`
+awaited inside the same `main_async()` as the boot sequence, instead of
+two separate run calls). Documented prominently in `supervisor.py`'s own
+module docstring so this doesn't get re-introduced by a future edit; also
+hit (and fixed the same way) twice more while writing this phase's own
+tests, which is what made the pattern obvious enough to fix for good.
+
+Done:
+- `supervisor/supervisor/event_push.py`: `EventPusher` -- a bounded queue
+  (default 1000), a background sender task with exponential backoff
+  (1s/2s/4s/.../max 30s), `push()` itself synchronous/non-blocking. At
+  capacity, evicts the oldest droppable ("log") item anywhere in the queue
+  to make room; a state/report item is never dropped, even if that means
+  growing past the nominal cap. Disabled cleanly (no queue growth, no
+  task, no network calls at all) when `url` is falsy.
+- `process_manager.py`: a second, separately-drained buffer of new output
+  lines (`drain_pending_log_lines()`) alongside the existing bounded tail
+  (P03b's `log_tail()`) -- the log-batch pusher consumes the former
+  roughly once a second; the failure report still reads the latter.
+- `deploy_runner.py`: every `_record()` (state transition) now also
+  pushes a `kind: "state"` item with the same seq; `failed`/`crashed`
+  additionally push a separate `kind: "report"` item (own, later seq);
+  a log-batch task runs only while a deploy is actually in flight
+  (started after spawn, cancelled when the deploy concludes). `seq` is
+  shared across all three kinds per deployment, via one counter.
+- `supervisor.py`: restructured as above; `DASHBOARD_EVENT_URL` wires an
+  `EventPusher` into the one `DeployRunner` for the process's lifetime.
+- 11 new tests (`test_event_push.py`, including a real local recording
+  HTTP server standing in for the dashboard -- `tests/recording_stub.py`)
+  -- 54 total in the supervisor project; `./scripts/gate.sh` still green
+  (142 + 17 + 6 + 54).
+- Verified by hand against the real `Dockerfile.test` image too: a real
+  deploy's pushes landing on a real local HTTP stub over `--network host`,
+  in order, with the right `Authorization` header, a log batch, and a
+  final `ready` -- commands in `plan/testing-reference.md`.
+
+Out of scope, not touched: the dashboard-side receiver (P10b), persisting
+logs (P05 -- the log batches are pushed, but nothing on the supervisor
+side stores them beyond the existing P03b tail/buffer).
 
 ## Deviations / findings worth flagging
 

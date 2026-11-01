@@ -160,6 +160,47 @@ is read from `state.json`, not in-memory -- it survives a container
 restart, so this is also how you check "idle boot after a failed run still
 shows the report" (P02/P03b).
 
+### Event push to a real stub (P03c)
+
+The container needs to reach a stub running on the host -- simplest is
+`--network host` for a one-off manual check (not how it'd run in compose,
+where the dashboard is just another service on the same bridge network).
+
+```bash
+# A minimal recording stub (writes each POST to a file, one JSON line each):
+cat > /tmp/stub_server.py << 'EOF'
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+LOGFILE = "/tmp/stub_requests.jsonl"
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b"{}"
+        with open(LOGFILE, "a") as f:
+            f.write(json.dumps({"headers": dict(self.headers), "body": json.loads(body)}) + "\n")
+        self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+open(LOGFILE, "w").close()
+ThreadingHTTPServer(("0.0.0.0", 18999), Handler).serve_forever()
+EOF
+nohup python3 /tmp/stub_server.py > /tmp/stub_server.log 2>&1 &
+
+docker run -d --name supervisor-dev --init --network host \
+  -e SUPERVISOR_TOKEN=secret -e DASHBOARD_EVENT_URL=http://127.0.0.1:18999/events \
+  -e ADMIN_PORT=18500 supervisor-test
+
+# ... trigger a deploy via /admin/deploy as above, then:
+cat /tmp/stub_requests.jsonl | python3 -c "
+import sys, json
+for line in sys.stdin:
+    r = json.loads(line)
+    print(r['headers'].get('Authorization'), '|', r['body'].get('kind'), r['body'].get('seq'),
+          r['body'].get('state') or list(r['body'].get('report', {}).keys()) or r['body'].get('lines'))
+"
+```
+For the test project's own equivalent (no Docker, used by the actual
+pytest suite), see `supervisor/tests/recording_stub.py`'s `RecordingStub`.
+
 Finding zombies/process trees in a running container (no `ps`/`kill`
 binaries in the slim test image): use `docker top <cid>` from the host for
 the tree, and `docker exec <cid> python3 -c "..."` with `os.listdir('/proc')`

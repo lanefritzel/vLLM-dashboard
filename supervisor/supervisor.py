@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Supervisor entrypoint (P02 + P03a). On start: decide whether to replay
-the last healthy argv (or, on first boot, the compose command's argv),
-spawn the child if so via the same deploy state machine POST /admin/deploy
-uses, retrying in-process up to RETRY_CAP times before giving up and
-persisting a non-healthy outcome. Then serve the admin API. A dumb process
-manager -- never reads Postgres, never resolves recipes.
+"""Supervisor entrypoint (P02 + P03a + P03c). On start: decide whether to
+replay the last healthy argv (or, on first boot, the compose command's
+argv), spawn the child if so via the same deploy state machine
+POST /admin/deploy uses, retrying in-process up to RETRY_CAP times before
+giving up and persisting a non-healthy outcome. Then serve the admin API.
+A dumb process manager -- never reads Postgres, never resolves recipes.
+
+Everything (the boot sequence, the event-push background task, and the
+admin API's own server) runs on ONE event loop for the whole process --
+using asyncio.run() separately for the boot sequence and then the
+(synchronous) uvicorn.run() for the server would tear the first loop down
+the moment the boot coroutine returns, destroying anything still scheduled
+on it (e.g. the event pusher's sender task, started during boot). Found by
+hand while wiring P03c; same root cause as a test-harness issue hit twice
+already while writing this phase's tests.
 """
 from __future__ import annotations
 
@@ -16,6 +25,7 @@ import uvicorn
 
 from supervisor.admin_api import create_app
 from supervisor.deploy_runner import DeployRunner
+from supervisor.event_push import EventPusher
 from supervisor.process_manager import ProcessManager
 from supervisor.state import RETRY_CAP, StateStore, decide_boot_action
 
@@ -23,6 +33,7 @@ BOOT_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("BOOT_HEALTH_TIMEOUT_SECONDS"
 RETRY_DELAY_SECONDS = 2.0
 ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8000"))  # TBD per doc 5 -- any free port works; firmed up by P15b
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")  # unset -- and every /admin/* route except /health 401s
+DASHBOARD_EVENT_URL = os.environ.get("DASHBOARD_EVENT_URL")  # unset -- event push disabled cleanly (P03c)
 
 
 async def run_boot_sequence(deploy_runner: DeployRunner, process_manager: ProcessManager, state_store: StateStore) -> None:
@@ -70,15 +81,21 @@ async def run_boot_sequence(deploy_runner: DeployRunner, process_manager: Proces
         await asyncio.sleep(RETRY_DELAY_SECONDS)
 
 
-def main() -> None:
+async def main_async() -> None:
     state_store = StateStore()
     process_manager = ProcessManager()
-    deploy_runner = DeployRunner(process_manager, state_store)
+    event_pusher = EventPusher(url=DASHBOARD_EVENT_URL, token=SUPERVISOR_TOKEN)
+    deploy_runner = DeployRunner(process_manager, state_store, event_pusher)
 
-    asyncio.run(run_boot_sequence(deploy_runner, process_manager, state_store))
+    await run_boot_sequence(deploy_runner, process_manager, state_store)
 
     app = create_app(process_manager, deploy_runner, state_store, SUPERVISOR_TOKEN)
-    uvicorn.run(app, host="0.0.0.0", port=ADMIN_PORT, log_level="info")
+    config = uvicorn.Config(app, host="0.0.0.0", port=ADMIN_PORT, log_level="info")
+    await uvicorn.Server(config).serve()
+
+
+def main() -> None:
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

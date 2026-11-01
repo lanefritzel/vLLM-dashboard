@@ -31,6 +31,13 @@ class ProcessManager:
         self._process: Optional[subprocess.Popen] = None
         self._info: Optional[ChildInfo] = None
         self._log_tail: deque[str] = deque(maxlen=LOG_TAIL_LINES)
+        # New lines since the last drain_pending_log_lines() call -- P03c's
+        # log-batch pusher drains this ~once/sec while a deploy is in
+        # flight. Separate from _log_tail (which never shrinks on read, for
+        # the failure report); a plain list + lock since it's written from
+        # the pump thread and read from the asyncio event loop thread.
+        self._pending_log_lines: list[str] = []
+        self._pending_log_lock = threading.Lock()
 
     @property
     def info(self) -> Optional[ChildInfo]:
@@ -47,10 +54,19 @@ class ProcessManager:
         stdout+stderr, for the failure report (P03b)."""
         return "\n".join(self._log_tail)
 
+    def drain_pending_log_lines(self) -> list[str]:
+        """Returns and clears whatever lines have arrived since the last
+        call (P03c's log-batch pusher)."""
+        with self._pending_log_lock:
+            lines, self._pending_log_lines = self._pending_log_lines, []
+        return lines
+
     def spawn(self, argv: list[str], env: Optional[dict[str, str]] = None) -> ChildInfo:
         if self.is_running():
             raise RuntimeError("a child is already running")
         self._log_tail = deque(maxlen=LOG_TAIL_LINES)
+        with self._pending_log_lock:
+            self._pending_log_lines = []
         process = subprocess.Popen(
             argv,
             # Its own session/process group: a later stop (P03a) signals the
@@ -89,7 +105,10 @@ class ProcessManager:
         try:
             if process.stdout is not None:
                 for line in process.stdout:
-                    self._log_tail.append(line.rstrip("\n"))
+                    stripped = line.rstrip("\n")
+                    self._log_tail.append(stripped)
+                    with self._pending_log_lock:
+                        self._pending_log_lines.append(stripped)
                     sys.stdout.write(line)
                     sys.stdout.flush()
         finally:
