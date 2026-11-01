@@ -1,7 +1,9 @@
 # Test-environment compose for P00's gate: postgres + dashboard (built from
 # the working tree) + fake vLLM, all on one bridge network. No GPU, no real
-# model. The supervisor container joins this in P02. Not used in production --
-# see deploy/docker-compose.yml for that.
+# model. The P02 supervisor service below runs the SAME fake vLLM as its own
+# spawned child (not a sibling service) -- separate from the standalone
+# fake-vllm service the dashboard talks to directly for P00's own smoke test.
+# Not used in production -- see deploy/docker-compose.yml for that.
 services:
   postgres:
     image: postgres:16
@@ -29,6 +31,22 @@ services:
     expose:
       - "9999"
 
+  # P02: the Python supervisor, spawning the fake vLLM as its own child
+  # (not this compose's "fake-vllm" service -- that one's standalone, for the
+  # dashboard's own smoke test). Verifies boot replay/state.json/the admin
+  # API without needing the real Intel/NVIDIA base image.
+  supervisor:
+    build:
+      context: ..
+      dockerfile: supervisor/Dockerfile.test
+    init: true  # tini-equivalent PID 1 -- this test image doesn't bake tini in itself
+    restart: "no"
+    volumes:
+      - test-supervisor-state:/state
+    command: ["serve", "/models/fake", "--served-model-name", "fake-model", "--port", "9999"]
+    expose:
+      - "8000"
+
   dashboard:
     build:
       context: ..
@@ -50,3 +68,4 @@ services:
 
 volumes:
   test-dataprotection:
+  test-supervisor-state:

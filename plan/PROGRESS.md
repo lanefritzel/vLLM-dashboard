@@ -9,6 +9,7 @@ Tracked here, not in the Outline KB, per the Build Plan's working rules.
 | P09a | done | 2026-10-31 | Done out of table order, before P01b -- see below. |
 | P01b | code + tests done; report awaiting owner sign-off | 2026-10-31 | See below. |
 | P01c | done -- soak passed | 2026-10-31 | See below. |
+| P02 | done | 2026-10-31 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -288,6 +289,91 @@ fallback to host networking needed for Postgres<->dashboard. (A benign
 Npgsql GSS-auth-library warning -- `Cannot load library libgssapi_krb5.so.2`
 -- appears in the log; it's a fallback-path warning, not an error, and
 every query still succeeded.)
+
+## P02 -- Supervisor skeleton (image, spawn, boot replay)
+
+First phase of the Python track. Layout matches the page's proposal:
+`supervisor/supervisor.py` (entrypoint script) + `supervisor/supervisor/`
+(the `process_manager.py`/`state.py`/`admin_api.py` package) +
+`entrypoint.sh`/`Dockerfile`/`Dockerfile.test`/`tests/`.
+
+Two real design/implementation issues surfaced while verifying the DoD by
+hand against actual containers (not just unit tests) -- both fixed, not
+just noted:
+
+1. **The retry-cap logic as first written could never reach 3.** My initial
+   `decide_boot_action` treated "last_run_outcome != healthy" as an
+   unconditional refusal to replay on every future boot -- but that means
+   the FIRST failed replay already blocks all later attempts, so
+   `consecutive_failed_replays` could never climb past 1 across separate
+   container restarts; the retry-cap check was dead code. Doc 5's
+   "consecutive boot replays" turned out to mean retries *within one
+   supervisor run* (give a transient failure a few automatic retries before
+   giving up), not across separate container restarts. Fixed by moving the
+   retry loop into `supervisor.py`'s boot sequence itself: the "only if
+   last_run_outcome == healthy" gate decides whether to attempt a replay at
+   all on a given boot; once attempting, the same argv is retried in-process
+   up to `RETRY_CAP` (3) times before persisting a final non-healthy outcome
+   and going idle. Verified end-to-end: `consecutive_failed_replays` reaches
+   exactly 3 within one container run, and a subsequent restart correctly
+   stays idle (the persisted backstop).
+2. **The supervisor never reaped its own direct child.** Confirmed the
+   DoD's actual "grandchild -> PID 1" scenario works correctly (tini/
+   `docker-init` properly reaps an orphaned grandchild once its immediate
+   parent is gone) -- but while building that test, found a zombie
+   accumulating under the supervisor's own PID instead: `ProcessManager`
+   called `subprocess.Popen` but never called `.wait()`/`.poll()` on it
+   except during the boot health-check window, so a child that exited
+   later (crashed, or just finished) sat as a zombie under the supervisor
+   indefinitely. Fixed with one background daemon thread per spawn whose
+   only job is the blocking `wait()` call (and `stop()` now polls rather
+   than calling `wait()` itself, so the two never race on the same `Popen`).
+   Re-verified by hand: kill the grandchild, kill the child, no zombie
+   remains anywhere in the tree.
+
+Also verified by hand (all via real `docker run`/`docker exec` against the
+built `Dockerfile.test` image, not just unit tests): PID+argv visible via
+`/admin/status`; state.json written on first boot with the `vllm` prefix
+normalized (via the `vllm-shim.sh` that execs the fake, since there's no
+real vLLM CLI in the test image); a second container, given a *different*
+command, correctly ignores it and replays the persisted `last_argv`
+instead; a hand-edited `last_run_outcome=failed` state.json produces an
+idle boot; `settings.AUTO_START=off` produces an idle boot regardless of
+outcome; the supervisor needs no DB env vars (true by construction -- the
+code never references Postgres/a connection string at all).
+
+Done:
+- `supervisor/supervisor/state.py`: atomic `state.json` read/write
+  (temp-file + `os.replace`), `normalize_argv` (prepends `vllm` only when
+  the first element is literally `"serve"`), `decide_boot_action` (pure --
+  the initial replay-or-not gate).
+- `supervisor/supervisor/process_manager.py`: spawn in its own session/
+  process group; a background reaper thread per spawn; `stop()` (SIGTERM
+  the group, poll, SIGKILL if still alive).
+- `supervisor/supervisor/admin_api.py`: `GET /admin/health` (no auth),
+  stub `GET /admin/status` (pid/argv/started_at). Everything else
+  (deploy/stop/restart/events/auth/GPU) is P03a+.
+- `supervisor/supervisor.py`: ties the above together -- boot decision,
+  retry loop, health check via stdlib `urllib` (zero added dependencies,
+  per the page), then serves the admin API via uvicorn. `ADMIN_PORT`
+  defaults to 8000 -- doc 5 says this port is genuinely TBD ("any free
+  number inside the compose network"); picked a default rather than
+  blocking on it, since the page doesn't ask this phase to settle it.
+- `supervisor/Dockerfile` (derived image, `ARG BASE_IMAGE`) and
+  `supervisor/Dockerfile.test` (python:slim + the fake vLLM + a `vllm` shim
+  script, so CI doesn't need the real Intel/NVIDIA base image). `tini` as
+  PID 1 relies on `init: true` (compose) / `--init` (docker run) rather
+  than baking tini into the image -- P00's stock-image check (does the
+  real base already ship tini) is still deferred to P16a prep, so baking
+  it in now would mean guessing at an unknown base image's package manager.
+- 19 pytest unit tests (`supervisor/tests/`) for the pure decision logic
+  and process lifecycle; added as a `gate.sh` section (fast, no Docker).
+- Added a `supervisor` service to `deploy/docker-compose.test.yml`
+  (work item 4), spawning the fake vLLM as its own child -- separate from
+  that compose's existing standalone `fake-vllm` service.
+
+Out of scope, not touched: deploy API, the full state machine, auth, GPU,
+log retention, event push -- all P03a onward.
 
 ## Deviations / findings worth flagging
 

@@ -1,0 +1,19 @@
+# Plain python:slim + the fake vLLM test double (P00) + a `vllm` shim, so the
+# supervisor can be exercised in CI without the real Intel/NVIDIA base image.
+# Build context must be the REPO ROOT (not supervisor/), since this also
+# copies tests/fake-vllm/fake_vllm.py -- e.g.
+#   docker build -f supervisor/Dockerfile.test -t supervisor-test .
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY supervisor/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY supervisor/supervisor.py /app/supervisor.py
+COPY supervisor/supervisor/   /app/supervisor/
+
+COPY supervisor/vllm-shim.sh /usr/local/bin/vllm
+RUN chmod +x /usr/local/bin/vllm
+COPY tests/fake-vllm/fake_vllm.py /app/fake_vllm.py
+
+ENTRYPOINT ["python3", "/app/supervisor.py"]
