@@ -77,4 +77,9 @@ public sealed record RecipeServer
 
     public int GpuCount { get; init; } = 1;
     public int? GpuMemGb { get; init; }
+
+    /// <summary>Free-text GPU name (P09b). "Intel stack" = this contains "intel"
+    /// (case-insensitive) — fragile by design, no vendor enum — used only to
+    /// decide the dtype save-time rule in <see cref="CompatibilityPass"/>.</summary>
+    public string? GpuName { get; init; }
 }

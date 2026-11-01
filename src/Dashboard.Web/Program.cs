@@ -130,6 +130,15 @@ builder.Services.AddSingleton<IModelCatalog, ModelCatalog>();
 builder.Services.AddSingleton<ILaunchSpecStore, LaunchSpecStore>();
 builder.Services.AddSingleton<IMetricsHistory, MetricsHistory>();
 
+// New-schema (V2) service layer (P09b) -- same singleton + per-operation-scope
+// pattern as the legacy catalogs above.
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IServerService, Dashboard.Infrastructure.Persistence.V2.ServerService>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IInstanceService, Dashboard.Infrastructure.Persistence.V2.InstanceService>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IModelService, Dashboard.Infrastructure.Persistence.V2.ModelService>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IRecipeService, Dashboard.Infrastructure.Persistence.V2.RecipeService>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IDeploymentService, Dashboard.Infrastructure.Persistence.V2.DeploymentService>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorTokenProvider, Dashboard.Infrastructure.Persistence.V2.ConfigSupervisorTokenProvider>();
+
 // Hosted services. Order matters: hosted services start in registration order,
 // so the DB initializer (migrations + seed) must start before the metrics
 // polling and rollup loops that depend on the schema.

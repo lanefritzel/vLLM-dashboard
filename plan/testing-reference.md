@@ -120,6 +120,26 @@ this blindly): container `llm-stack-postgres-1`, db/user/password all
 `Models` rows (1 active: `qwen3.8-vllm`), 1 Identity user. Full details and
 the known DB-vs-live-compose drift: `plan/conversion-mapping.md`.
 
+## Domain services + save-time validation (P09b)
+
+No new HTTP surface -- Blazor components call these services directly via
+DI, so there's nothing to curl. Re-run just this phase's tests:
+
+```bash
+# Pure validation (no DB) -- dtype/field rules + blank-field guardrails.
+dotnet test tests/Dashboard.Core.Tests --filter "FullyQualifiedName~CompatibilityPassTests|FullyQualifiedName~V2ServiceValidationTests"
+
+# CRUD + immutability + friendly-error integration tests (real Postgres via Testcontainers).
+dotnet test tests/Dashboard.Infrastructure.Tests --filter FullyQualifiedName~V2ServiceTests
+```
+
+`CompatibilityPass.CheckRecipe(recipe, server)` is the model-independent
+subset (dtype, field rules) enforced at recipe SAVE time; the full
+`CompatibilityPass.Check(model, recipe, server)` (adds model path/
+availability/sizing) is only meaningful once a model is actually picked --
+exposed as `IRecipeService.ValidateAsync(recipeId, modelId)`, non-throwing,
+for deploy pre-flight (P10a) and the UI.
+
 ## Postgres-over-bridge soak test (P01c)
 
 ```bash

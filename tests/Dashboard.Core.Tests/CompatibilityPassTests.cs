@@ -4,7 +4,7 @@ namespace Dashboard.Core.Tests;
 
 public class CompatibilityPassTests
 {
-    private static RecipeModel PlainModel() => new() { Path = "/data/models/plain-model" };
+    private static RecipeModel PlainModel() => new() { Path = "/data/models/hf-cache/plain-model" };
     private static RecipeServer PlainServer() => new() { ModelsDir = "/data/models" };
     private static Recipe PlainRecipe() => new();
 
@@ -86,5 +86,150 @@ public class CompatibilityPassTests
         var result = CompatibilityPass.Check(model, recipe, server);
 
         Assert.DoesNotContain(result.SoftWarnings, i => i.Code == "gpu_memory_utilization_too_low");
+    }
+
+    // --- P09b: dtype rule (v1, owner-confirmed 2026-11-01 -- the second qwen incident) ---
+
+    [Fact]
+    public void Check_DtypeBfloat16OnIntelServer_IsAHardBlock()
+    {
+        var server = PlainServer() with { GpuName = "Intel Arc A770" };
+        var recipe = PlainRecipe() with { Dtype = "bfloat16" };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, server);
+
+        Assert.Contains(result.HardBlocks, i => i.Code == "dtype_bfloat16_blocked_on_intel");
+    }
+
+    [Theory]
+    [InlineData("auto")]
+    [InlineData("")]
+    public void Check_DtypeAutoOrUnsetOnIntelServer_IsASoftWarningNotAHardBlock(string dtype)
+    {
+        var server = PlainServer() with { GpuName = "Intel Arc A770" };
+        var recipe = PlainRecipe() with { Dtype = dtype };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, server);
+
+        Assert.Empty(result.HardBlocks);
+        Assert.Contains(result.SoftWarnings, i => i.Code == "dtype_auto_on_intel");
+    }
+
+    [Fact]
+    public void Check_DtypeFloat16OnIntelServer_Passes()
+    {
+        var server = PlainServer() with { GpuName = "Intel Arc A770" };
+        var recipe = PlainRecipe() with { Dtype = "float16" };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, server);
+
+        Assert.Empty(result.HardBlocks);
+        Assert.DoesNotContain(result.SoftWarnings, i => i.Code == "dtype_auto_on_intel");
+    }
+
+    [Fact]
+    public void Check_DtypeBfloat16OnNonIntelServer_HasNoDtypeIssue()
+    {
+        var server = PlainServer() with { GpuName = "NVIDIA RTX 4090" };
+        var recipe = PlainRecipe() with { Dtype = "bfloat16" };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, server);
+
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "dtype_bfloat16_blocked_on_intel");
+        Assert.DoesNotContain(result.SoftWarnings, i => i.Code == "dtype_auto_on_intel");
+    }
+
+    [Fact]
+    public void Check_DtypeBfloat16WithNoGpuNameAtAll_HasNoDtypeIssue()
+    {
+        var server = PlainServer() with { GpuName = null };
+        var recipe = PlainRecipe() with { Dtype = "bfloat16" };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, server);
+
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "dtype_bfloat16_blocked_on_intel");
+    }
+
+    // --- P09b: field rules ---
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Check_NonPositiveMaxModelLen_IsAHardBlock(int maxModelLen)
+    {
+        var recipe = PlainRecipe() with { MaxModelLen = maxModelLen };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, PlainServer());
+
+        Assert.Contains(result.HardBlocks, i => i.Code == "max_model_len_not_positive");
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(-0.1)]
+    [InlineData(1.1)]
+    public void Check_GpuMemoryUtilizationOutOfRange_IsAHardBlock(double value)
+    {
+        var recipe = PlainRecipe() with { GpuMemoryUtilization = value };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, PlainServer());
+
+        Assert.Contains(result.HardBlocks, i => i.Code == "gpu_memory_utilization_out_of_range");
+    }
+
+    [Fact]
+    public void Check_GpuMemoryUtilizationExactlyOne_Passes()
+    {
+        var recipe = PlainRecipe() with { GpuMemoryUtilization = 1.0 };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, PlainServer());
+
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "gpu_memory_utilization_out_of_range");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("has space")]
+    [InlineData("-leading-dash")]
+    public void Check_InvalidServedModelName_IsAHardBlock(string servedModelName)
+    {
+        var recipe = PlainRecipe() with { ServedModelName = servedModelName };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, PlainServer());
+
+        Assert.Contains(result.HardBlocks, i => i.Code == "served_model_name_invalid");
+    }
+
+    [Theory]
+    [InlineData("main")]
+    [InlineData("qwen3-8b")]
+    [InlineData("model.v1_2")]
+    public void Check_ValidServedModelName_Passes(string servedModelName)
+    {
+        var recipe = PlainRecipe() with { ServedModelName = servedModelName };
+
+        var result = CompatibilityPass.Check(PlainModel(), recipe, PlainServer());
+
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "served_model_name_invalid");
+    }
+
+    [Fact]
+    public void Check_ModelPathOutsideServersHfCache_IsAHardBlock()
+    {
+        var model = PlainModel() with { Path = "/data/models/not-hf-cache/some-model" };
+
+        var result = CompatibilityPass.Check(model, PlainRecipe(), PlainServer());
+
+        Assert.Contains(result.HardBlocks, i => i.Code == "model_path_outside_hf_cache");
+    }
+
+    [Fact]
+    public void Check_ModelPathUnderServersHfCache_HasNoPathIssue()
+    {
+        var model = PlainModel() with { Path = "/data/models/hf-cache/some-model/model.safetensors" };
+
+        var result = CompatibilityPass.Check(model, PlainRecipe(), PlainServer());
+
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_hf_cache");
     }
 }

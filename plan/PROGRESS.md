@@ -21,6 +21,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P06 | done | 2026-11-01 | See below. |
 | P07 | done | 2026-11-01 | See below. |
 | P08 | done | 2026-11-01 | See below. |
+| P09b | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -959,6 +960,123 @@ to avoid a surprise version conflict with whatever vllm itself pins.
 | Unreachable/401/404 repo -> `download_failed` with a readable message; retry resumes (no re-download of finished files) | Yes | `test_unreachable_repo_download_fails_with_readable_message`, `test_inspect_gated_repo_raises_401`, `test_inspect_unknown_repo_raises_404`, `test_retry_after_failure_resumes_without_redownloading_finished_files` |
 | Stub free space below required -> `DiskGuard.Check` blocks with the required-vs-available message (unit) | Yes | `DiskGuardTests.Check_AvailableBelowRequired_IsBlockedWithRequiredAndAvailableInMessage` |
 | `HF_TOKEN` read from env only (grep: no token in any response or log line) | Yes | `test_hf_token_never_appears_in_any_response` (asserts absence from both JSON responses and captured stdout/stderr); real container test used a real token-less call (public repo) so no token was ever in play there either |
+
+## P09b -- Save-time validation + domain CRUD
+
+Confirmed the dtype rule with the owner before building, per the page's own
+explicit "owner to confirm" instruction: bfloat16 hard-blocked on Intel,
+auto/unset soft-warns on Intel, float16 passes, no issue at all on
+non-Intel -- exactly as stated on the page, no changes.
+
+Design decision made while implementing, not spelled out verbatim on the
+page: **a `Recipe` is model-agnostic** (it's applied to different models
+at different deploy times), so `CompatibilityPass.Check(model, recipe,
+server)` -- P09a's existing pure validator, which this phase extends --
+was split into `CheckRecipe(recipe, server)` (the model-INDEPENDENT rules:
+dtype, `max_model_len > 0`, `gpu_memory_utilization` range,
+`served_model_name` identifier, tensor-parallel-vs-GPU-count) and `Check`
+(adds the model-DEPENDENT rules: path/availability/sizing) which calls
+`CheckRecipe` internally. `RecipeService.CreateAsync`/`UpdateAsync` enforce
+only the model-independent subset at save time (throwing on any hard
+block -- this is the "hard-blocked" the DoD's unit tests exercise); the
+full model-aware `Check` is exposed as a separate, non-throwing
+`ValidateAsync(recipeId, modelId)` for deploy pre-flight (P10a) and the UI,
+and for re-checking an existing/legacy-shaped row without erroring (doc 13
+gap 12) -- this is why a recipe can be *saved* validly before any model is
+ever chosen for it, while a *deploy* still gets the full model-aware check.
+
+Blank-field guardrails (the literal "first qwen incident" family: an empty
+model path, and the equivalent for each entity's own identifying field --
+`Server.Label`, `Instance.Label`, `Model.Name`/`Path`, `Recipe.Name`) live
+directly in each service's own `ValidateForSave`, following the existing
+legacy `ModelCatalog.ValidateForSave` pattern exactly (throws
+`ArgumentException`, checked before any DB access) -- not through
+`CompatibilityPass`, since the pure `Recipe`/`RecipeServer` input records
+P09a defined don't carry a name/label field at all (by design, ArgBuilder
+never needed one).
+
+Done:
+- `src/Dashboard.Core/Recipes/RecipeArgsInput.cs`: added `RecipeServer.GpuName`
+  (nullable) -- needed to decide the dtype rule's "Intel stack" check.
+- `src/Dashboard.Core/Recipes/CompatibilityPass.cs`: new `CheckRecipe` (see
+  above) with the dtype rule, `max_model_len > 0`, `gpu_memory_utilization`
+  in (0,1], `served_model_name` valid-identifier, plus a new model-dependent
+  `model_path_outside_hf_cache` check added to `Check` (a model's path must
+  live under its server's `models_dir/hf-cache/`, matching P08's "one
+  scheme everywhere" convention). 20 new unit tests in
+  `CompatibilityPassTests.cs` (the existing fixture's model path was moved
+  under `hf-cache/` to match the new rule -- 2 pre-existing tests had
+  started failing against it, fixed by updating the shared fixture, not
+  the rule).
+- `src/Dashboard.Infrastructure/Persistence/V2/`: `ServerService`,
+  `InstanceService`, `ModelService`, `RecipeService`, `DeploymentService`
+  (new files) -- CRUD for all five new-schema entities, each following the
+  existing `ModelCatalog`'s singleton + `IServiceScopeFactory`-per-operation
+  pattern. `RecipeService` additionally has `DuplicateAsync` ("name-copy",
+  auto-numbered on a second collision), `CreateFromModelAsync` (prefills
+  `max_model_len` from the model's own `config.json` `max_position_embeddings`
+  when readable, else the schema default; `gpu_memory_utilization = 0.90`),
+  and the non-throwing `ValidateAsync` described above.
+  `DeploymentService.TransitionAsync` only ever touches status/stop_reason/
+  failure/exit_code/log_tail/started_at/stopped_at -- never `ArgsSnapshot`
+  (immutable at runtime, enforced simply by the method never accepting or
+  writing it). `PostgresErrors.IsUniqueViolation` is a small shared helper
+  so every service turns a raw 23505 into the same kind of friendly
+  message (recipe-name-per-server, proxy-slug, and the deployments partial
+  unique index all go through it) instead of a bare constraint name
+  leaking to a caller.
+- `src/Dashboard.Core/Abstractions/ISupervisorTokenProvider.cs` +
+  `src/Dashboard.Infrastructure/Persistence/V2/ConfigSupervisorTokenProvider.cs`:
+  the stub the page asks for -- one token for every instance, read from
+  configuration (`Supervisor:Token`), not the DB; real per-instance storage
+  is P15b's own open decision.
+- `src/Dashboard.Web/Program.cs`: all five services + the token provider
+  registered for DI (singleton, matching the legacy catalogs above them).
+- 11 new unit tests (`V2ServiceValidationTests.cs`, in
+  `Dashboard.Core.Tests` even though the services live in
+  `Dashboard.Infrastructure` -- true unit tests: each service's
+  `ValidateForSave` throws before ever touching its `IServiceScopeFactory`,
+  so passing a deliberately-unusable one keeps these DB-free) + 16 new
+  Postgres integration tests (`V2ServiceTests.cs`) covering CRUD
+  round-trips for all five entities, `args_snapshot` immutability across
+  transitions, the three friendly-error cases (concurrent swap, duplicate
+  recipe name, duplicate proxy slug), recipe hard-block enforcement at
+  save time, duplicate/create-from-model, and validating the seed
+  fixture's own legacy-shaped model (whose path isn't under `hf-cache/`)
+  without throwing. 177 + 33 .NET tests total (was 146 + 17);
+  `./scripts/gate.sh` green.
+- No real-container manual verification this phase -- there's no new
+  runtime/HTTP surface (the page itself only asks for a service layer, "+
+  thin API/controllers if the project style uses them," and this
+  codebase's style is Blazor components calling services directly via DI,
+  not separate REST controllers for catalog data). The automated
+  unit + real-Postgres-integration coverage above is the verification.
+
+Two found-and-fixed test bugs worth flagging for future Postgres jsonb
+work: (1) a `jsonb` column round-trips through its own canonical
+whitespace (e.g. a space after each comma) -- comparing a stored jsonb
+string against the original literal by exact text equality is wrong;
+compare parsed. (2) a `jsonb` column rejects malformed JSON at the DB
+level before any C# code ever sees it -- "config unreadable" can't be
+simulated by writing garbage into a jsonb column directly; the realistic
+unreadable-equivalent shapes at this layer are "no config" or "valid JSON
+missing the expected field" (P08's own "config unreadable" is a check
+against the raw HF repo file, a different layer, before anything is ever
+stored).
+
+Out of scope, not touched: calling the supervisor (P10a). UI (P13).
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Unit (incident reproductions): blank server/name/path -> rejected | Yes | `V2ServiceValidationTests`: `ServerService_CreateWithBlankLabel_Rejected`, `ModelService_CreateWithBlankPath_Rejected`, `ModelService_CreateWithBlankName_Rejected`, `InstanceService_CreateWithBlankLabel_Rejected` |
+| Unit: `dtype=bfloat16` on Intel -> hard-blocked; `auto` on Intel -> warning; `float16` -> passes; same recipe on non-Intel -> no dtype issue | Yes | `CompatibilityPassTests`: `Check_DtypeBfloat16OnIntelServer_IsAHardBlock`, `Check_DtypeAutoOrUnsetOnIntelServer_IsASoftWarningNotAHardBlock`, `Check_DtypeFloat16OnIntelServer_Passes`, `Check_DtypeBfloat16OnNonIntelServer_HasNoDtypeIssue` |
+| Unit: field-rule violations rejected with clear messages; duplicate recipe name rejected | Yes | `CompatibilityPassTests`' field-rule tests (max_model_len, gpu_memory_utilization, served_model_name, slug) + `V2ServiceTests.RecipeService_DuplicateNameOnSameServer_SurfacesAsFriendlyError` |
+| Integration (Postgres): CRUD round-trips for all five entities | Yes | `V2ServiceTests`: one `*_CrudRoundTrips` test per entity |
+| Integration: creating a deployment stores `args_snapshot` exactly as given and refuses later edits to it | Yes | `DeploymentService_ArgsSnapshotIsFrozenAtCreateTime_TransitionNeverTouchesIt` (compared parsed, since jsonb reformats whitespace on storage) |
+| Integration: the partial unique index surfaces as a friendly "a swap is already in progress" error | Yes | `DeploymentService_SecondConcurrentSwap_SurfacesAsFriendlyError` |
+| Validating a converted/legacy-shaped recipe returns issues without throwing | Yes | `RecipeService_ValidateAsync_OnALegacyShapedRow_ReturnsIssuesWithoutThrowing`, against the P01a seed fixture's own non-hf-cache model path |
 
 ## Deviations / findings worth flagging
 
