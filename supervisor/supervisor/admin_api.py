@@ -107,6 +107,14 @@ def create_app(
     def events(deployment_id: str, after: int = 0) -> list[dict]:
         return [e.to_dict() for e in deploy_runner.events_for(deployment_id, after)]
 
+    @admin.get("/admin/gpu")
+    def gpu() -> dict:
+        return deploy_runner.gpu_backend.query().to_dict()
+
+    @admin.post("/admin/gpu/recheck")
+    def gpu_recheck() -> dict:
+        return deploy_runner.gpu_backend.query().to_dict()
+
     @admin.get("/admin/settings")
     def get_settings() -> dict:
         state = state_store.load() or SupervisorState()

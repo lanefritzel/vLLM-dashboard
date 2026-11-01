@@ -19,9 +19,19 @@ class FailureReport:
     reason: str  # "process_exited" | "health_timeout" | "bad_args" | "out_of_memory"
     exit_code: Optional[int]
     log_tail: str
+    # P04: set when releasing_gpu gave up with VRAM still looking elevated
+    # right before this deploy attempt -- lets the UI mention "VRAM was
+    # still in use" specifically when the NEW process then failed to
+    # allocate (doc 5), rather than guessing from the generic reason alone.
+    vram_still_in_use: bool = False
 
     def to_dict(self) -> dict:
-        return {"reason": self.reason, "exit_code": self.exit_code, "log_tail": self.log_tail}
+        return {
+            "reason": self.reason,
+            "exit_code": self.exit_code,
+            "log_tail": self.log_tail,
+            "vram_still_in_use": self.vram_still_in_use,
+        }
 
 
 def classify(exit_code: Optional[int], log_tail: str, timed_out_while_alive: bool) -> str:
@@ -36,9 +46,12 @@ def classify(exit_code: Optional[int], log_tail: str, timed_out_while_alive: boo
     return "process_exited"
 
 
-def build_report(exit_code: Optional[int], log_tail: str, timed_out_while_alive: bool) -> FailureReport:
+def build_report(
+    exit_code: Optional[int], log_tail: str, timed_out_while_alive: bool, vram_still_in_use: bool = False,
+) -> FailureReport:
     return FailureReport(
         reason=classify(exit_code, log_tail, timed_out_while_alive),
         exit_code=exit_code,
         log_tail=log_tail,
+        vram_still_in_use=vram_still_in_use,
     )

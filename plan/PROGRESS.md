@@ -16,6 +16,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P03a | done | 2026-11-01 | See below. |
 | P03b | done | 2026-11-01 | See below. |
 | P03c | done | 2026-11-01 | See below. |
+| P04 | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -560,6 +561,57 @@ Done:
 Out of scope, not touched: the dashboard-side receiver (P10b), persisting
 logs (P05 -- the log batches are pushed, but nothing on the supervisor
 side stores them beyond the existing P03b tail/buffer).
+
+## P04 -- Hardware-agnostic GPU layer
+
+The page's own open point -- "the exact xpu-smi/sysfs output format on
+the owner's host isn't known to this kit: ask the owner for a sample" --
+resolved without needing live host access at all. The owner pointed me at
+a sibling project, `~/appdevelopment/application_development/intel-gpu-monitor`
+(their own nvtop-like tool, already running on tes.home as the
+`intel-gpu-monitor-web` container I'd seen earlier in `docker ps`). Its
+`monitor/collectors/xe_sysfs.py` reads the Intel **`xe` kernel driver's**
+sysfs VRAM counters directly -- `/sys/class/drm/card0/device/mem_info_vram_used`
+/ `mem_info_vram_total` (raw bytes), with a PCI BAR-size fallback via the
+`resource` file when `mem_info_vram_total` reads 0. **Not `xpu-smi`** --
+the real mechanism on this exact hardware turned out to be plain sysfs.
+Built the Intel backend directly against this confirmed format; no
+"needs real-host confirmation" flag needed, since this came from code
+already proven against the real box, not a guess.
+
+Done:
+- `supervisor/supervisor/gpu_backend.py`: `parse_nvidia_smi`/`parse_xe_sysfs`
+  (pure, take command/file output, never raise -- garbage degrades to
+  `None`/generic), `NvidiaBackend`/`IntelSysfsBackend`/`GpuBackend` (the
+  base class doubles as the "generic" no-op backend)/`FakeBackend`
+  (`GPU_BACKEND=fake`, reads `{vendor,count,total_mb,used_mb}` from a
+  JSON file so a test can change `used_mb` between polls), `detect_backend()`
+  (nvidia-smi on PATH -> Intel sysfs path exists -> generic).
+- `deploy_runner.py`: `releasing_gpu` no longer a blind 2s sleep -- waits
+  2s, then polls VRAM up to ~10s total; "released" = dropped to <=10% of
+  its pre-stop level or under 100MB outright (a judgment call -- doc 5
+  doesn't give an exact threshold). Still elevated at ~10s -> proceeds
+  anyway and flags `vram_still_in_use` on the next failure report, if
+  there is one. No backend/no baseline -> the same ~2s wait as before,
+  unchanged behavior for every existing test and the real container
+  (confirmed by hand: redeploy's `releasing_gpu` gap stayed ~2.0s with
+  the generic backend).
+- `admin_api.py`: `GET /admin/gpu`, `POST /admin/gpu/recheck` (both just
+  `gpu_backend.query().to_dict()` -- a recheck IS a fresh query, nothing
+  else to do at this phase).
+- `supervisor.py`: detects the backend once at start, logs which vendor.
+- 15 new tests (10 parser/backend unit tests exactly matching the DoD's
+  own classifier-table bullet, 5 integration-style against the fake
+  backend's actual wait/poll timing) -- 69 total; `./scripts/gate.sh`
+  still green (142 + 17 + 6 + 69). Also verified by hand against the
+  real `Dockerfile.test` image: `/admin/gpu` reports `generic` cleanly (no
+  GPU tools in that image), and a redeploy still reaches `ready` with the
+  same ~2s `releasing_gpu` gap as before this phase.
+
+Out of scope, not touched: Stop's verified-release reporting (P07 -- this
+phase only threads the `vram_still_in_use` flag into the failure report,
+doesn't surface a dedicated "VRAM released: X/Y GB" UI line), multi-GPU
+selection.
 
 ## Deviations / findings worth flagging
 

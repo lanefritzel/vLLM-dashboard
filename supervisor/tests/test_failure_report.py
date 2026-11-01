@@ -50,4 +50,6 @@ def test_build_report_carries_exit_code_and_tail_through():
     assert report.reason == "process_exited"
     assert report.exit_code == 1
     assert report.log_tail == "line1\nline2"
-    assert report.to_dict() == {"reason": "process_exited", "exit_code": 1, "log_tail": "line1\nline2"}
+    assert report.to_dict() == {
+        "reason": "process_exited", "exit_code": 1, "log_tail": "line1\nline2", "vram_still_in_use": False,
+    }

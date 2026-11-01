@@ -24,10 +24,19 @@ from typing import Optional
 
 from .event_push import EventPusher, PushItem
 from .failure_report import FailureReport, build_report
+from .gpu_backend import GpuBackend, GpuInfo
 from .process_manager import ProcessManager
 from .state import StateStore, SupervisorState
 
-RELEASING_GPU_WAIT_SECONDS = 2.0
+RELEASING_GPU_INITIAL_WAIT_SECONDS = 2.0
+RELEASING_GPU_MAX_WAIT_SECONDS = 10.0
+RELEASING_GPU_POLL_INTERVAL_SECONDS = 2.0
+# "Released" = VRAM dropped to at most 10% of its pre-stop level, or under
+# this many MB outright, whichever is larger -- a judgment call (doc 5
+# doesn't give an exact threshold), picked so a near-total drop counts as
+# released without needing VRAM to hit exactly zero.
+RELEASED_FRACTION_THRESHOLD = 0.1
+RELEASED_ABSOLUTE_FLOOR_MB = 100
 HEALTH_POLL_INTERVAL_SECONDS = 1.0
 CRASH_WATCH_POLL_INTERVAL_SECONDS = 1.0
 LOG_BATCH_INTERVAL_SECONDS = 1.0
@@ -64,10 +73,12 @@ class DeployRunner:
         process_manager: ProcessManager,
         state_store: StateStore,
         event_pusher: Optional[EventPusher] = None,
+        gpu_backend: Optional[GpuBackend] = None,
     ) -> None:
         self._process_manager = process_manager
         self._state_store = state_store
         self._event_pusher = event_pusher or EventPusher(url=None, token=None)
+        self._gpu_backend = gpu_backend or GpuBackend()  # the base class IS the "generic" no-op backend
         self._state = "idle"
         self._current_deployment_id: Optional[str] = None
         self._events: dict[str, list[DeploymentEvent]] = {}
@@ -90,6 +101,10 @@ class DeployRunner:
     @property
     def last_failure_report(self) -> Optional[FailureReport]:
         return self._last_failure_report
+
+    @property
+    def gpu_backend(self) -> GpuBackend:
+        return self._gpu_backend
 
     def events_for(self, deployment_id: str, after: int = 0) -> list[DeploymentEvent]:
         return [e for e in self._events.get(deployment_id, []) if e.seq > after]
@@ -187,12 +202,14 @@ class DeployRunner:
         health_timeout: float,
     ) -> bool:
         log_batch_task: Optional[asyncio.Task] = None
+        vram_still_in_use = False
         try:
             if self._process_manager.is_running():
+                before_gpu = await asyncio.to_thread(self._gpu_backend.query)
                 self._record(deployment_id, "stopping")
                 await asyncio.to_thread(self._process_manager.stop, graceful_timeout)
                 self._record(deployment_id, "releasing_gpu")
-                await asyncio.sleep(RELEASING_GPU_WAIT_SECONDS)
+                vram_still_in_use = await asyncio.to_thread(self._wait_for_gpu_release, before_gpu)
 
             self._record(deployment_id, "starting")
             await asyncio.to_thread(self._process_manager.spawn, argv, env)
@@ -211,6 +228,7 @@ class DeployRunner:
                     exit_code=self._process_manager.exit_code(),
                     log_tail=self._process_manager.log_tail(),
                     timed_out_while_alive=timed_out_while_alive,
+                    vram_still_in_use=vram_still_in_use,
                 )
                 if timed_out_while_alive:
                     # health_timeout: the child never exited on its own --
@@ -245,6 +263,24 @@ class DeployRunner:
                 log_batch_task.cancel()  # only runs "while a deployment is in flight" (doc 5)
             self._current_deployment_id = None
 
+    def _wait_for_gpu_release(self, before: GpuInfo) -> bool:
+        """Replaces P03a's blind 2s wait (doc 5): wait ~2s, then read VRAM;
+        if still elevated after ~10s total, proceed anyway and return True
+        so the caller can flag it in the failure report. No backend, or no
+        usable baseline -> wait the initial 2s and assume released."""
+        time.sleep(RELEASING_GPU_INITIAL_WAIT_SECONDS)
+        if before.used_mb is None:
+            return False
+
+        deadline = time.monotonic() + (RELEASING_GPU_MAX_WAIT_SECONDS - RELEASING_GPU_INITIAL_WAIT_SECONDS)
+        while True:
+            current = self._gpu_backend.query()
+            if current.used_mb is None or _vram_released(before.used_mb, current.used_mb):
+                return False
+            if time.monotonic() >= deadline:
+                return True  # still elevated -- proceed anyway, flagged
+            time.sleep(RELEASING_GPU_POLL_INTERVAL_SECONDS)
+
     async def _watch_for_crash(self, deployment_id: str) -> None:
         """Runs only after a deploy reaches ready. If the child dies later
         (without an intervening deploy, which would have cancelled this
@@ -269,6 +305,10 @@ class DeployRunner:
                     return
         except asyncio.CancelledError:
             pass  # superseded by a new deploy -- not actually a crash
+
+
+def _vram_released(before_mb: int, current_mb: int) -> bool:
+    return current_mb <= max(before_mb * RELEASED_FRACTION_THRESHOLD, RELEASED_ABSOLUTE_FLOOR_MB)
 
 
 def _extract_value(argv: list[str], flag: str) -> Optional[str]:

@@ -26,6 +26,7 @@ import uvicorn
 from supervisor.admin_api import create_app
 from supervisor.deploy_runner import DeployRunner
 from supervisor.event_push import EventPusher
+from supervisor.gpu_backend import detect_backend
 from supervisor.process_manager import ProcessManager
 from supervisor.state import RETRY_CAP, StateStore, decide_boot_action
 
@@ -85,7 +86,9 @@ async def main_async() -> None:
     state_store = StateStore()
     process_manager = ProcessManager()
     event_pusher = EventPusher(url=DASHBOARD_EVENT_URL, token=SUPERVISOR_TOKEN)
-    deploy_runner = DeployRunner(process_manager, state_store, event_pusher)
+    gpu_backend = detect_backend()  # once, at start (doc 5) -- nvidia-smi, then Intel sysfs, else generic
+    print(f"supervisor: GPU backend detected -- {gpu_backend.vendor}", flush=True)
+    deploy_runner = DeployRunner(process_manager, state_store, event_pusher, gpu_backend)
 
     await run_boot_sequence(deploy_runner, process_manager, state_store)
 

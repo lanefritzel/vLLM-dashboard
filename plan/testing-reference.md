@@ -201,6 +201,21 @@ for line in sys.stdin:
 For the test project's own equivalent (no Docker, used by the actual
 pytest suite), see `supervisor/tests/recording_stub.py`'s `RecordingStub`.
 
+### GPU backend (P04)
+
+```bash
+curl -s -H "$AUTH" http://localhost:18100/admin/gpu
+curl -s -H "$AUTH" -X POST http://localhost:18100/admin/gpu/recheck
+```
+Real Intel VRAM data on tes.home comes from the `xe` driver's sysfs
+counters (`/sys/class/drm/card0/device/mem_info_vram_used`/`_total`), **not**
+`xpu-smi` -- confirmed via the owner's sibling project
+`~/appdevelopment/application_development/intel-gpu-monitor`
+(`monitor/collectors/xe_sysfs.py`), not a live host check. To force the
+fake backend for manual testing: `-e GPU_BACKEND=fake` and write
+`{"vendor":"fake","count":1,"total_mb":12288,"used_mb":N}` to the path in
+`GPU_BACKEND_FAKE_PATH` (default `/tmp/fake_gpu_backend.json`).
+
 Finding zombies/process trees in a running container (no `ps`/`kill`
 binaries in the slim test image): use `docker top <cid>` from the host for
 the tree, and `docker exec <cid> python3 -c "..."` with `os.listdir('/proc')`
