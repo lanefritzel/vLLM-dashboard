@@ -20,6 +20,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P05 | done | 2026-11-01 | See below. |
 | P06 | done | 2026-11-01 | See below. |
 | P07 | done | 2026-11-01 | See below. |
+| P08 | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -852,6 +853,112 @@ Out of scope, not touched: UI labels/buttons (P14), dashboard-side
 | Restart → same argv, new PID, back to ready | Yes | `test_restart_gets_a_new_pid_with_the_same_argv_and_reaches_ready` + real-container check |
 | After manual Stop, restarting the container comes up idle; `last_good_argv` still present | Yes | real-container volume-backed reboot check above |
 | Cancel/stop with nothing to act on → clear 409/idempotent response, documented which | Yes | Cancel 409 (`NoDeployInProgressError`), Stop idempotent 200 -- both decided and written up above |
+
+## P08 -- Model downloads
+
+Mid-phase, confirmed with the owner whether to actually exercise the real
+Hugging Face network path (not just the stubbed one the page calls for)
+during manual verification: **yes**, using a small real repo
+(`nomic-ai/nomic-embed-text-v1.5`) rather than downloading its full
+~2.5GB of safetensors/onnx variants, a single tiny file
+(`1_Pooling/config.json`, 286 bytes) was downloaded via the `filename`
+parameter to prove the real `HfClient`'s `list_files`/`get_config`/
+`download_file` methods actually talk to Hugging Face correctly --
+the model was deleted again immediately after (owner's explicit
+instruction) via `DELETE /admin/downloads/{id}`.
+
+That same manual check also surfaced a real gap: `huggingface_hub` was
+NOT installed in the test container at all (`Dockerfile.test`'s
+`requirements.txt` only had fastapi/uvicorn), so the real `HfClient`
+would have failed on import inside a real deploy too. The original design
+relied on an unverified assumption -- "the real vLLM base image already
+has `huggingface_hub`, since vllm itself depends on it" -- deliberately
+avoiding adding it as an explicit dependency, matching doc 5's "zero
+extra deps" framing for fastapi/uvicorn. Asked the owner whether to keep
+relying on that assumption or add it explicitly; **chose explicit**:
+added `huggingface_hub>=0.26,<0.27` to `supervisor/requirements.txt`
+(already installed into `Dockerfile.test` via its existing
+`pip install -r requirements.txt` step) and added a new
+`pip install -r requirements.txt` step to the **real** `supervisor/Dockerfile`,
+which previously had no install step at all (it relied entirely on the
+base image already having fastapi/uvicorn -- true, but huggingface_hub
+wasn't a safe bet to assume the same way, so this phase closes that gap
+for both deps going forward, not just the new one).
+
+Design notes not spelled out verbatim on the page, decided while
+implementing:
+- **Cancel/stop with nothing to act on** isn't literally repeated here,
+  but the same "document which" instinct applies to inspect's failure
+  mapping: a repo-not-found/gated/unreachable `HfRepoError` from
+  `POST /admin/downloads/inspect` maps to `exc.status` (404/401) when
+  known, else 502 (upstream failure) -- the page only specifies these
+  codes for the async DOWNLOAD's own `download_failed` status, not
+  inspect's synchronous call, so this is a judgment call, not a literal
+  spec requirement.
+- **Resume** is implemented as "does a file of the expected size already
+  exist at the destination" -- backend-agnostic (works identically for
+  the real client and the fake one used in tests) rather than relying on
+  huggingface_hub's own internal `.incomplete`/etag bookkeeping, which
+  isn't something a stubbed test double can exercise anyway.
+- The real `HfClient.download_file` only reports progress as one
+  lump-sum call per file (huggingface_hub doesn't expose a byte-level
+  download callback) -- fine-grained mid-file `progress_pct` is only
+  demonstrated against `FakeHfClient` in tests, which does chunk its
+  copies. Noted as a real-vs-fake granularity gap, not a bug.
+- `load_format` is `"gguf"` for a single named `.gguf` file, `None`
+  (not a string) for the safetensors/snapshot case -- the page only
+  names a value for the GGUF path.
+
+Done:
+- `supervisor/supervisor/downloads.py` (new): `HfClient` (real, wraps
+  `huggingface_hub`, lazily imported inside each method so the module
+  still loads in an environment without it -- no longer strictly
+  necessary now that it's an explicit dependency, but kept since a lazy
+  import costs nothing and keeps `FakeHfClient`-only test runs fast to
+  collect); `FakeHfClient` (serves a local directory as a repo, with
+  three reserved repo ids for the 401/404/unreachable failure paths, used
+  by every test); `DownloadManager` (one `threading.Thread` per download,
+  the page's own "start in a background thread" -- no asyncio involved,
+  unlike the deploy state machine, since nothing here needs to interact
+  with an event loop); `HfRepoError`, `DownloadInProgressError`,
+  `DownloadNotFoundError`.
+- `admin_api.py`: `POST /admin/downloads/inspect`, `POST
+  /admin/downloads`, `GET /admin/downloads/{id}`, `DELETE
+  /admin/downloads/{id}` -- all plain sync `def` routes (no `async def`
+  needed here, since `DownloadManager` doesn't use `asyncio.create_task`
+  the way the deploy state machine does).
+- `supervisor.py`: wires a real `DownloadManager(HfClient(token=HF_TOKEN),
+  models_root=MODELS_ROOT)` at startup; `HF_TOKEN`/`MODELS_ROOT` read
+  from the environment only.
+- `src/Dashboard.Core/Downloads/DiskGuard.cs` (new, .NET side): pure
+  `DiskGuard.Check(requiredBytes, availableBytes)` -> `{Ok, Message}`.
+- 14 new Python tests (`test_downloads.py`, all against `FakeHfClient`,
+  no network) + 5 HTTP-layer additions to `test_admin_api.py` + 4 new
+  .NET tests (`DiskGuardTests.cs`). 125 Python + 150 .NET total;
+  `./scripts/gate.sh` green. Verified by hand against the real
+  `Dockerfile.test` image, including the real-network check described
+  above.
+
+Out of scope, not touched: the Add-model UI (P13), a download queue
+(v2 per the page), writing the `models` row (P09b).
+
+**Needs real-hardware confirmation** (per the Start Here's running list):
+whether the actual production vLLM base image
+(`intel/llm-scaler-vllm:0.21.0-b3`) already satisfies the
+`huggingface_hub>=0.26,<0.27` pin on its own -- moot for correctness now
+that it's installed explicitly either way, but worth knowing before P16a
+to avoid a surprise version conflict with whatever vllm itself pins.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Integration (stubbed HF repo, tiny files): inspect returns files + config + `free_bytes`; a download shows monotonic `progress_pct`, `files_done/total`, an `eta_seconds`, reaches `done`, files land at `/models/hf-cache/<slug>` | Yes | `test_inspect_returns_files_config_and_free_bytes`, `test_download_reaches_done_with_monotonic_progress_and_lands_at_the_right_path` |
+| Second concurrent download -> 409 | Yes | `test_second_concurrent_download_gets_409` + `test_downloads_endpoints_round_trip_through_the_admin_api` |
+| `DELETE` mid-download -> partial directory removed | Yes | `test_delete_mid_download_removes_the_partial_directory` |
+| Unreachable/401/404 repo -> `download_failed` with a readable message; retry resumes (no re-download of finished files) | Yes | `test_unreachable_repo_download_fails_with_readable_message`, `test_inspect_gated_repo_raises_401`, `test_inspect_unknown_repo_raises_404`, `test_retry_after_failure_resumes_without_redownloading_finished_files` |
+| Stub free space below required -> `DiskGuard.Check` blocks with the required-vs-available message (unit) | Yes | `DiskGuardTests.Check_AvailableBelowRequired_IsBlockedWithRequiredAndAvailableInMessage` |
+| `HF_TOKEN` read from env only (grep: no token in any response or log line) | Yes | `test_hf_token_never_appears_in_any_response` (asserts absence from both JSON responses and captured stdout/stderr); real container test used a real token-less call (public repo) so no token was ever in play there either |
 
 ## Deviations / findings worth flagging
 

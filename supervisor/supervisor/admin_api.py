@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from .deploy_runner import DeployInProgressError, DeployRunner, NoDeployInProgressError, NotServingError
+from .downloads import DownloadInProgressError, DownloadManager, DownloadNotFoundError, HfClient, HfRepoError
 from .process_manager import ProcessManager
 from .state import Settings, StateStore, SupervisorState
 
@@ -28,6 +29,16 @@ class SettingsRequest(BaseModel):
     AUTO_START: str
 
 
+class InspectRequest(BaseModel):
+    repo_id: str
+
+
+class StartDownloadRequest(BaseModel):
+    repo_id: str
+    slug: str
+    filename: Optional[str] = None
+
+
 def _require_token(token: Optional[str]):
     async def dependency(request: Request) -> None:
         expected = f"Bearer {token}" if token else None
@@ -43,7 +54,14 @@ def create_app(
     deploy_runner: DeployRunner,
     state_store: StateStore,
     supervisor_token: Optional[str],
+    download_manager: Optional[DownloadManager] = None,
 ) -> FastAPI:
+    # Optional so every existing caller/test that doesn't care about
+    # downloads doesn't have to pass one -- falls back to a real client
+    # with no token (fine: nothing in the existing test suite calls the
+    # download routes at all; supervisor.py always passes its own
+    # properly-configured instance explicitly).
+    download_manager = download_manager or DownloadManager(HfClient())
     app = FastAPI()
     admin = APIRouter(dependencies=[Depends(_require_token(supervisor_token))])
 
@@ -149,6 +167,36 @@ def create_app(
         except DeployInProgressError as exc:
             raise HTTPException(status_code=409, detail={"deployment_id": exc.deployment_id}) from exc
         return {"deployment_id": deployment_id}
+
+    @admin.post("/admin/downloads/inspect")
+    def downloads_inspect(body: InspectRequest) -> dict:
+        try:
+            return download_manager.inspect(body.repo_id)
+        except HfRepoError as exc:
+            raise HTTPException(status_code=exc.status or 502, detail=str(exc)) from exc
+
+    @admin.post("/admin/downloads")
+    def start_download(body: StartDownloadRequest) -> dict:
+        try:
+            download_id = download_manager.start_download(body.repo_id, body.slug, body.filename)
+        except DownloadInProgressError as exc:
+            raise HTTPException(status_code=409, detail={"download_id": exc.download_id}) from exc
+        return {"download_id": download_id}
+
+    @admin.get("/admin/downloads/{download_id}")
+    def get_download(download_id: str) -> dict:
+        try:
+            return download_manager.get(download_id)
+        except DownloadNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @admin.delete("/admin/downloads/{download_id}")
+    def delete_download(download_id: str) -> dict:
+        try:
+            download_manager.cancel(download_id)
+        except DownloadNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"status": "cancelled"}
 
     @admin.get("/admin/deployments/{deployment_id}/events")
     def events(deployment_id: str, after: int = 0) -> list[dict]:

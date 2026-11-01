@@ -25,6 +25,7 @@ import uvicorn
 
 from supervisor.admin_api import create_app
 from supervisor.deploy_runner import DeployRunner
+from supervisor.downloads import DownloadManager, HfClient
 from supervisor.event_push import EventPusher
 from supervisor.gpu_backend import detect_backend
 from supervisor.process_manager import ProcessManager
@@ -35,6 +36,8 @@ RETRY_DELAY_SECONDS = 2.0
 ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8000"))  # TBD per doc 5 -- any free port works; firmed up by P15b
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")  # unset -- and every /admin/* route except /health 401s
 DASHBOARD_EVENT_URL = os.environ.get("DASHBOARD_EVENT_URL")  # unset -- event push disabled cleanly (P03c)
+HF_TOKEN = os.environ.get("HF_TOKEN")  # P08: env var only, never the DB or an API body
+MODELS_ROOT = os.environ.get("MODELS_ROOT", "/models")  # compose mounts the host models root here
 
 
 async def run_boot_sequence(deploy_runner: DeployRunner, process_manager: ProcessManager, state_store: StateStore) -> None:
@@ -89,10 +92,11 @@ async def main_async() -> None:
     gpu_backend = detect_backend()  # once, at start (doc 5) -- nvidia-smi, then Intel sysfs, else generic
     print(f"supervisor: GPU backend detected -- {gpu_backend.vendor}", flush=True)
     deploy_runner = DeployRunner(process_manager, state_store, event_pusher, gpu_backend)
+    download_manager = DownloadManager(HfClient(token=HF_TOKEN), models_root=MODELS_ROOT)
 
     await run_boot_sequence(deploy_runner, process_manager, state_store)
 
-    app = create_app(process_manager, deploy_runner, state_store, SUPERVISOR_TOKEN)
+    app = create_app(process_manager, deploy_runner, state_store, SUPERVISOR_TOKEN, download_manager)
     config = uvicorn.Config(app, host="0.0.0.0", port=ADMIN_PORT, log_level="info")
     await uvicorn.Server(config).serve()
 

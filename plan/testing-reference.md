@@ -340,6 +340,44 @@ curl -s -X POST -H "$AUTH" http://localhost:18100/admin/restart
 curl -s -H "$AUTH" http://localhost:18100/admin/status   # -> new "pid", same "argv"
 ```
 
+### Model downloads (P08)
+
+`huggingface_hub` is now an explicit dependency (`supervisor/requirements.txt`,
+installed in both `Dockerfile.test` and the real `Dockerfile`) -- no manual
+`pip install` needed in a container built from either, unlike earlier in
+this phase's own history.
+
+```bash
+AUTH='Authorization: Bearer secret'
+
+# Inspect -- no download, just the file list + sizes + config.json + free_bytes.
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' -d '{
+  "repo_id": "nomic-ai/nomic-embed-text-v1.5"
+}' http://localhost:18100/admin/downloads/inspect
+
+# Start a download -- omit "filename" for the whole repo snapshot, or name
+# one file (GGUF case: one file = one download = one models row). Keep any
+# manual real-network test SMALL -- a single tiny file via "filename" is
+# enough to prove the real HfClient path end-to-end without pulling
+# hundreds of MB; delete it again right after (see below).
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' -d '{
+  "repo_id": "nomic-ai/nomic-embed-text-v1.5", "slug": "nomic-embed-test",
+  "filename": "1_Pooling/config.json"
+}' http://localhost:18100/admin/downloads
+curl -s -H "$AUTH" http://localhost:18100/admin/downloads/<id>
+# -> {"status":"done","files_total":1,...,"path":"/models/hf-cache/nomic-embed-test",...}
+
+# Clean up -- removes the partial/complete directory either way.
+curl -s -X DELETE -H "$AUTH" http://localhost:18100/admin/downloads/<id>
+docker exec <container> find /models -maxdepth 3   # confirm it's actually gone
+```
+
+For a fully offline test double (no real network at all, matching the
+page's own "stubbed HF repo" DoD), see `supervisor/tests/test_downloads.py`'s
+`FakeHfClient` -- it serves a local directory as the "repo" and has three
+reserved repo ids (`"gated/repo"`, `"nonexistent/repo"`, `"unreachable/repo"`)
+for the 401/404/network-failure paths without touching the network.
+
 ### Verifying Stop survives a reboot (the P07 owner decision)
 
 Needs the `/state` volume from the P02/P03a section above -- a fresh

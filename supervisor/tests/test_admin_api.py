@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from supervisor.admin_api import create_app
 from supervisor.deploy_runner import DeployRunner
+from supervisor.downloads import DownloadManager, FakeHfClient
 from supervisor.log_store import DeploymentArchive
 from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore, SupervisorState
@@ -18,10 +19,10 @@ from supervisor.state import StateStore, SupervisorState
 TOKEN = "test-token"
 
 
-def new_client(tmp_path) -> TestClient:
+def new_client(tmp_path, download_manager=None) -> TestClient:
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN, download_manager)
     return TestClient(app)
 
 
@@ -69,6 +70,10 @@ def test_every_admin_route_except_health_requires_auth(tmp_path):
         ("POST", "/admin/deployments/x/cancel"),
         ("POST", "/admin/stop"),
         ("POST", "/admin/restart"),
+        ("POST", "/admin/downloads/inspect"),
+        ("POST", "/admin/downloads"),
+        ("GET", "/admin/downloads/x"),
+        ("DELETE", "/admin/downloads/x"),
     ]:
         resp = client.request(method, path, json={} if method in ("POST", "PUT") else None)
         assert resp.status_code == 401, f"{method} {path} should 401 without a token"
@@ -283,6 +288,52 @@ def test_stop_endpoint_against_a_real_child_releases_it(tmp_path):
         assert not pm.is_running()
     finally:
         pm.stop()
+
+
+def test_downloads_endpoints_round_trip_through_the_admin_api(tmp_path):
+    import json
+    import time
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "model.safetensors").write_bytes(b"x" * 1024)
+    (repo / "config.json").write_text(json.dumps({"k": "v"}))
+
+    manager = DownloadManager(FakeHfClient({"org/model-a": repo}), models_root=tmp_path / "models")
+    client = new_client(tmp_path, download_manager=manager)
+
+    resp = client.post("/admin/downloads/inspect", headers=auth_headers(), json={"repo_id": "org/model-a"})
+    assert resp.status_code == 200
+    assert resp.json()["config"] == {"k": "v"}
+
+    resp = client.post("/admin/downloads/inspect", headers=auth_headers(), json={"repo_id": "nonexistent/repo"})
+    assert resp.status_code == 404
+
+    resp = client.post("/admin/downloads", headers=auth_headers(), json={"repo_id": "org/model-a", "slug": "model-a"})
+    assert resp.status_code == 200
+    download_id = resp.json()["download_id"]
+
+    resp = client.post("/admin/downloads", headers=auth_headers(), json={"repo_id": "org/model-a", "slug": "model-a-2"})
+    assert resp.status_code == 409
+
+    for _ in range(100):
+        resp = client.get(f"/admin/downloads/{download_id}", headers=auth_headers())
+        if resp.json()["status"] == "done":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("download never reached done")
+    assert resp.json()["load_format"] is None
+
+    resp = client.get("/admin/downloads/nope", headers=auth_headers())
+    assert resp.status_code == 404
+
+    resp = client.delete(f"/admin/downloads/{download_id}", headers=auth_headers())
+    assert resp.status_code == 200
+    assert not (tmp_path / "models" / "hf-cache" / "model-a").exists()
+
+    resp = client.delete("/admin/downloads/nope", headers=auth_headers())
+    assert resp.status_code == 404
 
 
 def test_admin_deployment_logs_returns_that_deployments_archived_output(tmp_path):
