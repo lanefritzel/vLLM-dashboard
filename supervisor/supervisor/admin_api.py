@@ -107,6 +107,14 @@ def create_app(
     def events(deployment_id: str, after: int = 0) -> list[dict]:
         return [e.to_dict() for e in deploy_runner.events_for(deployment_id, after)]
 
+    @admin.get("/admin/logs")
+    def logs(lines: int = 200) -> dict:
+        return {"lines": process_manager.logs(lines)}
+
+    @admin.get("/admin/deployments/{deployment_id}/logs")
+    def deployment_logs(deployment_id: str, lines: int = 200) -> dict:
+        return {"lines": deploy_runner.archive.read_log_tail(deployment_id, lines)}
+
     @admin.get("/admin/gpu")
     def gpu() -> dict:
         return deploy_runner.gpu_backend.query().to_dict()

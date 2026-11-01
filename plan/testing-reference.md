@@ -207,6 +207,20 @@ pytest suite), see `supervisor/tests/recording_stub.py`'s `RecordingStub`.
 curl -s -H "$AUTH" http://localhost:18100/admin/gpu
 curl -s -H "$AUTH" -X POST http://localhost:18100/admin/gpu/recheck
 ```
+### Logs (P05)
+
+```bash
+curl -s -H "$AUTH" "http://localhost:18100/admin/logs?lines=50"                  # current process, ring buffer
+curl -s -H "$AUTH" "http://localhost:18100/admin/deployments/d1/logs?lines=50"   # one past deployment's archived log
+```
+Persisted under the `/state` volume: `/state/logs/<id>.log`,
+`/state/events/<id>.jsonl`, `/state/deployment_index.json` (rotation
+tracking, last 50 kept). To check restart-survival for real: `docker rm`
+the container, `docker run` a fresh one on the **same volume**, then hit
+`GET /admin/deployments/<id>/events?after=0` for a deployment from before
+the restart -- a fresh in-process object isn't a real enough test, since
+Python-level state obviously doesn't survive; the volume is what matters.
+
 Real Intel VRAM data on tes.home comes from the `xe` driver's sysfs
 counters (`/sys/class/drm/card0/device/mem_info_vram_used`/`_total`), **not**
 `xpu-smi` -- confirmed via the owner's sibling project

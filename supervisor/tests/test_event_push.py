@@ -12,6 +12,7 @@ from recording_stub import RecordingStub
 
 from supervisor.deploy_runner import DeployRunner
 from supervisor.event_push import EventPusher, PushItem
+from supervisor.log_store import DeploymentArchive
 from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore
 
@@ -26,7 +27,7 @@ def run(coro):
 def new_runner(tmp_path, url: str) -> tuple[DeployRunner, ProcessManager, EventPusher]:
     pm = ProcessManager()
     pusher = EventPusher(url=url, token=TOKEN)
-    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), pusher)
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), pusher, archive=DeploymentArchive(tmp_path))
     return runner, pm, pusher
 
 
@@ -180,7 +181,7 @@ def test_deploy_completes_while_stub_is_down_and_delivers_once_it_restarts(tmp_p
 def test_disabled_when_url_unset_makes_no_network_calls(tmp_path):
     pm = ProcessManager()
     pusher = EventPusher(url=None, token=TOKEN)
-    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), pusher)
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), pusher, archive=DeploymentArchive(tmp_path))
     port = free_port()
 
     async def scenario():

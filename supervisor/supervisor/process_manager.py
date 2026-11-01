@@ -1,6 +1,6 @@
-"""Spawns and tracks the one child process this supervisor owns (P02/P03b).
-Process lifecycle, plus (P03b) a bounded tail of its combined stdout/stderr
-for the failure report -- still forwarded line-by-line to this container's
+"""Spawns and tracks the one child process this supervisor owns
+(P02/P03b/P05). Process lifecycle, plus a bounded ring buffer of its
+combined stdout/stderr -- still forwarded line-by-line to this container's
 own stdout as it's captured, so "just forward to the container log" (P02)
 still holds; no state machine, no GPU release (P03a/P04 onward).
 """
@@ -12,11 +12,12 @@ import subprocess
 import sys
 import threading
 import time
-from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
-LOG_TAIL_LINES = 50
+from .log_store import RingBuffer
+
+FAILURE_REPORT_TAIL_LINES = 50
 
 
 @dataclass
@@ -30,12 +31,18 @@ class ProcessManager:
     def __init__(self) -> None:
         self._process: Optional[subprocess.Popen] = None
         self._info: Optional[ChildInfo] = None
-        self._log_tail: deque[str] = deque(maxlen=LOG_TAIL_LINES)
+        # One ring buffer, bounded by bytes (~10MB, P05), is the single
+        # source of truth for "recent output of the current child" --
+        # GET /admin/logs reads it directly; the failure report (P03b)
+        # just asks it for a shorter tail instead of keeping its own
+        # separate, smaller buffer.
+        self._ring_buffer = RingBuffer()
         # New lines since the last drain_pending_log_lines() call -- P03c's
-        # log-batch pusher drains this ~once/sec while a deploy is in
-        # flight. Separate from _log_tail (which never shrinks on read, for
-        # the failure report); a plain list + lock since it's written from
-        # the pump thread and read from the asyncio event loop thread.
+        # log-batch pusher (and P05's per-deployment log writer) drain this
+        # ~once/sec while a deploy is in flight. Separate from the ring
+        # buffer (which never shrinks on read); a plain list + lock since
+        # it's written from the pump thread and read from the asyncio event
+        # loop thread.
         self._pending_log_lines: list[str] = []
         self._pending_log_lock = threading.Lock()
 
@@ -49,10 +56,16 @@ class ProcessManager:
     def exit_code(self) -> Optional[int]:
         return self._process.poll() if self._process is not None else None
 
-    def log_tail(self) -> str:
+    def log_tail(self, lines: int = FAILURE_REPORT_TAIL_LINES) -> str:
         """Last ~50 lines of the current/most recent child's combined
         stdout+stderr, for the failure report (P03b)."""
-        return "\n".join(self._log_tail)
+        return self._ring_buffer.tail(lines)
+
+    def logs(self, lines: Optional[int] = None) -> str:
+        """GET /admin/logs (P05) -- the current process's ring-buffer tail;
+        `lines=None` returns everything the buffer still holds (up to its
+        ~10MB cap)."""
+        return self._ring_buffer.tail(lines)
 
     def drain_pending_log_lines(self) -> list[str]:
         """Returns and clears whatever lines have arrived since the last
@@ -64,7 +77,7 @@ class ProcessManager:
     def spawn(self, argv: list[str], env: Optional[dict[str, str]] = None) -> ChildInfo:
         if self.is_running():
             raise RuntimeError("a child is already running")
-        self._log_tail = deque(maxlen=LOG_TAIL_LINES)
+        self._ring_buffer.clear()
         with self._pending_log_lock:
             self._pending_log_lines = []
         process = subprocess.Popen(
@@ -106,7 +119,7 @@ class ProcessManager:
             if process.stdout is not None:
                 for line in process.stdout:
                     stripped = line.rstrip("\n")
-                    self._log_tail.append(stripped)
+                    self._ring_buffer.append(stripped)
                     with self._pending_log_lock:
                         self._pending_log_lines.append(stripped)
                     sys.stdout.write(line)

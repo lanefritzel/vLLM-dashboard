@@ -13,13 +13,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from supervisor.deploy_runner import DeployRunner
 from supervisor.gpu_backend import FakeBackend, GpuBackend, GpuInfo
+from supervisor.log_store import DeploymentArchive
 from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore
 
 
 def new_runner(tmp_path, gpu_backend=None) -> tuple[DeployRunner, ProcessManager]:
     pm = ProcessManager()
-    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), gpu_backend=gpu_backend)
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), gpu_backend=gpu_backend, archive=DeploymentArchive(tmp_path))
     return runner, pm
 
 
@@ -103,7 +104,7 @@ def test_generic_backend_gpu_endpoint_and_a_deploy_still_reaches_ready(tmp_path)
     from supervisor.admin_api import create_app
 
     pm = ProcessManager()
-    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), gpu_backend=GpuBackend())
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), gpu_backend=GpuBackend(), archive=DeploymentArchive(tmp_path))
     app = create_app(pm, runner, StateStore(tmp_path / "state.json"), "tok")
     client = TestClient(app)
 

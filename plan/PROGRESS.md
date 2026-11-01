@@ -17,6 +17,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P03b | done | 2026-11-01 | See below. |
 | P03c | done | 2026-11-01 | See below. |
 | P04 | done | 2026-11-01 | See below. |
+| P05 | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -612,6 +613,55 @@ Out of scope, not touched: Stop's verified-release reporting (P07 -- this
 phase only threads the `vram_still_in_use` flag into the failure report,
 doesn't surface a dedicated "VRAM released: X/Y GB" UI line), multi-GPU
 selection.
+
+## P05 -- Logs (ring buffer + retention)
+
+Found a real bug by hand against a real container, not caught by pytest
+initially: a FAST deploy (ready inside ~1s, which the fake vLLM always
+is) could conclude and cancel the log-batch task before that task's own
+`sleep(1)` ever elapsed -- `GET /admin/deployments/{id}/logs` came back
+with only 1 of the 3 lines `GET /admin/logs` (the ring buffer) had for
+the exact same deploy. Fixed with one final synchronous drain-and-archive
+pass after the log-batch task is cancelled AND awaited (so it can't race
+the final drain), in `_run_deploy`'s `finally` block. Added a regression
+test for the fast-deploy case specifically (the existing archive test
+used `--fake-slow-start 2`, slow enough to never hit this).
+
+Done:
+- `supervisor/supervisor/log_store.py`: `RingBuffer` (bounded by bytes,
+  ~10MB default, not line count) and `DeploymentArchive` (one capped
+  ~10MB log file + one persisted `.jsonl` event stream per deployment,
+  under `/state/logs/` and `/state/events/`; a small index file drives
+  rotation -- registering a 51st deployment evicts the oldest).
+- `process_manager.py`: the old fixed-50-line `_log_tail` deque is gone
+  -- replaced by the new `RingBuffer` as the single source of truth for
+  "recent output of the current child". The failure report (P03b) and
+  `GET /admin/logs` (P05) both just ask it for different tail lengths
+  now, instead of keeping two separate buffers.
+- `deploy_runner.py`: registers each new deployment with the archive
+  (rotating off the oldest past 50), persists every event to it
+  alongside the existing in-memory copy, and `events_for()` falls back to
+  loading from the archive when a deployment isn't in this process's own
+  memory (a past deployment from before a restart). The log-batch task
+  now also writes drained lines into the per-deployment log file, with
+  the final-drain fix above.
+- `admin_api.py`: `GET /admin/logs?lines=N` (ring buffer, default 200),
+  `GET /admin/deployments/{id}/logs?lines=N` (that deployment's archived
+  log).
+- 18 new tests (`test_log_store.py` for the pure ring-buffer/archive/
+  rotation logic, plus integration-style additions to
+  `test_deploy_runner.py`/`test_admin_api.py`) -- 80 total;
+  `./scripts/gate.sh` still green (142 + 17 + 6 + 80). Also verified by
+  hand against the real `Dockerfile.test` image: a real container
+  restart (`docker rm` + fresh `docker run` on the same volume, not just
+  a fresh in-process object) still serves the right `events?after=<seq>`
+  for a deployment from before the restart; confirmed `/admin/logs` and
+  `/admin/deployments/{id}/logs` now match exactly for the same fast
+  deploy, post-fix.
+
+Out of scope, not touched: shipping logs to the dashboard DB (P10b --
+only the 50-line failure `log_tail` goes there, unchanged from P03b), log
+search/filter.
 
 ## Deviations / findings worth flagging
 

@@ -25,6 +25,7 @@ from typing import Optional
 from .event_push import EventPusher, PushItem
 from .failure_report import FailureReport, build_report
 from .gpu_backend import GpuBackend, GpuInfo
+from .log_store import DeploymentArchive
 from .process_manager import ProcessManager
 from .state import StateStore, SupervisorState
 
@@ -74,11 +75,13 @@ class DeployRunner:
         state_store: StateStore,
         event_pusher: Optional[EventPusher] = None,
         gpu_backend: Optional[GpuBackend] = None,
+        archive: Optional[DeploymentArchive] = None,
     ) -> None:
         self._process_manager = process_manager
         self._state_store = state_store
         self._event_pusher = event_pusher or EventPusher(url=None, token=None)
         self._gpu_backend = gpu_backend or GpuBackend()  # the base class IS the "generic" no-op backend
+        self._archive = archive or DeploymentArchive()
         self._state = "idle"
         self._current_deployment_id: Optional[str] = None
         self._events: dict[str, list[DeploymentEvent]] = {}
@@ -106,8 +109,20 @@ class DeployRunner:
     def gpu_backend(self) -> GpuBackend:
         return self._gpu_backend
 
+    @property
+    def archive(self) -> DeploymentArchive:
+        return self._archive
+
     def events_for(self, deployment_id: str, after: int = 0) -> list[DeploymentEvent]:
-        return [e for e in self._events.get(deployment_id, []) if e.seq > after]
+        if deployment_id in self._events:
+            events = self._events[deployment_id]
+        else:
+            # Not in this process's memory -- e.g. a past deployment from
+            # before a supervisor restart. Load from the persisted archive
+            # (P05 DoD: "events?after=<seq> for a past deployment still
+            # returns the right events" after a restart).
+            events = [DeploymentEvent(**d) for d in self._archive.load_events(deployment_id)]
+        return [e for e in events if e.seq > after]
 
     def start_deploy(
         self,
@@ -149,6 +164,7 @@ class DeployRunner:
         self._current_deployment_id = deployment_id
         self._events[deployment_id] = []
         self._seq_counters[deployment_id] = itertools.count(1)
+        self._archive.register_deployment(deployment_id)  # rotates off the oldest past the 50-deployment cap (P05)
         return deployment_id
 
     def _next_seq(self, deployment_id: str) -> int:
@@ -161,6 +177,7 @@ class DeployRunner:
         seq = self._next_seq(deployment_id)
         event = DeploymentEvent(deployment_id=deployment_id, seq=seq, ts=now, state=state, detail=detail)
         self._events[deployment_id].append(event)
+        self._archive.append_event(deployment_id, event.to_dict())  # P05: survives a restart
         self._state = state
         self._event_pusher.push(PushItem(
             deployment_id=deployment_id, seq=seq, ts=now, kind="state",
@@ -180,12 +197,20 @@ class DeployRunner:
     async def _run_log_batch(self, deployment_id: str) -> None:
         """Batches the child's new output lines about once a second while
         a deploy is in flight (doc 5) -- started right after spawn,
-        cancelled once the deploy concludes (ready or failed)."""
+        cancelled once the deploy concludes (ready or failed). Reads from
+        ProcessManager's own drain buffer (fed by its one pipe-reading
+        thread) rather than the pipe itself -- never a second reader of
+        the same pipe. Also writes the same lines to this deployment's
+        capped archive log file (P05) -- one drain, two sinks, so the
+        pipe is still only ever read once.
+        """
         try:
             while True:
                 await asyncio.sleep(LOG_BATCH_INTERVAL_SECONDS)
                 lines = self._process_manager.drain_pending_log_lines()
                 if lines:
+                    for line in lines:
+                        self._archive.append_log_line(deployment_id, line)
                     self._event_pusher.push(PushItem(
                         deployment_id=deployment_id, seq=self._next_seq(deployment_id), ts=time.time(), kind="log",
                         payload={"lines": lines}, droppable=True,
@@ -261,6 +286,20 @@ class DeployRunner:
         finally:
             if log_batch_task is not None:
                 log_batch_task.cancel()  # only runs "while a deployment is in flight" (doc 5)
+                try:
+                    await log_batch_task
+                except asyncio.CancelledError:
+                    pass
+                # A fast deploy (ready inside ~1s) can conclude before the
+                # batch task's own sleep(1) ever elapses, losing whatever
+                # output arrived in that window from the per-deployment
+                # archive entirely (found by hand against a real
+                # container -- GET .../logs showed only 1 of 3 lines the
+                # ring buffer had). One final synchronous drain, after the
+                # task is fully stopped (so it can't race this one), makes
+                # sure the archive always ends up with everything.
+                for line in self._process_manager.drain_pending_log_lines():
+                    self._archive.append_log_line(deployment_id, line)
             self._current_deployment_id = None
 
     def _wait_for_gpu_release(self, before: GpuInfo) -> bool:

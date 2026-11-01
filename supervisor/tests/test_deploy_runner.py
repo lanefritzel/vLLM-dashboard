@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from supervisor.deploy_runner import DeployInProgressError, DeployRunner
+from supervisor.log_store import DeploymentArchive
 from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore
 
@@ -33,7 +34,7 @@ def run(coro):
 
 def new_runner(tmp_path) -> tuple[DeployRunner, ProcessManager]:
     pm = ProcessManager()
-    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"))
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
     return runner, pm
 
 
@@ -256,5 +257,48 @@ def test_failure_report_persists_in_state_for_a_fresh_store_to_read(tmp_path):
         reloaded = StateStore(tmp_path / "state.json").load()
         assert reloaded.last_run_outcome == "failed"
         assert reloaded.last_failure_report["reason"] == "bad_args"
+    finally:
+        pm.stop()
+
+
+def test_events_for_a_past_deployment_survive_a_restart(tmp_path):
+    """P05 DoD: restart the supervisor -> events?after=<seq> for a past
+    deployment still returns the right events. Simulated with a brand new
+    DeployRunner (no shared in-memory state at all) pointed at the same
+    archive directory on disk."""
+    runner, pm = new_runner(tmp_path)
+    try:
+        argv = [sys.executable, FAKE_VLLM, "--fake-crash"]
+        run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+    finally:
+        pm.stop()
+
+    fresh_pm = ProcessManager()
+    fresh_runner = DeployRunner(fresh_pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
+
+    all_events = fresh_runner.events_for("d1")
+    assert [e.state for e in all_events] == ["starting", "loading", "waiting_health", "failed"]
+
+    after = fresh_runner.events_for("d1", after=all_events[1].seq)
+    assert [e.state for e in after] == ["waiting_health", "failed"]
+
+
+def test_a_fast_deploy_still_archives_its_full_startup_log(tmp_path):
+    """A deploy that reaches ready inside ~1s can conclude before the
+    log-batch task's own sleep(1) ever elapses -- without a final drain on
+    conclusion, whatever output arrived in that window never reaches the
+    per-deployment archive at all (found by hand against a real
+    container: GET .../logs showed only 1 of 3 lines the ring buffer
+    had)."""
+    port = free_port()
+    runner, pm = new_runner(tmp_path)
+    try:
+        ok = run(runner.deploy_and_wait(fake_argv(port, "model-a"), deployment_id="d1", health_timeout=10))
+        assert ok is True
+
+        archived = runner.archive.read_log_tail("d1")
+        assert "fake-vllm: listening" in archived
+        assert "GET /health" in archived
+        assert "GET /v1/models" in archived
     finally:
         pm.stop()

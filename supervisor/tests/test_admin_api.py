@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from supervisor.admin_api import create_app
 from supervisor.deploy_runner import DeployRunner
+from supervisor.log_store import DeploymentArchive
 from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore, SupervisorState
 
@@ -19,7 +20,7 @@ TOKEN = "test-token"
 
 def new_client(tmp_path) -> TestClient:
     pm = ProcessManager()
-    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"))
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
     app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
     return TestClient(app)
 
@@ -129,3 +130,63 @@ def test_second_deploy_while_one_is_in_flight_gets_409_with_the_first_id(tmp_pat
     resp = client.post("/admin/deploy", headers=auth_headers(), json={"argv": ["sleep", "5"]})
     assert resp.status_code == 409
     assert resp.json()["detail"]["deployment_id"] == "already-running-id"
+
+
+def test_admin_logs_returns_the_current_process_output_and_lines_limits_it(tmp_path):
+    """P05: run a deploy -> GET /admin/logs returns the child's recent
+    output; lines=N limits correctly."""
+    import asyncio
+
+    fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    client = TestClient(app)
+
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    try:
+        argv = [sys.executable, fake_vllm, "--port", str(port), "--served-model-name", "model-a"]
+        ok = asyncio.run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+        assert ok is True
+
+        full = client.get("/admin/logs", headers=auth_headers()).json()["lines"]
+        assert "fake-vllm: listening" in full
+        assert "GET /health" in full
+
+        limited = client.get("/admin/logs?lines=1", headers=auth_headers()).json()["lines"]
+        assert len(limited.splitlines()) == 1
+        assert limited == full.splitlines()[-1]
+    finally:
+        pm.stop()
+
+
+def test_admin_deployment_logs_returns_that_deployments_archived_output(tmp_path):
+    import asyncio
+
+    fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    client = TestClient(app)
+
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    try:
+        argv = [sys.executable, fake_vllm, "--port", str(port), "--served-model-name", "model-a", "--fake-slow-start", "2"]
+        ok = asyncio.run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+        assert ok is True
+
+        resp = client.get("/admin/deployments/d1/logs", headers=auth_headers())
+        assert "fake-vllm: listening" in resp.json()["lines"]
+
+        missing = client.get("/admin/deployments/does-not-exist/logs", headers=auth_headers())
+        assert missing.json()["lines"] == ""
+    finally:
+        pm.stop()
