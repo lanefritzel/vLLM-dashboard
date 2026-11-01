@@ -27,6 +27,7 @@ from .failure_report import FailureReport, build_report
 from .gpu_backend import GpuBackend, GpuInfo
 from .log_store import DeploymentArchive
 from .process_manager import ProcessManager
+from .smoke_test import SmokeResult, resolve_smoke_config, run_smoke_test
 from .state import StateStore, SupervisorState
 
 RELEASING_GPU_INITIAL_WAIT_SECONDS = 2.0
@@ -68,6 +69,15 @@ class DeployInProgressError(Exception):
         self.deployment_id = deployment_id
 
 
+class NotServingError(Exception):
+    """POST /admin/smoke-test with no model actually serving (P06) --
+    carries the current state so the caller can report it (409 + state)."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(f"no model is currently serving (state={state!r})")
+        self.state = state
+
+
 class DeployRunner:
     def __init__(
         self,
@@ -87,6 +97,9 @@ class DeployRunner:
         self._events: dict[str, list[DeploymentEvent]] = {}
         self._seq_counters: dict[str, "itertools.count[int]"] = {}
         self._last_failure_report: Optional[FailureReport] = None
+        # None until the first deploy's smoke test runs (or forever, if
+        # every deploy so far was skipped) -- P06, in-memory only.
+        self._last_smoke_ok: Optional[bool] = None
         # Watches the child AFTER a successful deploy, to tell "crashed"
         # (reached ready, died later) from "failed" (never got there) --
         # cancelled at the start of the next deploy, since an intentional
@@ -113,6 +126,10 @@ class DeployRunner:
     def archive(self) -> DeploymentArchive:
         return self._archive
 
+    @property
+    def last_smoke_ok(self) -> Optional[bool]:
+        return self._last_smoke_ok
+
     def events_for(self, deployment_id: str, after: int = 0) -> list[DeploymentEvent]:
         if deployment_id in self._events:
             events = self._events[deployment_id]
@@ -131,12 +148,13 @@ class DeployRunner:
         deployment_id: Optional[str] = None,
         graceful_timeout: float = 5.0,
         health_timeout: float = 600.0,
+        smoke: Optional[dict] = None,
     ) -> str:
         """Admits the deploy synchronously (so a caller gets an immediate
         409-equivalent if one's already running) and schedules the actual
         work as a background task. Returns the deployment id right away."""
         deployment_id = self._begin(deployment_id)
-        asyncio.create_task(self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout))
+        asyncio.create_task(self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout, smoke))
         return deployment_id
 
     async def deploy_and_wait(
@@ -146,12 +164,13 @@ class DeployRunner:
         deployment_id: Optional[str] = None,
         graceful_timeout: float = 5.0,
         health_timeout: float = 600.0,
+        smoke: Optional[dict] = None,
     ) -> bool:
         """Same admission + state machine, but awaited inline -- for the
         boot sequence, which needs to know the outcome before deciding
         whether to retry (P02's retry cap)."""
         deployment_id = self._begin(deployment_id)
-        return await self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout)
+        return await self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout, smoke)
 
     def _begin(self, deployment_id: Optional[str]) -> str:
         if self._current_deployment_id is not None:
@@ -225,6 +244,7 @@ class DeployRunner:
         env: Optional[dict[str, str]],
         graceful_timeout: float,
         health_timeout: float,
+        smoke: Optional[dict] = None,
     ) -> bool:
         log_batch_task: Optional[asyncio.Task] = None
         vram_still_in_use = False
@@ -281,6 +301,30 @@ class DeployRunner:
             state.last_failure_report = None
             self._state_store.save(state)
 
+            # Automatic smoke test (P06), the final step -- runs by default;
+            # only an explicit smoke: {skip: true} turns it off (owner-
+            # confirmed 2026-11-01). A FAILED smoke test does not tear down
+            # a model that's actually up (warn-and-ready, also owner-
+            # confirmed): the deploy still ends in ready, with smoke_ok=
+            # false and a "smoke ... fail" event for the UI to act on
+            # (e.g. offer Rollback) -- never silently hidden, never used
+            # to kill a running server over a bad canned-prompt answer.
+            smoke_config = resolve_smoke_config(smoke)
+            if smoke_config is not None:
+                prompt, expect_substring = smoke_config
+                result = await asyncio.to_thread(run_smoke_test, port, served_model_name or "", prompt, expect_substring)
+                self._last_smoke_ok = result.ok
+                detail = {"outcome": "pass"} if result.ok else {"outcome": "fail", "excerpt": result.excerpt}
+                # _record() also sets self._state to whatever "state" string
+                # it's given -- fine for a real state-machine transition, but
+                # "smoke" is just an event, not a state (warn-and-ready: the
+                # deploy's actual state must stay "ready" either way), so
+                # restore it right after.
+                self._record(deployment_id, "smoke", detail)
+                self._state = "ready"
+            else:
+                self._last_smoke_ok = None
+
             self._post_ready_watcher = asyncio.create_task(self._watch_for_crash(deployment_id))
             return True
         finally:
@@ -301,6 +345,20 @@ class DeployRunner:
                 for line in self._process_manager.drain_pending_log_lines():
                     self._archive.append_log_line(deployment_id, line)
             self._current_deployment_id = None
+
+    async def run_smoke_test_now(self) -> SmokeResult:
+        """POST /admin/smoke-test (P06): runs against the CURRENT active
+        model. Only valid while actually serving -- raises NotServingError
+        (-> 409 + state at the API layer) otherwise, same "works only when
+        a model is serving" rule the page states."""
+        info = self._process_manager.info
+        if self._state != "ready" or info is None or not self._process_manager.is_running():
+            raise NotServingError(self._state)
+        served_model_name = _extract_value(info.argv, "--served-model-name") or ""
+        port = _extract_port(info.argv)
+        result = await asyncio.to_thread(run_smoke_test, port, served_model_name)
+        self._last_smoke_ok = result.ok
+        return result
 
     def _wait_for_gpu_release(self, before: GpuInfo) -> bool:
         """Replaces P03a's blind 2s wait (doc 5): wait ~2s, then read VRAM;

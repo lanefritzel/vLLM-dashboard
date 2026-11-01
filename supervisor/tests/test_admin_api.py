@@ -54,6 +54,7 @@ def test_status_with_correct_token_is_200(tmp_path):
     body = resp.json()
     assert body["state"] == "idle"
     assert body["child"] is None
+    assert body["smoke_ok"] is None
 
 
 def test_every_admin_route_except_health_requires_auth(tmp_path):
@@ -64,6 +65,7 @@ def test_every_admin_route_except_health_requires_auth(tmp_path):
         ("GET", "/admin/deployments/x/events"),
         ("GET", "/admin/settings"),
         ("PUT", "/admin/settings"),
+        ("POST", "/admin/smoke-test"),
     ]:
         resp = client.request(method, path, json={} if method in ("POST", "PUT") else None)
         assert resp.status_code == 401, f"{method} {path} should 401 without a token"
@@ -160,6 +162,42 @@ def test_admin_logs_returns_the_current_process_output_and_lines_limits_it(tmp_p
         limited = client.get("/admin/logs?lines=1", headers=auth_headers()).json()["lines"]
         assert len(limited.splitlines()) == 1
         assert limited == full.splitlines()[-1]
+    finally:
+        pm.stop()
+
+
+def test_smoke_test_endpoint_409s_while_idle(tmp_path):
+    client = new_client(tmp_path)
+    resp = client.post("/admin/smoke-test", headers=auth_headers())
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["state"] == "idle"
+
+
+def test_smoke_test_endpoint_runs_on_demand_while_serving(tmp_path):
+    import asyncio
+
+    fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    client = TestClient(app)
+
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    try:
+        argv = [sys.executable, fake_vllm, "--port", str(port), "--served-model-name", "model-a"]
+        ok = asyncio.run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10, smoke={"skip": True}))
+        assert ok is True
+
+        resp = client.post("/admin/smoke-test", headers=auth_headers())
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+        status = client.get("/admin/status", headers=auth_headers()).json()
+        assert status["smoke_ok"] is True
     finally:
         pm.stop()
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supervisor.deploy_runner import DeployInProgressError, DeployRunner
+from supervisor.deploy_runner import DeployInProgressError, DeployRunner, NotServingError
 from supervisor.log_store import DeploymentArchive
 from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore
@@ -46,7 +46,7 @@ def test_deploy_from_idle_skips_stopping_and_releasing_gpu(tmp_path):
         assert ok is True
 
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "ready"]
+        assert states == ["starting", "loading", "waiting_health", "ready", "smoke"]
         assert runner.state == "ready"
     finally:
         pm.stop()
@@ -63,7 +63,7 @@ def test_redeploy_goes_through_stop_and_release_and_updates_last_good_argv(tmp_p
         assert ok is True
 
         states = [e.state for e in runner.events_for("d2")]
-        assert states == ["stopping", "releasing_gpu", "starting", "loading", "waiting_health", "ready"]
+        assert states == ["stopping", "releasing_gpu", "starting", "loading", "waiting_health", "ready", "smoke"]
         assert pm.info.pid != old_pid
         assert pm.info.argv == fake_argv(port_b, "model-b")
 
@@ -236,7 +236,7 @@ def test_exit_after_ready_is_crashed_not_failed(tmp_path):
         run(scenario())
 
         states = [e.state for e in runner.events_for("d1")]
-        assert states[-2:] == ["ready", "crashed"]
+        assert states[-3:] == ["ready", "smoke", "crashed"]
         report = runner.events_for("d1")[-1].detail
         assert report["exit_code"] is not None
 
@@ -300,5 +300,89 @@ def test_a_fast_deploy_still_archives_its_full_startup_log(tmp_path):
         assert "fake-vllm: listening" in archived
         assert "GET /health" in archived
         assert "GET /v1/models" in archived
+    finally:
+        pm.stop()
+
+
+def test_successful_deploy_runs_smoke_test_by_default_and_passes(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+    try:
+        ok = run(runner.deploy_and_wait(fake_argv(port, "model-a"), deployment_id="d1", health_timeout=10))
+        assert ok is True
+        assert runner.state == "ready", "a failed smoke test must not change the terminal deploy state"
+        assert runner.last_smoke_ok is True
+
+        states = [e.state for e in runner.events_for("d1")]
+        assert states == ["starting", "loading", "waiting_health", "ready", "smoke"]
+        smoke_event = runner.events_for("d1")[-1]
+        assert smoke_event.detail == {"outcome": "pass"}
+    finally:
+        pm.stop()
+
+
+def test_smoke_test_failure_is_warn_and_ready_not_a_deploy_failure(tmp_path):
+    """Owner-confirmed 2026-11-01: a bad smoke answer still ends in ready,
+    with smoke_ok=false and a 'smoke ... fail' event -- never torn down,
+    never reported as a deploy failure."""
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+    try:
+        argv = [sys.executable, FAKE_VLLM, "--port", str(port), "--served-model-name", "model-a", "--fake-bad-output"]
+        ok = run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+        assert ok is True
+        assert runner.state == "ready"
+        assert runner.last_smoke_ok is False
+        assert pm.is_running(), "a failed smoke test must not kill a model that's actually up"
+
+        states = [e.state for e in runner.events_for("d1")]
+        assert states == ["starting", "loading", "waiting_health", "ready", "smoke"]
+        smoke_event = runner.events_for("d1")[-1]
+        assert smoke_event.detail["outcome"] == "fail"
+        assert "excerpt" in smoke_event.detail
+    finally:
+        pm.stop()
+
+
+def test_smoke_skip_true_omits_the_smoke_event(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+    try:
+        ok = run(runner.deploy_and_wait(
+            fake_argv(port, "model-a"), deployment_id="d1", health_timeout=10, smoke={"skip": True},
+        ))
+        assert ok is True
+        assert runner.last_smoke_ok is None
+
+        states = [e.state for e in runner.events_for("d1")]
+        assert states == ["starting", "loading", "waiting_health", "ready"]
+    finally:
+        pm.stop()
+
+
+def test_run_smoke_test_now_works_while_serving(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+    try:
+        run(runner.deploy_and_wait(
+            fake_argv(port, "model-a"), deployment_id="d1", health_timeout=10, smoke={"skip": True},
+        ))
+        assert runner.last_smoke_ok is None  # auto smoke was skipped
+
+        result = run(runner.run_smoke_test_now())
+        assert result.ok is True
+        assert runner.last_smoke_ok is True
+    finally:
+        pm.stop()
+
+
+def test_run_smoke_test_now_raises_not_serving_when_idle(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    try:
+        try:
+            run(runner.run_smoke_test_now())
+            assert False, "expected NotServingError"
+        except NotServingError as exc:
+            assert exc.state == "idle"
     finally:
         pm.stop()

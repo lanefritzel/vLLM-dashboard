@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-from .deploy_runner import DeployInProgressError, DeployRunner
+from .deploy_runner import DeployInProgressError, DeployRunner, NotServingError
 from .process_manager import ProcessManager
 from .state import Settings, StateStore, SupervisorState
 
@@ -21,7 +21,7 @@ class DeployRequest(BaseModel):
     deployment_id: Optional[str] = None
     graceful_timeout: float = 5.0
     health_timeout: float = 600.0
-    smoke: Optional[dict] = None  # accepted, ignored -- smoke test is P06
+    smoke: Optional[dict] = None  # P06: omitted/null runs with defaults; {"skip": true} turns it off
 
 
 class SettingsRequest(BaseModel):
@@ -82,6 +82,7 @@ def create_app(
             "exit_code": exit_code,
             "current_deployment_id": deploy_runner.current_deployment_id,
             "failure_report": failure_report,
+            "smoke_ok": deploy_runner.last_smoke_ok,
         }
 
     @admin.post("/admin/deploy")
@@ -98,10 +99,22 @@ def create_app(
                 deployment_id=body.deployment_id,
                 graceful_timeout=body.graceful_timeout,
                 health_timeout=body.health_timeout,
+                smoke=body.smoke,
             )
         except DeployInProgressError as exc:
             raise HTTPException(status_code=409, detail={"deployment_id": exc.deployment_id}) from exc
         return {"deployment_id": deployment_id}
+
+    @admin.post("/admin/smoke-test")
+    async def smoke_test() -> dict:
+        # On-demand (P06): only valid while a model is actually serving --
+        # run_smoke_test_now() raises NotServingError otherwise, which we
+        # translate to 409 + the current state for the caller to display.
+        try:
+            result = await deploy_runner.run_smoke_test_now()
+        except NotServingError as exc:
+            raise HTTPException(status_code=409, detail={"state": exc.state}) from exc
+        return result.to_dict()
 
     @admin.get("/admin/deployments/{deployment_id}/events")
     def events(deployment_id: str, after: int = 0) -> list[dict]:

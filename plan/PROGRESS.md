@@ -18,6 +18,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P03c | done | 2026-11-01 | See below. |
 | P04 | done | 2026-11-01 | See below. |
 | P05 | done | 2026-11-01 | See below. |
+| P06 | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -662,6 +663,90 @@ Done:
 Out of scope, not touched: shipping logs to the dashboard DB (P10b --
 only the 50-line failure `log_tail` goes there, unchanged from P03b), log
 search/filter.
+
+## P06 -- Smoke test (auto + on demand)
+
+Two decisions confirmed with the owner before implementing (2026-11-01):
+- A **failed** smoke test is **warn-and-ready**, not a deploy failure: the
+  deploy still ends in `ready`, with `smoke_ok=false` and a `smoke` event
+  carrying `{"outcome":"fail","excerpt":...}` for the UI to act on (e.g.
+  offer Rollback) -- never used to tear down a model that's actually
+  serving, just because it gave a bad answer to a canned prompt.
+- Smoke is **automatic by default**: an omitted or explicit `"smoke": null`
+  field on `POST /admin/deploy` still runs it with the canned defaults;
+  only an explicit `"smoke": {"skip": true}` turns it off. (The page's own
+  wording was ambiguous here -- "smoke: null ... skips" vs. "automatic by
+  default" -- and a JSON field that's omitted vs. explicitly null is
+  indistinguishable once past pydantic, so "automatic by default" wins.)
+
+Found a real bug by hand against a real container, not caught by the unit
+tests at first: `_record()` (the existing helper that both appends an
+event and sets `self._state`) was reused as-is for the new `smoke` event,
+which meant a *passing* smoke test silently changed `/admin/status`'s
+`"state"` from `"ready"` to `"smoke"` -- the deploy's own terminal state,
+not just an event. None of the existing unit tests happened to assert
+`runner.state` immediately after a *successful* deploy with smoke enabled
+(they checked the event list, not the live state), so this only surfaced
+curling `/admin/status` against a real deploy. Fixed by restoring
+`self._state = "ready"` right after recording the `smoke` event -- `smoke`
+is an event, never a state-machine transition. Added a regression
+assertion (`runner.state == "ready"` after both a passing and a failing
+smoke run) and fixed several pre-existing tests that asserted an exact
+events list without anticipating the now-default `smoke` event appended
+after `ready`.
+
+Done:
+- `supervisor/supervisor/smoke_test.py` (new): `run_smoke_test()` sends the
+  canned prompt (`"Reply with OK."`, 50 max tokens) straight to the
+  child's own `/v1/chat/completions` -- never through a proxy -- and passes
+  iff `"OK"` appears in the reply; never raises (a request failure or
+  timeout is just a `fail` result with the error as the excerpt).
+  `resolve_smoke_config()` implements the owner-confirmed default/skip
+  rule above. `_extract_text()` tolerates both a chat-shaped and a
+  completions-shaped response body.
+- `deploy_runner.py`: `_run_deploy` runs the smoke test as the last step
+  after a deploy reaches `ready` (unless skipped), records a `smoke` event
+  with the outcome, and restores `self._state = "ready"` afterward (the
+  bug above). New `NotServingError` (raised by `run_smoke_test_now()` when
+  not actually serving) and `last_smoke_ok` property (`None` until the
+  first smoke test runs, or forever if every deploy so far skipped it).
+  `start_deploy`/`deploy_and_wait` both take an optional `smoke: dict`.
+- `admin_api.py`: `POST /admin/deploy`'s `smoke` field is now wired through
+  (previously accepted-but-ignored, a P03a placeholder); new `POST
+  /admin/smoke-test` for on-demand runs against whatever is currently
+  serving, 409 + `{"state": ...}` when not; `smoke_ok` added to `GET
+  /admin/status`.
+- 14 new tests: `test_smoke_test.py` (pure config resolution + a real
+  fake-vllm subprocess for pass/fail/unreachable), extensions to
+  `test_deploy_runner.py` (auto-pass, auto-fail-is-warn-and-ready,
+  explicit skip, on-demand while serving, on-demand `NotServingError`
+  while idle) and `test_admin_api.py` (`POST /admin/smoke-test` 200 vs
+  409, `smoke_ok` in status). 94 total; `./scripts/gate.sh` green.
+  Verified by hand against the real `Dockerfile.test` image: default
+  smoke pass (`state:"ready"`, `smoke_ok:true`), `--fake-bad-output` ->
+  warn-and-ready (`state:"ready"`, `smoke_ok:false`, child still running),
+  explicit `skip:true` -> `smoke_ok:null`, on-demand while serving (200)
+  and while idle (409 + `{"state":"idle"}`), and the `smoke` event's shape
+  in `GET /admin/deployments/{id}/events`.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Canned prompt sent straight to vLLM's own chat/completions, never through a proxy | Yes | `smoke_test.py`'s `run_smoke_test()` hits `http://127.0.0.1:<port>/v1/chat/completions` directly; the supervisor has no proxy of its own |
+| Pass iff the expected substring appears in the reply (first ~50 tokens) | Yes | `expect_substring in text`, `max_tokens=50`; unit-tested against real fake-vllm for both a good and a `--fake-bad-output` reply |
+| Runs automatically after every successful deploy by default | Yes | `resolve_smoke_config(None)` and omitted-field both run with defaults; verified via curl with the field omitted entirely |
+| Only an explicit `smoke: {skip: true}` turns it off | Yes | `resolve_smoke_config({"skip": true})` returns `None`; verified via curl, `smoke_ok` stayed `null` |
+| A failed smoke test is warn-and-ready, not a deploy failure | Yes | deploy returns `True`/`ready` either way; real-container check showed `state:"ready"`, child still running, after `--fake-bad-output` |
+| `smoke_ok` reflected on `/admin/status` | Yes | field added, exercised by both the passing and failing real-container runs above |
+| On-demand smoke test available (`POST /admin/smoke-test`) | Yes | implemented, 200 + result body while serving (curl + test) |
+| On-demand smoke test rejected when nothing is serving | Yes | `NotServingError` -> 409 + `{"state": ...}`; verified idle (curl + test) |
+| Smoke result recorded as an event for the deployment | Yes | `smoke` event with `{"outcome": "pass"\|"fail", ...}`, visible via `GET .../events`; confirmed it does NOT change `/admin/status`'s `"state"` (the bug this phase caught) |
+
+Out of scope, not touched: streaming smoke requests (always `stream:
+false`), any UI for displaying `smoke_ok` or offering Rollback (dashboard
+side, later phase), configurable default prompt/timeout via env var (only
+per-request override via the `smoke` body field, per the page).
 
 ## Deviations / findings worth flagging
 

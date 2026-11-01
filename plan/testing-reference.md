@@ -4,6 +4,56 @@ Concrete commands/vars used while verifying each phase by hand, so a future
 session doesn't have to re-derive them. `plan/PROGRESS.md` has the
 per-phase narrative and findings; this is the copy-pasteable how-to.
 
+## How testing is done, phase by phase
+
+Every phase in this refactor goes through the same sequence before it's
+considered done. Follow it in order -- skipping straight to "tests pass" has
+repeatedly missed real bugs (see below).
+
+1. **Implement**, then write tests alongside the code (pytest for the
+   supervisor, xUnit for .NET) -- real subprocesses/real fake-vllm as a test
+   double, not mocks, for anything state-machine- or process-shaped.
+2. **Run the narrow test file first** (`pytest supervisor/tests/test_x.py
+   -q`), then the full suite (`./.venv/bin/python -m pytest supervisor/tests
+   -q` from the repo root -- use the project's own venv, not the system
+   `python3`, which won't have pytest installed).
+3. **Run `./scripts/gate.sh`** -- the full project gate (.NET build/test +
+   fake-vllm pytest + supervisor pytest). Nothing is "done" until this is
+   green.
+4. **Build `supervisor/Dockerfile.test` and verify by hand in a real
+   container** -- this is not optional busywork; it has caught bugs pytest
+   alone missed every single time it's been skipped:
+   - P02: a zombie-reaping bug (child never reaped outside the boot
+     health-check window) only showed up watching a real process tree.
+   - P03c: an event-loop teardown bug (background tasks silently dying)
+     only reproduced across a real container restart, not in-process.
+   - P05: a fast deploy losing its first log lines to the archive only
+     showed up diffing `GET /admin/logs` against `GET
+     /admin/deployments/<id>/logs` on a live container.
+   - P06: smoke recording initially clobbered the terminal `ready` state
+     with `smoke` (see `plan/PROGRESS.md`) -- caught by a real deploy +
+     curl against `/admin/status`, not by the unit tests, which didn't
+     happen to assert `runner.state` immediately after a passing smoke run.
+
+   Build once (`docker build -f supervisor/Dockerfile.test -t
+   supervisor-test .` from the repo root), run with `-e
+   SUPERVISOR_TOKEN=...`, and curl every endpoint the phase touches --
+   including ones from *earlier* phases that the new code runs alongside
+   (e.g. P06's smoke test runs inside the same deploy that P03b's failure
+   report and P04's GPU release already instrumented). Always `docker rm
+   -f` the container (and any volume) when done -- see each phase's
+   "Cleanup" note below.
+5. **Self-check the Definition of Done explicitly**, bullet by bullet, in
+   `plan/PROGRESS.md` -- not "tests pass so it's done." A bullet with no
+   corresponding assertion or manual curl gets called out as a gap, not
+   assumed.
+6. **Update this file** with the new phase's copy-pasteable commands/vars,
+   in the same pass as the DoD self-check -- not as an afterthought later.
+   Future sessions should never have to re-derive a curl command or an env
+   var that a past session already worked out.
+7. Wait for the owner's explicit "commit" before committing anything --
+   never automatic, regardless of how clean the phase looks.
+
 ## The gate
 
 ```bash
@@ -242,4 +292,51 @@ Cleanup:
 docker rm -f supervisor-dev
 docker volume rm -f supervisor-state
 docker rmi supervisor-test
+```
+
+### Smoke test (P06)
+
+Auto-runs as the final step of every successful deploy unless the body
+says `"smoke": {"skip": true}` -- omitted or `"smoke": null` both still run
+it with the canned defaults (`"Reply with OK."`, expect `"OK"`, 30s
+timeout). Reaches vLLM's own `/v1/chat/completions` directly -- never
+through a proxy.
+
+```bash
+AUTH='Authorization: Bearer secret'
+
+# Default smoke (omit the field) -- --served-model-name with no extra flags
+# answers "OK" by default -> smoke passes, deploy still ends in "ready".
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -X POST http://localhost:18100/admin/deploy -d '{
+  "argv": ["python3", "/app/fake_vllm.py", "--port", "9001", "--served-model-name", "model-a"],
+  "deployment_id": "d1", "health_timeout": 15
+}'
+curl -s -H "$AUTH" http://localhost:18100/admin/status   # -> "state":"ready", "smoke_ok":true
+
+# Failing smoke (warn-and-ready, owner-confirmed 2026-11-01): the deploy
+# still reaches "ready" -- a bad canned-prompt answer never tears down a
+# model that's actually up. Check smoke_ok and the "smoke" event, not the
+# deploy's own outcome.
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -X POST http://localhost:18100/admin/deploy -d '{
+  "argv": ["python3", "/app/fake_vllm.py", "--port", "9002", "--served-model-name", "model-b", "--fake-bad-output"],
+  "deployment_id": "d2", "health_timeout": 15
+}'
+curl -s -H "$AUTH" http://localhost:18100/admin/status   # -> "state":"ready", "smoke_ok":false
+
+# Explicit skip -- the only thing that turns smoke off.
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -X POST http://localhost:18100/admin/deploy -d '{
+  "argv": ["python3", "/app/fake_vllm.py", "--port", "9003", "--served-model-name", "model-c"],
+  "deployment_id": "d3", "health_timeout": 15, "smoke": {"skip": true}
+}'
+curl -s -H "$AUTH" http://localhost:18100/admin/status   # -> "smoke_ok":null (not run)
+
+# On-demand, against whatever is currently serving -- 409 + {"state": ...} when idle/not ready.
+curl -s -w '\n%{http_code}\n' -H "$AUTH" -X POST http://localhost:18100/admin/smoke-test
+
+# Per-deployment smoke event, alongside the usual state events:
+curl -s -H "$AUTH" "http://localhost:18100/admin/deployments/d1/events?after=0"
+# -> last entry: {"state":"smoke","detail":{"outcome":"pass"}} (or
+#    {"outcome":"fail","excerpt":"..."}) -- note this is an EVENT, not a
+#    state-machine transition: runner.state (and /admin/status's "state")
+#    stays "ready" through it, never flips to "smoke".
 ```
