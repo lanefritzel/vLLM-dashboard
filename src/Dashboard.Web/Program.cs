@@ -145,8 +145,12 @@ builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorTokenProvid
 
 // Swap orchestration (P10a).
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorClient, Dashboard.Infrastructure.Supervisor.SupervisorClient>();
-builder.Services.AddSingleton<Dashboard.Core.Abstractions.IDeploymentTracker, Dashboard.Infrastructure.Supervisor.PollingDeploymentTracker>();
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISwapService, Dashboard.Infrastructure.Persistence.V2.SwapService>();
+
+// Event receiver + catch-up (P10b).
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IDeploymentEventApplier, Dashboard.Infrastructure.Persistence.V2.DeploymentEventApplier>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiver>();
+builder.Services.AddHostedService<Dashboard.Infrastructure.Persistence.V2.DeploymentCatchUpService>();
 
 // Hosted services. Order matters: hosted services start in registration order,
 // so the DB initializer (migrations + seed) must start before the metrics
@@ -197,6 +201,28 @@ app.MapRazorComponents<App>()
 app.MapHub<MetricsHub>("/metrics-hub").RequireAuthorization();
 app.MapHub<Dashboard.Application.Proxy.TrafficHub>("/traffic-hub").RequireAuthorization();
 app.MapHub<Dashboard.Application.Logs.LogsHub>("/logs-hub").RequireAuthorization();
+app.MapHub<Dashboard.Infrastructure.Events.DeploymentHub>("/deployment-hub").RequireAuthorization();
+
+// Supervisor event receiver (P10b) -- machine-to-machine, bearer-token
+// authenticated, NOT under /proxy and NOT the cookie login (doc 5): it's
+// reachable on the published port, so the per-instance token check (not
+// RequireAuthorization, which is the dashboard's own cookie auth) is the
+// only protection.
+app.MapPost("/internal/supervisor-events", async (
+    HttpContext context,
+    Dashboard.Core.Supervisor.SupervisorPushEvent evt,
+    Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiver receiver) =>
+{
+    var authHeader = context.Request.Headers.Authorization.ToString();
+    var result = await receiver.HandleAsync(evt, authHeader, context.RequestAborted);
+    return result switch
+    {
+        Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiverResult.Ok => Results.Ok(),
+        Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiverResult.BadRequest => Results.BadRequest(),
+        Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiverResult.NotFound => Results.NotFound(),
+        _ => Results.Unauthorized(),
+    };
+});
 app.MapAdditionalIdentityEndpoints();
 
 // Transparent proxy: inference clients hit this stable URL instead of a source's own

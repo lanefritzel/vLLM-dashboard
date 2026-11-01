@@ -2,19 +2,19 @@ namespace Dashboard.Core.Supervisor;
 
 public sealed record SwapResult
 {
-    /// <summary>"swapped" | "already_active" | "failed" | "stopped" | "cancelled".</summary>
+    /// <summary>"pending" | "already_active" | "cancelled" -- Swap/Rollback/
+    /// Restart return "pending" immediately (P10b: the supervisor call
+    /// returned, but the deploy hasn't reached a terminal state yet --
+    /// <see cref="Dashboard.Core.Abstractions.IDeploymentEventApplier"/>,
+    /// fed by push with catch-up polling as the fallback, resolves it to
+    /// active/failed/stopped asynchronously). Cancel/Stop still have an
+    /// immediately-known outcome, since they're a direct supervisor call
+    /// with nothing further to wait on.</summary>
     public required string Outcome { get; init; }
 
-    /// <summary>The new deployments row id -- null for "already_active" (no
-    /// row is created, per the page's own "not a swap" rule).</summary>
+    /// <summary>The deployment row id -- null for "already_active" (no row
+    /// is created, per the page's own "not a swap" rule).</summary>
     public int? DeploymentId { get; init; }
-
-    /// <summary>Kept in memory/the return value only this phase -- NOT
-    /// persisted to the deployments row's own failure columns yet
-    /// (P10b wires that up alongside the push receiver).</summary>
-    public string? FailureReason { get; init; }
-    public int? ExitCode { get; init; }
-    public string? LogTail { get; init; }
 }
 
 /// <summary>Thrown when a swap would change the active deployment's

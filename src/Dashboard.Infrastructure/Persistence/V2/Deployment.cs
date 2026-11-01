@@ -35,6 +35,25 @@ public class Deployment
     /// <summary>Last ~50 lines of the child process's output.</summary>
     public string? LogTail { get; set; }
 
+    /// <summary>The highest supervisor-assigned <c>seq</c> this deployment has
+    /// fully processed, across ALL push kinds (state/report/log) -- not just
+    /// the "state" events stored in <see cref="DeploymentEvent"/>, since seq
+    /// increases monotonically per deployment across every kind (doc 5), but
+    /// only "state" kind pushes get their own row there. This is what gap
+    /// detection (P10b) actually compares an incoming seq against; a state
+    /// event's own max stored Seq would under-count whenever a report/log
+    /// push's seq number falls between two state events.</summary>
+    public int LastSeenSeq { get; set; }
+
+    /// <summary>What <see cref="StopReason"/> to give the PREVIOUS deployment
+    /// once this one's own "ready" event arrives (P10b) -- "swapped" for a
+    /// normal swap or restart, "rollback" for a rollback. Set when this row
+    /// is first inserted (<c>SwapService</c>, synchronously), consumed by
+    /// whichever path (push or catch-up) eventually applies "ready" for it;
+    /// the applier has no other way to know which operation produced a
+    /// given pending row once it's processing events asynchronously.</summary>
+    public string? PendingStopReason { get; set; }
+
     public DateTime? StartedAt { get; set; }
     public DateTime? StoppedAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

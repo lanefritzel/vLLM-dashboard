@@ -6,17 +6,24 @@ using Dashboard.Core.Supervisor;
 namespace Dashboard.Infrastructure.Persistence.V2;
 
 /// <summary>The first end-to-end swap flow (P10a, doc 7): pre-flight -> build
-/// argv -> record a pending deployment -> ask the supervisor -> track to a
-/// terminal state. Composed entirely out of the P09b services -- no direct
-/// AppDbContext access here, since every read/write it needs (model,
-/// recipe, server, instance, deployment rows) already has a service for it.
-/// The dashboard asks; the supervisor does: nothing here touches the Docker
-/// API, and starting/stopping a model always goes through
-/// <see cref="ISupervisorClient"/>.</summary>
+/// argv -> record a pending deployment -> ask the supervisor. Composed
+/// entirely out of the P09b services -- no direct AppDbContext access here,
+/// since every read/write it needs (model, recipe, server, instance,
+/// deployment rows) already has a service for it. The dashboard asks; the
+/// supervisor does: nothing here touches the Docker API, and starting/
+/// stopping a model always goes through <see cref="ISupervisorClient"/>.
+///
+/// Fire-and-forget as of P10b: Swap/Rollback/Restart insert the pending row,
+/// ask the supervisor, and return immediately ("pending") -- they no longer
+/// block waiting for a terminal state. <see cref="IDeploymentEventApplier"/>
+/// (fed by the push receiver, with catch-up polling as the fallback path)
+/// is what actually flips a row to active/failed/stopped once the outcome
+/// is known; P10a's own polling tracker is gone. Stop/Cancel are still
+/// synchronous -- they're a direct supervisor call with an immediately-known
+/// outcome, nothing to wait on asynchronously.</summary>
 public sealed class SwapService : ISwapService
 {
     private static readonly TimeSpan DefaultHealthTimeout = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan DefaultTrackingTimeout = TimeSpan.FromMinutes(10);
 
     private readonly IInstanceService _instances;
     private readonly IModelService _models;
@@ -24,13 +31,11 @@ public sealed class SwapService : ISwapService
     private readonly IServerService _servers;
     private readonly IDeploymentService _deployments;
     private readonly ISupervisorClient _supervisorClient;
-    private readonly IDeploymentTracker _tracker;
     private readonly ISupervisorTokenProvider _tokenProvider;
 
     public SwapService(
         IInstanceService instances, IModelService models, IRecipeService recipes, IServerService servers,
-        IDeploymentService deployments, ISupervisorClient supervisorClient, IDeploymentTracker tracker,
-        ISupervisorTokenProvider tokenProvider)
+        IDeploymentService deployments, ISupervisorClient supervisorClient, ISupervisorTokenProvider tokenProvider)
     {
         _instances = instances;
         _models = models;
@@ -38,7 +43,6 @@ public sealed class SwapService : ISwapService
         _servers = servers;
         _deployments = deployments;
         _supervisorClient = supervisorClient;
-        _tracker = tracker;
         _tokenProvider = tokenProvider;
     }
 
@@ -83,15 +87,16 @@ public sealed class SwapService : ISwapService
         // 3 - insert "pending" deployment row, args_snapshot = argv. The partial
         // unique index guarantees one in flight -- a concurrent swap attempt
         // surfaces as DeploymentService's own friendly InvalidOperationException.
+        // PendingStopReason="swapped" is what the event applier gives the
+        // previous row once THIS one reaches ready (P10b).
         var deployment = await _deployments.CreateAsync(new Deployment
         {
             InstanceId = instanceId, ModelId = modelId, RecipeId = recipeId,
-            ArgsSnapshot = JsonSerializer.Serialize(built.Argv), Status = "pending",
+            ArgsSnapshot = JsonSerializer.Serialize(built.Argv), Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
-        // 4 - ask the supervisor; 5 - track to terminal.
-        return await DeployTrackAndResolveAsync(
-            instance, token, deployment.Id, built.Argv, built.Env, DefaultHealthTimeout, swapStopReason: "swapped", ct);
+        // 4 - ask the supervisor. The outcome arrives later via push/catch-up.
+        return await DeployAsync(instance, token, deployment.Id, built.Argv, built.Env, ct);
     }
 
     public async Task<SwapResult> RollbackAsync(int instanceId, CancellationToken ct = default)
@@ -120,11 +125,10 @@ public sealed class SwapService : ISwapService
         var deployment = await _deployments.CreateAsync(new Deployment
         {
             InstanceId = instanceId, ModelId = previous.ModelId, RecipeId = previous.RecipeId,
-            ArgsSnapshot = previous.ArgsSnapshot, Status = "pending",
+            ArgsSnapshot = previous.ArgsSnapshot, Status = "pending", PendingStopReason = "rollback",
         }, ct);
 
-        return await DeployTrackAndResolveAsync(
-            instance, token, deployment.Id, argv, env: null, DefaultHealthTimeout, swapStopReason: "rollback", ct);
+        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct);
     }
 
     public async Task StopAsync(int instanceId, CancellationToken ct = default)
@@ -183,34 +187,26 @@ public sealed class SwapService : ISwapService
         var deployment = await _deployments.CreateAsync(new Deployment
         {
             InstanceId = instanceId, ModelId = active.ModelId, RecipeId = active.RecipeId,
-            ArgsSnapshot = active.ArgsSnapshot, Status = "pending",
+            ArgsSnapshot = active.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
-        try
-        {
-            await _supervisorClient.RestartAsync(instance.AdminUrl!, token, deployment.Id.ToString(), ct);
-        }
-        catch (Exception)
-        {
-            await _deployments.TransitionAsync(deployment.Id, status: "failed", ct: ct);
-            throw;
-        }
-
-        var tracked = await _tracker.TrackToTerminalAsync(
-            instance.AdminUrl!, token, deployment.Id.ToString(), DefaultTrackingTimeout, ct);
-        return await ResolveTrackedResultAsync(deployment.Id, tracked, swapStopReason: "swapped", ct);
+        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct, restart: true);
     }
 
-    /// <summary>Steps 4-5 shared by Swap and Rollback: POST /admin/deploy,
-    /// then track to a terminal state and resolve it.</summary>
-    private async Task<SwapResult> DeployTrackAndResolveAsync(
+    /// <summary>Step 4 shared by Swap/Rollback/Restart: ask the supervisor,
+    /// and return "pending" immediately -- the event applier (push, falling
+    /// back to catch-up) resolves the actual outcome asynchronously (P10b).</summary>
+    private async Task<SwapResult> DeployAsync(
         Instance instance, string token, int deploymentId, IReadOnlyList<string> argv,
-        IReadOnlyDictionary<string, string>? env, TimeSpan healthTimeout, string swapStopReason, CancellationToken ct)
+        IReadOnlyDictionary<string, string>? env, CancellationToken ct, bool restart = false)
     {
         try
         {
-            await _supervisorClient.DeployAsync(
-                instance.AdminUrl!, token, argv, env, deploymentId.ToString(), healthTimeout.TotalSeconds, smoke: null, ct: ct);
+            if (restart)
+                await _supervisorClient.RestartAsync(instance.AdminUrl!, token, deploymentId.ToString(), ct);
+            else
+                await _supervisorClient.DeployAsync(
+                    instance.AdminUrl!, token, argv, env, deploymentId.ToString(), DefaultHealthTimeout.TotalSeconds, smoke: null, ct: ct);
         }
         catch (Exception)
         {
@@ -218,49 +214,7 @@ public sealed class SwapService : ISwapService
             throw;
         }
 
-        DeploymentTrackingResult tracked;
-        try
-        {
-            tracked = await _tracker.TrackToTerminalAsync(instance.AdminUrl!, token, deploymentId.ToString(), DefaultTrackingTimeout, ct);
-        }
-        catch (TimeoutException)
-        {
-            await _deployments.TransitionAsync(deploymentId, status: "failed", failureReason: "health_timeout", ct: ct);
-            return new SwapResult { Outcome = "failed", DeploymentId = deploymentId, FailureReason = "health_timeout" };
-        }
-
-        return await ResolveTrackedResultAsync(deploymentId, tracked, swapStopReason, ct);
-    }
-
-    private async Task<SwapResult> ResolveTrackedResultAsync(
-        int deploymentId, DeploymentTrackingResult tracked, string swapStopReason, CancellationToken ct)
-    {
-        switch (tracked.TerminalState)
-        {
-            case "ready":
-                await _deployments.ActivateAndStopPreviousAsync(deploymentId, swapStopReason, ct);
-                return new SwapResult { Outcome = "swapped", DeploymentId = deploymentId };
-
-            case "failed":
-                var reason = GetString(tracked.Detail, "reason");
-                var exitCode = GetInt(tracked.Detail, "exit_code");
-                var logTail = GetString(tracked.Detail, "log_tail");
-                // Kept in the return value only this phase -- not persisted to
-                // the deployments row's own failure columns yet (P10b).
-                await _deployments.TransitionAsync(deploymentId, status: "failed", ct: ct);
-                return new SwapResult
-                {
-                    Outcome = "failed", DeploymentId = deploymentId,
-                    FailureReason = reason, ExitCode = exitCode, LogTail = logTail,
-                };
-
-            case "cancelled":
-                await _deployments.TransitionAsync(deploymentId, status: "stopped", stopReason: "cancelled", stoppedAt: DateTime.UtcNow, ct: ct);
-                return new SwapResult { Outcome = "cancelled", DeploymentId = deploymentId };
-
-            default:
-                throw new InvalidOperationException($"Unexpected terminal state '{tracked.TerminalState}' for deployment {deploymentId}.");
-        }
+        return new SwapResult { Outcome = "pending", DeploymentId = deploymentId };
     }
 
     private async Task<Instance> RequireInstanceAsync(int instanceId, CancellationToken ct)
@@ -274,23 +228,4 @@ public sealed class SwapService : ISwapService
     private string RequireToken(int instanceId) =>
         _tokenProvider.GetToken(instanceId)
             ?? throw new InvalidOperationException($"No supervisor token is configured for instance {instanceId}.");
-
-    private static string? GetString(Dictionary<string, object?>? detail, string key)
-    {
-        if (detail is null || !detail.TryGetValue(key, out var value) || value is null)
-            return null;
-        return value switch
-        {
-            JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
-            JsonElement je => je.ToString(),
-            _ => value.ToString(),
-        };
-    }
-
-    private static int? GetInt(Dictionary<string, object?>? detail, string key)
-    {
-        if (detail is null || !detail.TryGetValue(key, out var value) || value is null)
-            return null;
-        return value is JsonElement { ValueKind: JsonValueKind.Number } je && je.TryGetInt32(out var i) ? i : null;
-    }
 }

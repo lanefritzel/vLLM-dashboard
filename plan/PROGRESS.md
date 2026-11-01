@@ -23,6 +23,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P08 | done | 2026-11-01 | See below. |
 | P09b | done | 2026-11-01 | See below. |
 | P10a | done | 2026-11-01 | See below. |
+| P10b | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -1228,6 +1229,154 @@ report (P10b). UI (P14). Dashboard-startup reconciliation (P12).
 | Cancel in phase 2 → idle, stop_reason='cancelled' | Yes | `Cancel_Phase2_GoesIdleAndStopsThePreviousRowToo` (also stops the previous-active row, per the owner-confirmed decision earlier this phase) |
 | Restarting the dashboard process with the supervisor idle → the dashboard starts nothing | Met by scope, not directly tested | No reconciliation-on-startup code exists anywhere yet (P12's own job); nothing in this phase runs at dashboard startup at all |
 | No code path in the swap flow touches the Docker API | Yes, confirmed by inspection | `grep -n Docker` across every P10a file -- only doc-comment prose references, zero `IDockerOrchestrator`/Docker Engine API usage |
+
+## P10b -- Event receiver + catch-up + stored failure report
+
+Confirmed with the owner before building, since the page's own instruction
+("per-deployment apply pipeline ... replacing the polling-only tracker
+from P10a") directly reshapes P10a's already-shipped, already-tested
+`SwapService` contract: `SwapAsync`/`RollbackAsync`/`RestartAsync` now
+return `"pending"` immediately after asking the supervisor, instead of
+blocking until a terminal state. The new `IDeploymentEventApplier` (fed by
+push, with catch-up polling as the fallback) is now the ONLY code path
+that ever flips a deployment row to active/failed/stopped --
+`IDeploymentTracker`/`PollingDeploymentTracker` (P10a) are gone entirely,
+and P10a's own `SwapServiceTests.cs` was rewritten around the new
+contract.
+
+Hit and resolved three real design gaps while building the apply
+pipeline, none spelled out verbatim on the page:
+
+1. **Seq is shared across ALL push kinds (state/report/log) per
+   deployment, but `deployment_events` only ever stores "state" kind
+   rows** (its own `State` column has no room for the other two, and
+   `GET /admin/deployments/{id}/events` only ever returns "state" events
+   -- the supervisor never stores "report"/"log" pushes in its own
+   per-deployment list). Comparing an incoming seq against
+   `deployment_events`' own max stored seq would therefore see a false
+   "gap" every time a report/log push's seq number falls between two
+   state events. Fixed by adding `Deployment.LastSeenSeq` -- the highest
+   seq seen across every kind, durable, which gap detection actually
+   compares against.
+2. **Which `stop_reason` applies to the PREVIOUS row once "ready"
+   arrives is only known by the operation that created the pending row**
+   (swap/restart -> "swapped", rollback -> "rollback") -- but applying
+   "ready" now happens asynchronously, disconnected from whichever
+   `SwapService` call produced that row. Fixed by adding
+   `Deployment.PendingStopReason`, set at insert time, read by the
+   applier when "ready" arrives.
+3. **Catch-up can only recover "state" kind events** (same reason as
+   #1) -- so a failed/crashed deploy's failure report, if the separate
+   "report" push itself was lost, would never be recoverable through
+   catch-up alone. Fixed by also writing `failure_reason`/`exit_code`/
+   `log_tail` from a "failed"/"crashed" **state** event's own `detail`
+   payload (which already carries the identical shape, per doc 5) --
+   not just from the separate "report" push.
+
+Also found, while adding the integration test harness, that the partial
+unique index narrowed in P10a (`one_pending_per_instance`,
+`WHERE status = 'pending'`) was still correct and needed no further
+change here -- the new "pending coexists with active" shape from P10a is
+exactly what lets a deploy stay `pending` while push/catch-up resolves it
+asynchronously.
+
+Layering note: `DeploymentHub` (the SignalR hub) and
+`DeploymentCatchUpService` (the periodic catch-up `BackgroundService`)
+both live in `Dashboard.Infrastructure`, not alongside the dashboard's
+other hubs/hosted-services in `Dashboard.Application` -- `Infrastructure`
+doesn't (and per the existing sibling-dependency shape, shouldn't) depend
+on `Application`, and both of these are broadcast-from/driven-by
+`DeploymentEventApplier`, which is Infrastructure-only by construction
+(P09b's V2 services).
+
+Testing note on "received by push": Testcontainers.NET has no supported
+way to put the supervisor container on the host's network (no
+`WithNetworkMode("host")`), so there's no publicly reachable receiver
+endpoint for the real container to push to from inside these automated
+tests. `SwapServiceTests.cs`'s integration tests instead drive outcomes
+through the applier's own **catch-up** path against the real container
+(itself one of the DoD's explicit scenarios: "drop the receiver... none
+lost, none duplicated, final state correct") -- genuine push delivery
+(receiver auth, dedupe-on-apply, and the SignalR broadcast itself) is
+each tested directly and for real, just not strung end-to-end through an
+actual supervisor container's own HTTP POST. The production wiring
+(`EventPusher` -> `POST /internal/supervisor-events`) is otherwise
+unchanged from P03c/this phase's own Program.cs mapping.
+
+Done:
+- Migration `AddDeploymentPushTrackingColumns`: `Deployment.LastSeenSeq`
+  (int, default 0) and `Deployment.PendingStopReason` (nullable, CHECK
+  `IN ('swapped','rollback')`) -- see findings #1/#2 above.
+- `src/Dashboard.Core/Supervisor/SupervisorPushEvent.cs` (new): the push
+  payload's own shape (`{deployment_id, seq, ts, kind, ...}`), distinct
+  from P10a's `SupervisorDeploymentEvent` (the `GET .../events` response
+  shape) since the two don't carry the same fields.
+- `src/Dashboard.Core/Abstractions/IDeploymentEventApplier.cs` (new).
+- `src/Dashboard.Infrastructure/Persistence/V2/DeploymentEventApplier.cs`
+  (new): the "events -> rows" pipeline -- per-deployment serialized (an
+  in-memory `SemaphoreSlim` per id, doc 5: "apply events... sequentially"),
+  idempotent (a seq at or below `LastSeenSeq` is a no-op), gap-fetches
+  via `ISupervisorClient.GetEventsAsync` before applying an
+  ahead-of-sequence event, and is the only place that calls
+  `IDeploymentService.ActivateAndStopPreviousAsync`/`TransitionAsync` for
+  a push-driven transition.
+- `src/Dashboard.Infrastructure/Persistence/V2/SupervisorEventReceiver.cs`
+  (new): the receiver endpoint's own logic, pulled out of Program.cs so
+  it's unit-testable without a full web host -- resolves the token to
+  check via the event's own `deployment_id` -> instance ->
+  `ISupervisorTokenProvider` (not one global secret, since different
+  instances could have different tokens).
+- `src/Dashboard.Infrastructure/Persistence/V2/DeploymentCatchUpService.cs`
+  (new): periodic (`BackgroundService`, every 5s) catch-up for every
+  still-"pending" deployment across every instance -- covers both
+  "dashboard start" and "periodically while pending" from the page's own
+  work item 3 in one mechanism.
+- `src/Dashboard.Infrastructure/Events/DeploymentHub.cs` (new, moved from
+  an initial attempt in Dashboard.Application -- see layering note
+  above): per-deployment SignalR group, `receiveState`/`receiveLog`.
+- `src/Dashboard.Infrastructure/Persistence/V2/SwapService.cs`: rewritten
+  per the contract change above -- no longer depends on
+  `IDeploymentTracker` (deleted), `DeployAsync` returns `"pending"`
+  immediately; sets `PendingStopReason` on every new pending row.
+- `src/Dashboard.Web/Program.cs`: `POST /internal/supervisor-events`
+  (delegates to `SupervisorEventReceiver`), `DeploymentHub` mapped at
+  `/deployment-hub`, `DeploymentCatchUpService` registered as a hosted
+  service.
+- `src/Dashboard.Infrastructure/Dashboard.Infrastructure.csproj`: added
+  the `Microsoft.AspNetCore.App` `FrameworkReference` (for SignalR
+  server types) and dropped four now-redundant `PackageReference`s it
+  already carries transitively.
+- 20 new tests: `DeploymentEventApplierTests.cs` (dedupe, report-kind
+  failure-column writes, log-kind never persisting a row, failed-state's
+  own detail populating failure columns), `SupervisorEventReceiverTests.cs`
+  (missing/wrong/correct token, unknown deployment id), `DeploymentHubTests.cs`
+  (a real `HubConnection` against a real in-memory `TestServer`, receiving
+  state + log events in order), plus `SwapServiceTests.cs` rewritten for
+  the new fire-and-forget contract with 2 new tests (crash-after-ready;
+  the existing ones now drive outcomes via real catch-up against the
+  real container instead of asserting synchronously). Found and fixed a
+  real bug via `ReportKindPush_WritesFailureColumnsOnTheDeploymentRow`
+  and `FailedStateEvent_WritesFailureColumnsFromItsOwnDetail`:
+  `PushDetailHelpers.GetInt` only unwrapped `JsonElement`-boxed values
+  (the shape real deserialized pushes arrive in) and silently returned
+  null for a plain boxed `int` -- harmless for real traffic, but would
+  have been a real bug for any future caller handing it an
+  already-typed value. Fixed to handle both. 177 Core + 51 Infrastructure
+  .NET tests, 127 Python tests; `./scripts/gate.sh` green.
+
+Out of scope, not touched: rendering (P14). Boot reconcile banner (P12).
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Full swap A→B: deployment_events rows exactly match the supervisor's sequence, received by push | Yes, push mechanism tested directly; strung end-to-end via catch-up (see testing note above) | `DeploymentHubTests` (real SignalR push) + `SupervisorEventReceiverTests` (real receiver logic) + `SwapServiceTests` (real container, correct final sequence) |
+| Duplicate delivery of the same event → no duplicate row | Yes | `DuplicateStateEventDelivery_IsANoOp` |
+| Drop the receiver mid-swap, restart it → all missed events recovered; none lost, none duplicated, final state correct | Yes | Every `SwapServiceTests` test drives its outcome via catch-up alone (never push) and asserts the final row state -- this IS that scenario |
+| Swap to a failing model → row failed with failure_reason, exit_code, non-empty log_tail; reload shows them | Yes | `Swap_ToACrashingModel_RowFailedWithFailureReport_PreviousRecordIntactAndNotRestored` |
+| Crash after ready → row stopped, stop_reason='crash' | Yes | `CrashAfterReady_RowStopped_StopReasonCrash` |
+| Missing/wrong token → 401 and nothing written | Yes | `MissingToken_Returns401AndWritesNothing`, `WrongToken_Returns401AndWritesNothing` |
+| A SignalR test client in the deployment group receives the state events and log lines in order | Yes | `ClientInTheDeploymentGroup_ReceivesStateAndLogEventsInOrder` |
 
 ## Deviations / findings worth flagging
 

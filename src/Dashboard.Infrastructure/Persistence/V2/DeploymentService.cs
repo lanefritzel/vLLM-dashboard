@@ -12,6 +12,12 @@ public interface IDeploymentService
     Task<Deployment?> GetActiveAsync(int instanceId, CancellationToken ct = default);
     Task<Deployment?> GetPendingAsync(int instanceId, CancellationToken ct = default);
 
+    /// <summary>Every "pending" deployment across every instance (P10b) --
+    /// what the startup/periodic catch-up service iterates to recover any
+    /// events it may have missed (doc 5: "catch up on dashboard start and
+    /// periodically while a deployment is pending").</summary>
+    Task<IReadOnlyList<Deployment>> ListAllPendingAsync(CancellationToken ct = default);
+
     /// <summary>Inserts a new "pending" deployment with its <c>args_snapshot</c>
     /// frozen at exactly the given argv -- the partial unique index on
     /// (instance_id) WHERE status IN ('pending','active') means a second
@@ -75,6 +81,13 @@ public sealed class DeploymentService : IDeploymentService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         return await db.DeploymentsV2.FirstOrDefaultAsync(d => d.InstanceId == instanceId && d.Status == "pending", ct);
+    }
+
+    public async Task<IReadOnlyList<Deployment>> ListAllPendingAsync(CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await db.DeploymentsV2.Where(d => d.Status == "pending").ToListAsync(ct);
     }
 
     public async Task<Deployment> CreateAsync(Deployment deployment, CancellationToken ct = default)

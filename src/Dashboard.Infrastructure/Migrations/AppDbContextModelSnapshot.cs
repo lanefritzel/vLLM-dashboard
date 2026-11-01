@@ -608,11 +608,20 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<int>("InstanceId")
                         .HasColumnType("integer");
 
+                    b.Property<int>("LastSeenSeq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<string>("LogTail")
                         .HasColumnType("text");
 
                     b.Property<int>("ModelId")
                         .HasColumnType("integer");
+
+                    b.Property<string>("PendingStopReason")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<int>("RecipeId")
                         .HasColumnType("integer");
@@ -646,6 +655,8 @@ namespace Dashboard.Infrastructure.Migrations
                     b.ToTable("deployments", null, t =>
                         {
                             t.HasCheckConstraint("ck_deployments_failure_reason", "\"FailureReason\" IN ('process_exited','health_timeout','bad_args','out_of_memory')");
+
+                            t.HasCheckConstraint("ck_deployments_pending_stop_reason", "\"PendingStopReason\" IN ('swapped','rollback')");
 
                             t.HasCheckConstraint("ck_deployments_status", "\"Status\" IN ('pending','active','stopped','failed')");
 

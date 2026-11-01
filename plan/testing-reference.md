@@ -169,6 +169,44 @@ Two schema facts worth knowing before touching `deployments` again:
   touching rollback logic, write a test with THREE swaps (A, then B, then
   rollback) so a same-row bug like that one can't hide behind only two.
 
+## Event receiver + catch-up + SignalR (P10b)
+
+```bash
+dotnet test tests/Dashboard.Infrastructure.Tests --filter "FullyQualifiedName~DeploymentEventApplierTests|FullyQualifiedName~SupervisorEventReceiverTests|FullyQualifiedName~DeploymentHubTests"
+dotnet test tests/Dashboard.Infrastructure.Tests --filter FullyQualifiedName~SwapServiceTests   # real container, catch-up-driven
+```
+
+No manual curl for the receiver itself -- `POST /internal/supervisor-events`
+is machine-to-machine (the supervisor's own `EventPusher`), not something a
+person calls by hand. If you need to simulate a push manually against a
+running dashboard:
+
+```bash
+AUTH='Authorization: Bearer <same SUPERVISOR_TOKEN the instance uses>'
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  http://localhost:5000/internal/supervisor-events \
+  -d '{"deployment_id": "1", "seq": 1, "ts": 1234567890.0, "kind": "state", "state": "starting"}'
+```
+
+Two facts worth knowing before touching the apply pipeline again:
+- `Deployment.LastSeenSeq` (not `deployment_events`' own max `Seq`) is
+  what gap detection compares against -- seq is shared across
+  state/report/log pushes, but only "state" kind events get a
+  `deployment_events` row. Comparing against that table's own max would
+  see a false gap every time a report/log push's seq falls between two
+  state events.
+- `GET /admin/deployments/{id}/events` (catch-up's own fetch) can only
+  ever return "state" kind events -- the supervisor never stores
+  "report"/"log" pushes in its per-deployment list, only pushes them
+  once. That's why a "failed"/"crashed" state event's own `detail` is
+  ALSO written to the failure columns, not just the separate "report"
+  push -- it's the only one of the two catch-up can actually recover.
+
+No real end-to-end push test against the Docker container exists (see
+PROGRESS.md's P10b write-up for why -- Testcontainers.NET has no
+supported host-networking mode); the receiver/dedupe/SignalR broadcast
+are each tested directly and for real instead.
+
 ## Postgres-over-bridge soak test (P01c)
 
 ```bash

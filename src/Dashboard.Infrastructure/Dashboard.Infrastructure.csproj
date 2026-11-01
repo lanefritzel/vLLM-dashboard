@@ -7,11 +7,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- For the DeploymentHub SignalR hub (P10b), which lives here instead of
+         Dashboard.Application since it's broadcast from DeploymentEventApplier. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- DependencyInjection/Hosting/Http/Logging Abstractions are all already
+         carried by the Microsoft.AspNetCore.App FrameworkReference above. -->
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
   </ItemGroup>
 

@@ -261,12 +261,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.Property(d => d.Status).HasMaxLength(20).IsRequired();
             entity.Property(d => d.StopReason).HasMaxLength(20);
             entity.Property(d => d.FailureReason).HasMaxLength(20);
+            entity.Property(d => d.PendingStopReason).HasMaxLength(20);
+            entity.Property(d => d.LastSeenSeq).HasDefaultValue(0);
             entity.Property(d => d.CreatedAt).HasDefaultValueSql("now()");
             entity.ToTable(t =>
             {
                 t.HasCheckConstraint("ck_deployments_status", "\"Status\" IN ('pending','active','stopped','failed')");
                 t.HasCheckConstraint("ck_deployments_stop_reason", "\"StopReason\" IN ('swapped','rollback','manual','crash','cancelled')");
                 t.HasCheckConstraint("ck_deployments_failure_reason", "\"FailureReason\" IN ('process_exited','health_timeout','bad_args','out_of_memory')");
+                t.HasCheckConstraint("ck_deployments_pending_stop_reason", "\"PendingStopReason\" IN ('swapped','rollback')");
             });
             // Partial unique index: at most one PENDING deployment per instance —
             // makes a second concurrent swap impossible at the DB level, not just
