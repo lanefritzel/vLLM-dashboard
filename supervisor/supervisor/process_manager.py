@@ -1,18 +1,22 @@
-"""Spawns and tracks the one child process this supervisor owns (P02). Just
-process lifecycle -- no state machine, no GPU release, no deploy API (P03a
-onward). stdout/stderr are inherited, not captured: they already land on
-this container's own stdout/stderr (the container log), which is all "just
-forward to the container log for now" needs.
+"""Spawns and tracks the one child process this supervisor owns (P02/P03b).
+Process lifecycle, plus (P03b) a bounded tail of its combined stdout/stderr
+for the failure report -- still forwarded line-by-line to this container's
+own stdout as it's captured, so "just forward to the container log" (P02)
+still holds; no state machine, no GPU release (P03a/P04 onward).
 """
 from __future__ import annotations
 
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
+
+LOG_TAIL_LINES = 50
 
 
 @dataclass
@@ -26,6 +30,7 @@ class ProcessManager:
     def __init__(self) -> None:
         self._process: Optional[subprocess.Popen] = None
         self._info: Optional[ChildInfo] = None
+        self._log_tail: deque[str] = deque(maxlen=LOG_TAIL_LINES)
 
     @property
     def info(self) -> Optional[ChildInfo]:
@@ -37,9 +42,15 @@ class ProcessManager:
     def exit_code(self) -> Optional[int]:
         return self._process.poll() if self._process is not None else None
 
+    def log_tail(self) -> str:
+        """Last ~50 lines of the current/most recent child's combined
+        stdout+stderr, for the failure report (P03b)."""
+        return "\n".join(self._log_tail)
+
     def spawn(self, argv: list[str], env: Optional[dict[str, str]] = None) -> ChildInfo:
         if self.is_running():
             raise RuntimeError("a child is already running")
+        self._log_tail = deque(maxlen=LOG_TAIL_LINES)
         process = subprocess.Popen(
             argv,
             # Its own session/process group: a later stop (P03a) signals the
@@ -50,24 +61,39 @@ class ProcessManager:
             # container's own env, never replacing it (doc 5) -- None here
             # means "inherit unchanged", same as before env support existed.
             env={**os.environ, **env} if env else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
         self._process = process
         self._info = ChildInfo(pid=process.pid, argv=list(argv), started_at=time.time())
 
-        # subprocess.Popen does NOT reap its child just by existing -- only a
-        # wait()/poll() call does, via os.waitpid. Without this, a child that
-        # exits on its own (crashes, or just finishes) between boot and the
-        # next time something happens to call stop()/poll() sits as a zombie
-        # under the supervisor's own PID the whole time (found by hand while
-        # verifying this phase's "no zombie" DoD bullet -- that bullet is
-        # about grandchild-to-PID-1 reaping, which tini/docker-init already
-        # handles; this is the supervisor's OWN reaping of its direct child,
-        # a separate gap the same investigation surfaced). One background
-        # thread per spawn, doing the one blocking wait(), is enough -- it's
-        # also then the only caller of Popen.wait(), so stop() below never
-        # races it by waiting on the same Popen concurrently.
-        threading.Thread(target=process.wait, daemon=True).start()
+        # One background thread does three things in sequence: pump the
+        # child's combined output into the bounded tail (for the failure
+        # report) while echoing each line to our own stdout (so it still
+        # reaches the container log, same as before output was captured at
+        # all); then, once the pipe hits EOF (the child closed its fds, i.e.
+        # it's exited or about to), call wait() to actually reap it --
+        # subprocess.Popen does NOT reap a child just by existing, only a
+        # wait()/poll() call does (via os.waitpid); skipping this leaves a
+        # zombie under the supervisor's own PID (found by hand verifying
+        # P02's "no zombie" DoD bullet -- that one is about grandchild-to-
+        # PID-1 reaping, which tini/docker-init already handles; this is a
+        # separate gap the same investigation surfaced). This is also the
+        # ONLY caller of Popen.wait(), so stop() below never races it.
+        threading.Thread(target=self._pump_and_reap, args=(process,), daemon=True).start()
         return self._info
+
+    def _pump_and_reap(self, process: subprocess.Popen) -> None:
+        try:
+            if process.stdout is not None:
+                for line in process.stdout:
+                    self._log_tail.append(line.rstrip("\n"))
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+        finally:
+            process.wait()
 
     def stop(self, graceful_timeout: float = 5.0) -> None:
         """SIGTERM the child's process group, wait, SIGKILL if it's still

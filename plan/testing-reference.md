@@ -133,6 +133,33 @@ To simulate a failing/crashing boot replay, pass `--fake-crash` or
 etc.) -- these are the same flags documented in
 `tests/fake-vllm/fake_vllm.py`'s own `--help`.
 
+### Failure scenarios (P03b)
+
+```bash
+# Fail-fast: deploy with --fake-crash -- fails in ~1s (not health_timeout), reason=process_exited
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -X POST http://localhost:18100/admin/deploy -d '{
+  "argv": ["python3", "/app/fake_vllm.py", "--port", "9001", "--served-model-name", "model-a", "--fake-crash"],
+  "deployment_id": "d1", "health_timeout": 300
+}'
+
+# health_timeout: --fake-slow-start longer than health_timeout -- fails at
+# ~health_timeout, reason=health_timeout, and the still-alive child is killed
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -X POST http://localhost:18100/admin/deploy -d '{
+  "argv": ["python3", "/app/fake_vllm.py", "--port", "9002", "--served-model-name", "model-b", "--fake-slow-start", "30"],
+  "deployment_id": "d2", "health_timeout": 3
+}'
+
+# crashed (not failed): --fake-exit-after dies AFTER reaching ready
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -X POST http://localhost:18100/admin/deploy -d '{
+  "argv": ["python3", "/app/fake_vllm.py", "--port", "9003", "--served-model-name", "model-c", "--fake-exit-after", "2"],
+  "deployment_id": "d3", "health_timeout": 15
+}'
+```
+`/admin/status`'s `failure_report` field (`{reason, exit_code, log_tail}`)
+is read from `state.json`, not in-memory -- it survives a container
+restart, so this is also how you check "idle boot after a failed run still
+shows the report" (P02/P03b).
+
 Finding zombies/process trees in a running container (no `ps`/`kill`
 binaries in the slim test image): use `docker top <cid>` from the host for
 the tree, and `docker exec <cid> python3 -c "..."` with `os.listdir('/proc')`

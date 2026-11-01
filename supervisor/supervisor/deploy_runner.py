@@ -1,9 +1,9 @@
-"""The deploy state machine (P03a): idle -> stopping -> releasing_gpu ->
-starting -> loading -> waiting_health -> ready. Happy path only -- failure
-classification (reason codes, structured report) is P03b; this just records
-a plain "failed" transition when the health check times out. One deploy in
-flight at a time: a second attempt while one is running is rejected with
-the in-flight deployment's id, not queued.
+"""The deploy state machine (P03a + P03b): idle -> stopping -> releasing_gpu
+-> starting -> loading -> waiting_health -> ready, with fail-fast (the
+child exiting at any point before ready goes straight to "failed" -- never
+waits out health_timeout) and a structured failure report attached to
+"failed"/"crashed". One deploy in flight at a time: a second attempt while
+one is running is rejected with the in-flight deployment's id, not queued.
 
 Used by both the HTTP POST /admin/deploy handler (fire-and-forget via
 start_deploy) and the supervisor's own boot-replay sequence (which awaits
@@ -22,11 +22,13 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
+from .failure_report import FailureReport, build_report
 from .process_manager import ProcessManager
 from .state import StateStore, SupervisorState
 
 RELEASING_GPU_WAIT_SECONDS = 2.0
 HEALTH_POLL_INTERVAL_SECONDS = 1.0
+CRASH_WATCH_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_CHILD_PORT = 9999
 
 
@@ -36,7 +38,7 @@ class DeploymentEvent:
     seq: int
     ts: float
     state: str
-    detail: Optional[str] = None
+    detail: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +64,12 @@ class DeployRunner:
         self._current_deployment_id: Optional[str] = None
         self._events: dict[str, list[DeploymentEvent]] = {}
         self._seq_counters: dict[str, "itertools.count[int]"] = {}
+        self._last_failure_report: Optional[FailureReport] = None
+        # Watches the child AFTER a successful deploy, to tell "crashed"
+        # (reached ready, died later) from "failed" (never got there) --
+        # cancelled at the start of the next deploy, since an intentional
+        # stop for a redeploy is not a crash.
+        self._post_ready_watcher: Optional[asyncio.Task] = None
 
     @property
     def state(self) -> str:
@@ -70,6 +78,10 @@ class DeployRunner:
     @property
     def current_deployment_id(self) -> Optional[str]:
         return self._current_deployment_id
+
+    @property
+    def last_failure_report(self) -> Optional[FailureReport]:
+        return self._last_failure_report
 
     def events_for(self, deployment_id: str, after: int = 0) -> list[DeploymentEvent]:
         return [e for e in self._events.get(deployment_id, []) if e.seq > after]
@@ -106,13 +118,16 @@ class DeployRunner:
     def _begin(self, deployment_id: Optional[str]) -> str:
         if self._current_deployment_id is not None:
             raise DeployInProgressError(self._current_deployment_id)
+        if self._post_ready_watcher is not None:
+            self._post_ready_watcher.cancel()
+            self._post_ready_watcher = None
         deployment_id = deployment_id or str(uuid.uuid4())
         self._current_deployment_id = deployment_id
         self._events[deployment_id] = []
         self._seq_counters[deployment_id] = itertools.count(1)
         return deployment_id
 
-    def _record(self, deployment_id: str, state: str, detail: Optional[str] = None) -> None:
+    def _record(self, deployment_id: str, state: str, detail: Optional[dict] = None) -> None:
         counter = self._seq_counters[deployment_id]
         event = DeploymentEvent(deployment_id=deployment_id, seq=next(counter), ts=time.time(), state=state, detail=detail)
         self._events[deployment_id].append(event)
@@ -140,22 +155,69 @@ class DeployRunner:
 
             served_model_name = _extract_value(argv, "--served-model-name")
             port = _extract_port(argv)
-            healthy = await asyncio.to_thread(_wait_for_health, port, served_model_name, health_timeout)
+            healthy, timed_out_while_alive = await asyncio.to_thread(
+                _wait_for_health, port, served_model_name, health_timeout, self._process_manager.is_running,
+            )
 
             if not healthy:
-                self._record(deployment_id, "failed", "did not become healthy within health_timeout")
+                report = build_report(
+                    exit_code=self._process_manager.exit_code(),
+                    log_tail=self._process_manager.log_tail(),
+                    timed_out_while_alive=timed_out_while_alive,
+                )
+                if timed_out_while_alive:
+                    # health_timeout: the child never exited on its own --
+                    # a failed deploy must not leave it running regardless
+                    # (DoD: "--fake-slow-start beyond ... health_timeout ->
+                    # failed ... child killed").
+                    await asyncio.to_thread(self._process_manager.stop)
+                self._last_failure_report = report
+                self._record(deployment_id, "failed", report.to_dict())
+                state = self._state_store.load() or SupervisorState()
+                state.last_argv = argv
+                state.last_run_outcome = "failed"
+                state.last_failure_report = report.to_dict()
+                self._state_store.save(state)
                 return False
 
             self._record(deployment_id, "ready")
+            self._last_failure_report = None
             state = self._state_store.load() or SupervisorState()
             state.last_argv = argv
             state.last_good_argv = argv
             state.last_run_outcome = "healthy"
             state.consecutive_failed_replays = 0
+            state.last_failure_report = None
             self._state_store.save(state)
+
+            self._post_ready_watcher = asyncio.create_task(self._watch_for_crash(deployment_id))
             return True
         finally:
             self._current_deployment_id = None
+
+    async def _watch_for_crash(self, deployment_id: str) -> None:
+        """Runs only after a deploy reaches ready. If the child dies later
+        (without an intervening deploy, which would have cancelled this
+        task first), that's "crashed" -- doc 5's "it was serving and died",
+        distinct from "failed" (never got there)."""
+        try:
+            while True:
+                await asyncio.sleep(CRASH_WATCH_POLL_INTERVAL_SECONDS)
+                if not self._process_manager.is_running():
+                    report = build_report(
+                        exit_code=self._process_manager.exit_code(),
+                        log_tail=self._process_manager.log_tail(),
+                        timed_out_while_alive=False,
+                    )
+                    self._last_failure_report = report
+                    self._record(deployment_id, "crashed", report.to_dict())
+                    state = self._state_store.load() or SupervisorState()
+                    state.last_run_outcome = "crashed"
+                    state.last_failure_report = report.to_dict()
+                    self._state_store.save(state)
+                    return
+        except asyncio.CancelledError:
+            pass  # superseded by a new deploy -- not actually a crash
 
 
 def _extract_value(argv: list[str], flag: str) -> Optional[str]:
@@ -176,28 +238,35 @@ def _extract_port(argv: list[str], default: int = DEFAULT_CHILD_PORT) -> int:
     return default
 
 
-def _wait_for_health(port: int, served_model_name: Optional[str], timeout: float) -> bool:
+def _wait_for_health(
+    port: int, served_model_name: Optional[str], timeout: float, is_child_alive,
+) -> tuple[bool, bool]:
     """Child alive (GET /health 200) and, when the argv names a served
     model, that name actually shows up in GET /v1/models -- not just that
     SOME model is listed (doc 5: "poll ... until the served model name ...
-    appears")."""
+    appears"). Returns (healthy, timed_out_while_alive) -- the second value
+    is what tells the caller "health_timeout" apart from "the child already
+    exited" (fail-fast: this returns the moment `is_child_alive()` goes
+    false, instead of sleeping out the rest of `timeout`)."""
     deadline = time.monotonic() + timeout
     health_url = f"http://127.0.0.1:{port}/health"
     models_url = f"http://127.0.0.1:{port}/v1/models"
     while time.monotonic() < deadline:
+        if not is_child_alive():
+            return False, False
         try:
             with urllib.request.urlopen(health_url, timeout=2) as resp:
                 if resp.status != 200:
                     time.sleep(HEALTH_POLL_INTERVAL_SECONDS)
                     continue
             if served_model_name is None:
-                return True
+                return True, True
             with urllib.request.urlopen(models_url, timeout=2) as resp:
                 data = json.loads(resp.read())
             names = [m.get("id") for m in data.get("data", [])]
             if served_model_name in names:
-                return True
+                return True, True
         except (urllib.error.URLError, ConnectionError, TimeoutError, OSError, ValueError):
             pass
         time.sleep(HEALTH_POLL_INTERVAL_SECONDS)
-    return False
+    return False, is_child_alive()

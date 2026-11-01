@@ -44,14 +44,20 @@ async def run_boot_sequence(deploy_runner: DeployRunner, process_manager: Proces
             print(f"supervisor: boot replay healthy (pid {info.pid if info else '?'}).", flush=True)
             break
 
+        # deploy_and_wait() already persisted last_argv/last_run_outcome=
+        # "failed"/last_failure_report (P03b) -- "failed" always, never
+        # "crashed", since by definition a boot replay that didn't return
+        # True here never reached ready (crashed is reserved for a child
+        # that died AFTER ready, tracked separately by DeployRunner's own
+        # post-ready watcher). This just adds the retry-cap bookkeeping,
+        # which is boot-sequence-specific, on top of that.
         state = state_store.load() or state
-        state.last_argv = argv
-        state.last_run_outcome = "crashed" if not process_manager.is_running() else "failed"
         state.consecutive_failed_replays += 1
         state_store.save(state)
+        reason = (state.last_failure_report or {}).get("reason")
         print(
             f"supervisor: boot replay did not become healthy within {BOOT_HEALTH_TIMEOUT_SECONDS}s "
-            f"(outcome={state.last_run_outcome!r}, consecutive_failed_replays={state.consecutive_failed_replays}).",
+            f"(reason={reason!r}, consecutive_failed_replays={state.consecutive_failed_replays}).",
             flush=True,
         )
         if state.consecutive_failed_replays >= RETRY_CAP:

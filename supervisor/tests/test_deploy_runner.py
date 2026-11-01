@@ -5,6 +5,7 @@ checks, but no Docker: everything runs as plain local processes.
 import asyncio
 import socket
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -135,15 +136,125 @@ def test_events_after_filters_to_newer_ones_with_strictly_increasing_seq(tmp_pat
         pm.stop()
 
 
-def test_deploy_that_never_becomes_healthy_records_failed(tmp_path):
+def test_slow_start_beyond_health_timeout_fails_with_health_timeout_and_kills_child(tmp_path):
     runner, pm = new_runner(tmp_path)
     port = free_port()
     try:
         argv = [sys.executable, FAKE_VLLM, "--port", str(port), "--served-model-name", "model-a", "--fake-slow-start", "10"]
-        ok = run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=1))
+        start = time.monotonic()
+        ok = run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=2))
+        elapsed = time.monotonic() - start
+
         assert ok is False
         assert runner.state == "failed"
+        assert elapsed < 5, "should fail at ~health_timeout, not hang"
         states = [e.state for e in runner.events_for("d1")]
         assert states == ["starting", "loading", "waiting_health", "failed"]
+
+        report = runner.events_for("d1")[-1].detail
+        assert report["reason"] == "health_timeout"
+
+        time.sleep(0.5)
+        assert not pm.is_running(), "the still-alive-but-unhealthy child must be killed, not left running"
+    finally:
+        pm.stop()
+
+
+def test_child_exiting_during_loading_fails_fast_not_at_health_timeout(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    try:
+        # A nonexistent flag makes the real argparse-based fake vLLM exit
+        # almost immediately with exit code 2 -- this must fail in seconds,
+        # nowhere near the 300s health_timeout below.
+        argv = [sys.executable, FAKE_VLLM, "--this-flag-does-not-exist"]
+        start = time.monotonic()
+        ok = run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=300))
+        elapsed = time.monotonic() - start
+
+        assert ok is False
+        assert elapsed < 10, f"fail-fast should take seconds, took {elapsed:.1f}s"
+        states = [e.state for e in runner.events_for("d1")]
+        assert states == ["starting", "loading", "waiting_health", "failed"]
+
+        report = runner.events_for("d1")[-1].detail
+        assert report["reason"] == "bad_args"
+        assert report["exit_code"] == 2
+        assert report["log_tail"]  # non-empty
+    finally:
+        pm.stop()
+
+
+def test_fake_crash_during_loading_fails_fast_with_process_exited(tmp_path):
+    """P03b's DoD, literally: a child that exits during loading -> failed
+    in seconds with reason=process_exited, the exit code, and a non-empty
+    log_tail (the --fake-crash case; --this-flag-does-not-exist above hits
+    the bad_args path instead -- both are "fails fast", different reasons)."""
+    runner, pm = new_runner(tmp_path)
+    try:
+        argv = [sys.executable, FAKE_VLLM, "--fake-crash"]
+        start = time.monotonic()
+        ok = run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=300))
+        elapsed = time.monotonic() - start
+
+        assert ok is False
+        assert elapsed < 10, f"fail-fast should take seconds, took {elapsed:.1f}s"
+        states = [e.state for e in runner.events_for("d1")]
+        assert states == ["starting", "loading", "waiting_health", "failed"]
+
+        report = runner.events_for("d1")[-1].detail
+        assert report["reason"] == "process_exited"
+        assert report["exit_code"] == 1
+        assert report["log_tail"]
+    finally:
+        pm.stop()
+
+
+def test_exit_after_ready_is_crashed_not_failed(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+
+    async def scenario():
+        argv = [sys.executable, FAKE_VLLM, "--port", str(port), "--served-model-name", "model-a", "--fake-exit-after", "2"]
+        ok = await runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10)
+        assert ok is True
+        assert runner.state == "ready"
+
+        # The post-ready watcher task is scheduled on THIS event loop (by
+        # deploy_and_wait, above) -- it must keep running after
+        # deploy_and_wait returns, within the same asyncio.run() call, or
+        # there's nothing left to observe the crash (asyncio.run() tears
+        # down its loop, and anything still scheduled on it, the moment its
+        # own top-level coroutine returns).
+        for _ in range(100):
+            if runner.state == "crashed":
+                return
+            await asyncio.sleep(0.2)
+        raise AssertionError("never observed a crashed transition")
+
+    try:
+        run(scenario())
+
+        states = [e.state for e in runner.events_for("d1")]
+        assert states[-2:] == ["ready", "crashed"]
+        report = runner.events_for("d1")[-1].detail
+        assert report["exit_code"] is not None
+
+        store = StateStore(tmp_path / "state.json")
+        assert store.load().last_run_outcome == "crashed"
+    finally:
+        pm.stop()
+
+
+def test_failure_report_persists_in_state_for_a_fresh_store_to_read(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    try:
+        argv = [sys.executable, FAKE_VLLM, "--this-flag-does-not-exist"]
+        run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+
+        # Simulates reading it after a restart: a brand new StateStore
+        # object, no shared in-memory state with `runner` at all.
+        reloaded = StateStore(tmp_path / "state.json").load()
+        assert reloaded.last_run_outcome == "failed"
+        assert reloaded.last_failure_report["reason"] == "bad_args"
     finally:
         pm.stop()

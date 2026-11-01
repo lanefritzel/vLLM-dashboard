@@ -67,12 +67,21 @@ def create_app(
             }
             vllm_healthy = process_manager.is_running() and exit_code is None
 
+        # Read from the persisted state, not deploy_runner's in-memory copy:
+        # after a restart into idle (P02's "last run wasn't healthy" rule),
+        # this is a fresh DeployRunner with no history at all -- the report
+        # from before the restart only survives in state.json (P03b DoD:
+        # "/admin/status still shows the last report").
+        state = state_store.load()
+        failure_report = state.last_failure_report if state else None
+
         return {
             "state": deploy_runner.state,
             "child": child,
             "vllm_healthy": vllm_healthy,
             "exit_code": exit_code,
             "current_deployment_id": deploy_runner.current_deployment_id,
+            "failure_report": failure_report,
         }
 
     @admin.post("/admin/deploy")

@@ -14,6 +14,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P01c | done -- soak passed | 2026-10-31 | See below. |
 | P02 | done | 2026-10-31 | See below. |
 | P03a | done | 2026-11-01 | See below. |
+| P03b | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -443,6 +444,71 @@ event push to the dashboard (P03c -- events are polled, not pushed), real
 GPU release checking (P04 -- still a fixed ~2s sleep), log retention (P05),
 the smoke test (P06 -- the request body's `smoke` field is accepted and
 ignored), cancel/stop/restart (P07).
+
+## P03b -- Fail-fast + failure report
+
+One real bug caught by the DoD's own "child killed" bullet before I'd have
+otherwise noticed it: a deploy that failed via `health_timeout` (child
+still alive, never got healthy) recorded the failure correctly but never
+actually killed the still-running child -- `_run_deploy` just returned
+`False` and left it running. Fixed: that branch now stops the child before
+returning. The fail-fast branch (child already exited on its own) didn't
+have this gap since there's nothing left to kill.
+
+One test-harness lesson repeated from P03a, worth internalizing rather
+than re-discovering again: a scenario spanning "deploy, then observe a
+later async transition" (here, the post-ready crash watcher) must run
+inside ONE `asyncio.run()`/event loop, not two separate calls -- the first
+`asyncio.run()` tears down its loop (and anything still scheduled on it,
+including a background task started during that call) the moment its own
+coroutine returns. Wrapped the whole scenario in one `async def` instead.
+
+Done:
+- `supervisor/supervisor/failure_report.py`: `classify`/`build_report`,
+  pure and unit-tested directly against the DoD's own classifier table
+  (10 tests, `test_failure_report.py`).
+- `process_manager.py`: now captures a bounded ~50-line tail of the
+  child's combined stdout/stderr (still echoed to this container's own
+  stdout line-by-line, so "forwarded to the container log" still holds),
+  for the failure report's `log_tail`.
+- `deploy_runner.py`: fail-fast (`_wait_for_health` now takes an
+  `is_child_alive` callback and returns the moment it goes false, instead
+  of sleeping out the rest of `health_timeout`); a `failed` transition
+  always carries a `FailureReport`; a `_watch_for_crash` background task
+  (started only after `ready`, cancelled at the start of the next deploy
+  so an intentional stop is never misreported) distinguishes `crashed`
+  (died after ready) from `failed` (never got there).
+- `state.py`: `SupervisorState.last_failure_report` persists the report so
+  `/admin/status` can show it after a restart into idle, from a brand new
+  `DeployRunner` with no in-memory history at all.
+- `supervisor.py`: boot-retry loop simplified -- `deploy_and_wait` now
+  persists the failure outcome/report itself, so the loop just reloads
+  state and adds its own retry-cap bookkeeping, and no longer needs (or
+  makes) its own crashed-vs-failed guess.
+- 15 new tests (5 integration-style in `test_deploy_runner.py`, 10 in
+  `test_failure_report.py`, 1 in `test_admin_api.py`) -- 48 total in the
+  supervisor project; `./scripts/gate.sh` still green (142 + 17 + 6 + 48).
+- Verified by hand against the real `Dockerfile.test` image too (not just
+  pytest): `--fake-crash` fails in ~1s with `process_exited`; a
+  `--fake-slow-start` past a short `health_timeout` fails with
+  `health_timeout` and the child is confirmed actually dead (`docker top`
+  -- no zombie); `--fake-exit-after` past `ready` transitions to `crashed`;
+  restarting the container after a crash comes up idle (P02 rule) and
+  `/admin/status` still shows the pre-restart report. Commands in
+  `plan/testing-reference.md`.
+
+Noted, not fixed (out of scope for this phase, revisit if P07 touches
+`/admin/status`'s `child` field): after `ProcessManager.stop()`, `/admin/
+status`'s `child.pid`/`exit_code` still show the stopped child's stale
+info instead of clearing -- `stop()` resets `self._process` but not
+`self._info`. Harmless today (nothing currently reads that field expecting
+it to reflect "no child" immediately after a stop -- the DoD only requires
+the process to actually be dead, confirmed separately via `docker top`),
+but worth a one-line fix whenever `/admin/status`'s `child` semantics are
+revisited.
+
+Out of scope, not touched: pushing the report to the dashboard (P03c),
+storing it in the DB (P10b).
 
 ## Deviations / findings worth flagging
 

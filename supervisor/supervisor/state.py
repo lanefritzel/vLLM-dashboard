@@ -31,6 +31,10 @@ class SupervisorState:
     last_run_outcome: Optional[str] = None  # "healthy" | "failed" | "crashed" | None
     consecutive_failed_replays: int = 0
     settings: Settings = field(default_factory=Settings)
+    # P03b: survives a restart so /admin/status can still show the last
+    # failure after an idle boot (P02's "last_run_outcome != healthy -> stay
+    # idle" rule) -- a fresh DeployRunner has no in-memory history of it.
+    last_failure_report: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -44,6 +48,7 @@ class SupervisorState:
             last_run_outcome=d.get("last_run_outcome"),
             consecutive_failed_replays=d.get("consecutive_failed_replays", 0),
             settings=Settings(AUTO_START=settings_dict.get("AUTO_START", "last_good")),
+            last_failure_report=d.get("last_failure_report"),
         )
 
 

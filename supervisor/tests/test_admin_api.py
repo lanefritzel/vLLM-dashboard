@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from supervisor.admin_api import create_app
 from supervisor.deploy_runner import DeployRunner
 from supervisor.process_manager import ProcessManager
-from supervisor.state import StateStore
+from supervisor.state import StateStore, SupervisorState
 
 TOKEN = "test-token"
 
@@ -66,6 +66,21 @@ def test_every_admin_route_except_health_requires_auth(tmp_path):
     ]:
         resp = client.request(method, path, json={} if method in ("POST", "PUT") else None)
         assert resp.status_code == 401, f"{method} {path} should 401 without a token"
+
+
+def test_status_surfaces_a_persisted_failure_report_even_from_a_fresh_runner(tmp_path):
+    # P03b DoD: "/admin/status still shows the last report" after a restart
+    # -- simulated here by writing state.json directly (as a real failed
+    # deploy would) and reading it back through a brand new DeployRunner
+    # that never ran that deploy itself.
+    store = StateStore(tmp_path / "state.json")
+    state = SupervisorState(last_run_outcome="failed")
+    state.last_failure_report = {"reason": "bad_args", "exit_code": 2, "log_tail": "error: unrecognized arguments"}
+    store.save(state)
+
+    client = new_client(tmp_path)
+    resp = client.get("/admin/status", headers=auth_headers())
+    assert resp.json()["failure_report"] == state.last_failure_report
 
 
 def test_settings_round_trips_and_persists_across_a_fresh_store(tmp_path):
