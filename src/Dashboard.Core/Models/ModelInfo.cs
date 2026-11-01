@@ -71,11 +71,10 @@ public sealed record ModelInfo
 
     public int SortOrder { get; init; }
 
-    /// <summary>How long this model may sit idle (no proxied requests) before
-    /// <c>IdleUnloadService</c> stops its container to free the GPU. Null/0 disables
-    /// idle-unload for this model — it stays loaded until something else swaps it out.
-    /// A property of the model's own tolerance for idling, independent of which
-    /// instance happens to be running it.</summary>
+    /// <summary>Dead since P11: idle-unload was retired (the supervisor, not the
+    /// dashboard, owns the model lifecycle now) and nothing reads this anymore.
+    /// Kept in the legacy schema only -- final removal is P16a's job, alongside
+    /// the rest of the legacy tables.</summary>
     public int? IdleTtlSeconds { get; init; }
 
     /// <summary>Deprecated: superseded by <see cref="SourceInfo.PreloadModelId"/> —

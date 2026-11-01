@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 
-namespace Dashboard.Application.Proxy;
+namespace Dashboard.Infrastructure.Proxy;
 
 /// <summary>
 /// SignalR hub for the live traffic view: clients join a per-source group to watch

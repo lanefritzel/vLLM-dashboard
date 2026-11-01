@@ -207,6 +207,26 @@ PROGRESS.md's P10b write-up for why -- Testcontainers.NET has no
 supported host-networking mode); the receiver/dedupe/SignalR broadcast
 are each tested directly and for real instead.
 
+## Proxy refactor (P11)
+
+```bash
+dotnet test tests/Dashboard.Infrastructure.Tests --filter FullyQualifiedName~Dashboard.Infrastructure.Tests.ModelProxyServiceTests
+dotnet test tests/Dashboard.Core.Tests --filter FullyQualifiedName~ModelProxyServiceTests   # pure-helper unit tests, unaffected by this phase
+```
+
+The inference base URL is derived, never stored: same host as the
+instance's own `AdminUrl`, instance's own `Port`. If a manual proxy check
+against a real container doesn't reach the model, check `Instance.Port`
+matches whatever `--port` the active deployment's own argv actually used
+(P10a's `ArgBuilder` sets it from the SAME `Instance.Port` field, so they
+should always agree -- a mismatch means something edited one without the
+other, not a proxy bug).
+
+`/proxy/<slug>/...` resolves purely by `Instance.ProxySlug` now (P11) --
+`IInstanceService.GetBySlugAsync`. A 404 at this route almost always means
+either the slug doesn't match any instance, or (502) the instance's own
+`AdminUrl` isn't set yet ("no supervisor registered").
+
 ## Postgres-over-bridge soak test (P01c)
 
 ```bash

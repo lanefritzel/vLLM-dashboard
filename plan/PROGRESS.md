@@ -24,6 +24,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P09b | done | 2026-11-01 | See below. |
 | P10a | done | 2026-11-01 | See below. |
 | P10b | done | 2026-11-01 | See below. |
+| P11 | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -1377,6 +1378,126 @@ Out of scope, not touched: rendering (P14). Boot reconcile banner (P12).
 | Crash after ready → row stopped, stop_reason='crash' | Yes | `CrashAfterReady_RowStopped_StopReasonCrash` |
 | Missing/wrong token → 401 and nothing written | Yes | `MissingToken_Returns401AndWritesNothing`, `WrongToken_Returns401AndWritesNothing` |
 | A SignalR test client in the deployment group receives the state events and log lines in order | Yes | `ClientInTheDeploymentGroup_ReceivesStateAndLogEventsInOrder` |
+
+## P11 -- Proxy refactor + regression tests
+
+Read `ModelProxyService` fully before touching it, per the page's own
+instruction. Preserved every must-not-regress piece of logic
+**byte-for-byte**: `StreamWithTeeAsync` (SSE heartbeat, oversized-payload
+guard, mirrored-text cap) and every pure JSON-extraction helper
+(`TryExtractModelName`, `TryExtractDeltaText`, `TryExtractReasoningText`,
+`ExtractMessages`, `IsModelsListPath`) are unchanged -- only
+`HandleAsync`/`EnsureModelActiveAsync` (renamed `CheckModelActiveAsync`,
+since it never swaps anymore) and `ForwardAsync`'s target-URL construction
+actually changed, to read from the new tables and drop the retired
+mechanics.
+
+Found a real layering conflict partway through, resolved the same way
+P10b's `DeploymentHub`/`DeploymentCatchUpService` already were:
+`ModelProxyService` now depends on the V2 services
+(`IInstanceService`/`IModelService`/`IDeploymentService`), which are
+Infrastructure-only by design (P09b) -- but `ModelProxyService` lived in
+`Dashboard.Application`, which doesn't (and per the existing sibling-
+dependency shape between Application and Infrastructure, shouldn't)
+reference Infrastructure. Moved the whole `Proxy/` folder
+(`ModelProxyService.cs`, `TrafficHub.cs`, `InFlightTrafficTracker.cs` --
+`TrafficHub` and the tracker had to move too, since `ModelProxyService`
+needs all three together) from `Dashboard.Application.Proxy` to
+`Dashboard.Infrastructure.Proxy`. Updated every reference (`Program.cs`,
+`LiveTraffic.razor`, the ported unit test file).
+
+Design decisions made while implementing, not spelled out verbatim on
+the page:
+- **The inference base URL is derived, not stored**: same host as the
+  instance's own `AdminUrl` (the supervisor and vLLM always run in the
+  same container, doc 5), just the instance's own `Port` instead of
+  whatever port `AdminUrl` uses. There's no separate "inference URL"
+  field on `Instance` -- deriving it means the two can never drift apart
+  the way two independently-edited fields could.
+- **The client-facing "model" identifier is still `Model.Name`** (the
+  catalog entry), not the active deployment's `Recipe.ServedModelName` --
+  matches the legacy system's exact semantics (`GET /v1/models` lists
+  catalog entries, "more than the one loaded model" per the DoD), and
+  keeps the registered-vs-active distinction meaningful: a recipe's own
+  served-model-name is an internal vLLM launch detail, not something a
+  client ever names in its own request.
+- **Two error codes, not one**: a model that isn't registered on the
+  instance's server at all gets 404 ("not registered"); one that's
+  registered but not the active deployment gets 400 with the new
+  helpful message ("...registered but not active — swap it in the
+  dashboard"). The page's own "an OpenAI-style error body, HTTP
+  404/400 — keep the current error shape" reads as "these are the two
+  status codes in play, and keep using the existing `WriteErrorAsync`
+  plain-text pattern" rather than inventing a new JSON envelope --
+  `WriteErrorAsync` was never changed.
+- **"No supervisor/Docker call is made" is a structural guarantee, not
+  just a tested behavior**: `ModelProxyService`'s constructor no longer
+  takes an `ISupervisorClient` or `IDockerOrchestrator` at all -- there is
+  no code path left in this file that COULD call either, a stronger
+  claim than a recording-stub assertion would make on its own (one is
+  still effectively demonstrated by the integration tests never wiring
+  either dependency in and everything still working).
+
+Done:
+- `src/Dashboard.Infrastructure/Proxy/ModelProxyService.cs` (moved +
+  rewritten): resolves the instance by `IInstanceService.GetBySlugAsync`
+  (new method); `GET /v1/models` answers from
+  `IModelService.ListByServerAsync`; `CheckModelActiveAsync` compares the
+  requested name against the active deployment's model (via
+  `IDeploymentService.GetActiveAsync` + `IModelService.GetAsync`) and
+  returns the new helpful error instead of swapping; no more
+  `_activity.Touch(...)` calls (idle-unload is gone).
+- `src/Dashboard.Infrastructure/Proxy/TrafficHub.cs`,
+  `InFlightTrafficTracker.cs` (moved, unchanged otherwise).
+- `IInstanceService.GetBySlugAsync` (new) -- the proxy route's own
+  identifier is always the slug, never a raw id.
+- **Removed** (per the page's own "remove the hosted services and their
+  tests"): `ActivityTracker.cs`/`IActivityTracker.cs`,
+  `IdleUnloadService.cs`, `PreloadService.cs`, and
+  `ActivityTrackerTests.cs` -- their DI/hosted-service registrations in
+  `Program.cs` too. `DockerOrchestratorPayloadTests.cs`/`LaunchSpecTests.cs`
+  stay (still reachable from the old UI's manual swap button until P14 --
+  final removal is P16a's, per the Start Here's "don't delete files yet"
+  rule); `plan/test-classification.md` updated to reflect this.
+- `src/Dashboard.Web/Program.cs`: route renamed `/proxy/{sourceId}/...`
+  -> `/proxy/{slug}/...` (cosmetic, matches what it's actually resolving
+  now); the four removed registrations dropped.
+- `src/Dashboard.Core/Models/ModelInfo.cs`: `IdleTtlSeconds`'s own doc
+  comment updated -- it referenced the now-deleted `IdleUnloadService`.
+  The field itself (and the old UI's own idle-TTL/preload-on-startup
+  inputs in `Models.razor`) are left in place, now inert -- still part
+  of the legacy schema/UI the Start Here says not to delete until P16a.
+- 6 new integration tests (`tests/Dashboard.Infrastructure.Tests/ModelProxyServiceTests.cs`
+  -- a different file from the pure-helper unit tests already in
+  `Dashboard.Core.Tests`, same class name, different namespace/assembly,
+  no conflict): a real listening fake-upstream HTTP server standing in
+  for vLLM (a real socket is needed -- `ModelProxyService`'s own
+  `HttpClient` dials an absolute URL, which an in-memory `TestServer`
+  transport can't answer), and the real `ModelProxyService` behind its
+  own `TestServer`. Covers the registry listing, byte-for-byte streaming
+  + Live Traffic + genuine mid-stream visibility (joining the SignalR
+  group mid-stream and getting `TrafficHub.JoinSource`'s own catch-up
+  replay), the new registered-but-not-active error, not-registered 404,
+  already-active pass-through, and unknown-slug 404. 173 Core + 57
+  Infrastructure .NET tests (down from 177 Core, since
+  `ActivityTrackerTests.cs`'s 4 tests were removed with it), 127 Python
+  tests; `./scripts/gate.sh` green with the retired code and tests gone.
+
+Out of scope, not touched: UI (P15a). Anything that calls the supervisor
+(P10a's `ISwapService` is how a future UI, not this request path, would
+ever change what's running).
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| `GET /proxy/<slug>/v1/models` returns the registry list (more than one loaded model) | Yes | `GetModelsList_ReturnsTheFullRegistry_NotJustTheActiveModel` |
+| A completion streams byte-for-byte to the client AND appears in Live Traffic; a mid-stream request is visible before it completes | Yes | `Completion_StreamsByteForByteAndAppearsInLiveTraffic_VisibleMidStream` |
+| Registered-but-not-active model → helpful error; no supervisor/Docker call made | Yes, structurally guaranteed | `RegisteredButNotActiveModel_ReturnsHelpfulError`; `ModelProxyService` no longer references `ISupervisorClient`/`IDockerOrchestrator` at all |
+| Leave fake vLLM idle past the old 30s window → still serving, never unloaded | Yes, structurally | `IdleUnloadService` deleted entirely -- nothing left to unload it |
+| Startup does not trigger any model start (no preload) | Yes, structurally | `PreloadService` deleted entirely -- nothing left to start one |
+| Oversized payload/long-idle SSE heartbeat/mirrored-text cap behave as before; app logs reach the DB; a container restart keeps the login session | Yes | `StreamWithTeeAsync` preserved byte-for-byte (not touched by this phase at all); DB logging and Data Protection keys are unrelated infrastructure this phase never modifies |
+| `gate.sh` passes with the retired code and tests removed | Yes | confirmed above, 173 + 57 .NET + 127 Python, all green |
 
 ## Deviations / findings worth flagging
 

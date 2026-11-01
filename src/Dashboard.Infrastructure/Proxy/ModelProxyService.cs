@@ -1,45 +1,35 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using Dashboard.Core.Abstractions;
-using Dashboard.Core.Models;
+using Dashboard.Infrastructure.Persistence.V2;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Dashboard.Application.Proxy;
+namespace Dashboard.Infrastructure.Proxy;
 
 /// <summary>
-/// Transparent reverse proxy for a source's inference endpoint: a client hits a
-/// stable dashboard URL instead of vLLM's own address, and this inspects the
-/// request's <c>"model"</c> field, auto-swaps the backend container first if a
-/// different model is requested, then forwards (streaming) to the real endpoint.
-/// This is the "llama-swap"-style piece — hot-swap driven by an incoming request,
-/// not a human clicking a button first.
+/// Transparent reverse proxy for an instance's inference endpoint (P11): a client hits
+/// a stable dashboard URL instead of vLLM's own address, and this forwards the request
+/// (streaming) as a thin mirror -- no auto-swap, no idle-unload, no preload. The
+/// dashboard asks the supervisor to change what's running (P10a's ISwapService);
+/// nothing in this request path ever does, matching "the dashboard asks; the
+/// supervisor does" everywhere else in this refactor.
 /// </summary>
 public interface IModelProxyService
 {
-    Task HandleAsync(HttpContext context, string sourceId, string path);
+    Task HandleAsync(HttpContext context, string slug, string path);
 }
 
 public sealed class ModelProxyService : IModelProxyService
 {
-    private readonly ISourceCatalog _sources;
-    private readonly IModelCatalog _models;
-    private readonly ILaunchSpecStore _launchSpecs;
-    private readonly IDockerOrchestrator _orchestrator;
+    private readonly IInstanceService _instances;
+    private readonly IModelService _models;
+    private readonly IDeploymentService _deployments;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IHubContext<TrafficHub> _traffic;
     private readonly IInFlightTrafficTracker _inFlight;
-    private readonly IActivityTracker _activity;
-    private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<ModelProxyService> _logger;
-
-    // One swap-in-flight lock per source, so two concurrent requests for the same
-    // source don't both decide to swap at once and race each other.
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SwapLocks = new();
 
     // Cap on what the live traffic view broadcasts — the real response to the client is
     // never truncated, only what's mirrored to the UI, so a very long generation can't
@@ -60,61 +50,48 @@ public sealed class ModelProxyService : IModelProxyService
     };
 
     public ModelProxyService(
-        ISourceCatalog sources,
-        IModelCatalog models,
-        ILaunchSpecStore launchSpecs,
-        IDockerOrchestrator orchestrator,
+        IInstanceService instances,
+        IModelService models,
+        IDeploymentService deployments,
         IHttpClientFactory httpFactory,
         IHubContext<TrafficHub> traffic,
         IInFlightTrafficTracker inFlight,
-        IActivityTracker activity,
-        IHostApplicationLifetime lifetime,
         ILogger<ModelProxyService> logger)
     {
-        _sources = sources;
+        _instances = instances;
         _models = models;
-        _launchSpecs = launchSpecs;
-        _orchestrator = orchestrator;
+        _deployments = deployments;
         _httpFactory = httpFactory;
         _traffic = traffic;
         _inFlight = inFlight;
-        _activity = activity;
-        _lifetime = lifetime;
         _logger = logger;
     }
 
-    public async Task HandleAsync(HttpContext context, string sourceId, string path)
+    public async Task HandleAsync(HttpContext context, string slug, string path)
     {
         var ct = context.RequestAborted;
 
-        var source = await _sources.GetByIdOrSlugAsync(sourceId, ct);
-        if (source is null)
+        var instance = await _instances.GetBySlugAsync(slug, ct);
+        if (instance is null)
         {
-            await WriteErrorAsync(context, StatusCodes.Status404NotFound, "Unknown source.");
+            await WriteErrorAsync(context, StatusCodes.Status404NotFound, "Unknown instance.");
             return;
         }
-        if (string.IsNullOrWhiteSpace(source.InferenceUrl))
+        if (string.IsNullOrWhiteSpace(instance.AdminUrl))
         {
-            await WriteErrorAsync(context, StatusCodes.Status502BadGateway, "Source has no inference URL configured.");
+            await WriteErrorAsync(context, StatusCodes.Status502BadGateway, "This instance has no supervisor registered yet.");
             return;
         }
-
-        // Touched here, at request start, not just on completion below: IdleUnloadService
-        // only sees this source as "still busy" via this timestamp, and a long-running
-        // streamed generation could otherwise sit for minutes with the source's last-touch
-        // still pointing at whenever the *previous* request finished — long enough to look
-        // idle and get its container torn down mid-stream by the 30s idle-unload check.
-        _activity.Touch(source.Id);
 
         // Model discovery (e.g. OpenWebUI populating its model picker) must list every
-        // model registered for this source, not just whichever one happens to be
-        // loaded right now — vLLM's own /v1/models only ever reports the single active
-        // model, which would make every other registered model invisible to a client
-        // and defeat the point of having a swappable registry at all. Answered directly
-        // from the registry instead of forwarded.
+        // model registered for this instance's server, not just whichever one happens
+        // to be active right now — vLLM's own /v1/models only ever reports the single
+        // active model, which would make every other registered model invisible to a
+        // client and defeat the point of having a swappable registry at all. Answered
+        // directly from the registry instead of forwarded.
         if (HttpMethods.IsGet(context.Request.Method) && IsModelsListPath(path))
         {
-            await WriteModelsListAsync(context, source, ct);
+            await WriteModelsListAsync(context, instance, ct);
             return;
         }
 
@@ -123,81 +100,43 @@ public sealed class ModelProxyService : IModelProxyService
 
         if (!string.IsNullOrWhiteSpace(requestedModelName))
         {
-            var swapError = await EnsureModelActiveAsync(source, requestedModelName, ct);
-            if (swapError is not null)
+            var error = await CheckModelActiveAsync(instance, requestedModelName, ct);
+            if (error is { } e)
             {
-                await WriteErrorAsync(context, StatusCodes.Status502BadGateway, swapError);
+                await WriteErrorAsync(context, e.StatusCode, e.Message);
                 return;
             }
         }
 
-        await ForwardAsync(context, source, path, requestBody, requestedModelName, ct);
+        await ForwardAsync(context, instance, path, requestBody, requestedModelName, ct);
     }
 
-    /// <summary>Returns null on success, or a human-readable error to send back to the
-    /// client. Swaps only if the requested model isn't already the active one.</summary>
-    private async Task<string?> EnsureModelActiveAsync(SourceInfo source, string requestedModelName, CancellationToken ct)
+    private readonly record struct ProxyError(int StatusCode, string Message);
+
+    /// <summary>Returns null when the requested model is already the active one --
+    /// never swaps, never calls the supervisor or Docker. A model that isn't even
+    /// registered on this instance's server gets 404; one that's registered but not
+    /// the active deployment gets the helpful "swap it in the dashboard" 400 (doc 3,
+    /// P11's own new error case) instead of being silently forwarded against the
+    /// wrong backend.</summary>
+    private async Task<ProxyError?> CheckModelActiveAsync(Instance instance, string requestedModelName, CancellationToken ct)
     {
-        var active = await _models.GetActiveAsync(source.Id, ct);
-        if (active is not null && string.Equals(active.Name, requestedModelName, StringComparison.Ordinal))
-            return null; // already serving the right model — nothing to do
-
-        var gate = SwapLocks.GetOrAdd(source.Id, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
-        try
+        var active = await _deployments.GetActiveAsync(instance.Id, ct);
+        if (active is not null)
         {
-            // Re-check after acquiring the lock: another concurrent request may have
-            // already completed the swap while this one was waiting.
-            active = await _models.GetActiveAsync(source.Id, ct);
-            if (active is not null && string.Equals(active.Name, requestedModelName, StringComparison.Ordinal))
-                return null;
-
-            if (string.IsNullOrWhiteSpace(source.PhysicalServerId))
-                return "This source has no physical server configured — set one up on the Settings page.";
-
-            var target = (await _models.GetByPhysicalServerAsync(source.PhysicalServerId, ct))
-                .FirstOrDefault(m => string.Equals(m.Name, requestedModelName, StringComparison.Ordinal));
-            if (target is null)
-                return $"Model '{requestedModelName}' is not registered on this source's physical server.";
-
-            // The DB's IsActive flag can drift from reality (e.g. a model started
-            // directly via docker compose, outside this app, never gets marked active).
-            // Ask the backend itself what it's actually serving before tearing down and
-            // recreating a container that's already correct — a real swap should never
-            // fire just because our own bookkeeping hadn't caught up yet.
-            var actuallyLoaded = await _orchestrator.GetActuallyRunningModelNameAsync(source, ct);
-            if (actuallyLoaded is not null && string.Equals(actuallyLoaded, requestedModelName, StringComparison.Ordinal))
-            {
-                await _models.ActivateAsync(source.Id, target.Id, ct);
-                return null;
-            }
-
-            var spec = await _launchSpecs.GetBySourceAsync(source.Id, ct);
-            if (spec is null || string.IsNullOrWhiteSpace(spec.Image))
-                return "This source's server settings (image) aren't configured yet — set them up on the Settings page.";
-
-            // A real swap can take several minutes on a slow GPU (weight load + compile) —
-            // far longer than a chat client's own request timeout. If this ran on the
-            // inbound request's own token, a client that gives up waiting and retries
-            // would cancel the swap mid-flight, abandoning a container that's still
-            // loading with nothing left to clean it up; the retry would then tear that
-            // orphaned container down and start over, forever, never actually finishing
-            // (a real incident: LibreChat cycled the same swap 4+ times before one
-            // attempt finally outlasted its own retry). Runs to completion independent of
-            // whether the triggering request is still connected — only app shutdown
-            // should be able to cut it short.
-            _logger.LogInformation("Auto-swap: {Source} -> {Model} (requested by an inbound proxy request).", source.Label, target.Name);
-            var result = await _orchestrator.SwapModelAsync(source, target, spec, NoOpProgress.Instance, _lifetime.ApplicationStopping);
-            if (!result.Success)
-                return $"Auto-swap to '{requestedModelName}' failed: {result.Error}";
-
-            await _models.ActivateAsync(source.Id, target.Id, _lifetime.ApplicationStopping);
-            return null;
+            var activeModel = await _models.GetAsync(active.ModelId, ct);
+            if (activeModel is not null && string.Equals(activeModel.Name, requestedModelName, StringComparison.Ordinal))
+                return null; // already serving the right model — nothing to do
         }
-        finally
-        {
-            gate.Release();
-        }
+
+        var registered = (await _models.ListByServerAsync(instance.ServerId, ct))
+            .Any(m => string.Equals(m.Name, requestedModelName, StringComparison.Ordinal));
+        if (!registered)
+            return new ProxyError(StatusCodes.Status404NotFound, $"Model '{requestedModelName}' is not registered.");
+
+        return new ProxyError(
+            StatusCodes.Status400BadRequest,
+            $"Model '{requestedModelName}' is registered but not active — swap it in the dashboard.");
     }
 
     private static async Task<string> BufferRequestBodyAsync(HttpContext context, CancellationToken ct)
@@ -217,11 +156,9 @@ public sealed class ModelProxyService : IModelProxyService
     internal static bool IsModelsListPath(string path) =>
         string.Equals(path.Trim('/'), "v1/models", StringComparison.OrdinalIgnoreCase);
 
-    private async Task WriteModelsListAsync(HttpContext context, SourceInfo source, CancellationToken ct)
+    private async Task WriteModelsListAsync(HttpContext context, Instance instance, CancellationToken ct)
     {
-        var models = string.IsNullOrWhiteSpace(source.PhysicalServerId)
-            ? Array.Empty<ModelInfo>()
-            : await _models.GetByPhysicalServerAsync(source.PhysicalServerId, ct);
+        var models = await _models.ListByServerAsync(instance.ServerId, ct);
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         context.Response.ContentType = "application/json";
@@ -264,12 +201,26 @@ public sealed class ModelProxyService : IModelProxyService
         return null;
     }
 
-    private async Task ForwardAsync(HttpContext context, SourceInfo source, string path, string bufferedBody, string? requestedModelName, CancellationToken ct)
+    /// <summary>The instance's inference base URL -- same host as its supervisor's own
+    /// admin API (AdminUrl), since the supervisor and vLLM always run in the same
+    /// container (doc 5), just a different port (the instance's own Port, the vLLM
+    /// --port the recipe/ArgBuilder launches it with). There's no separate stored
+    /// "inference URL" field on Instance -- deliberately derived, so the two can never
+    /// drift apart the way two independently-edited fields could.</summary>
+    private static string BuildInferenceBaseUrl(Instance instance)
     {
-        var targetUrl = source.InferenceUrl.TrimEnd('/') + "/" + path.TrimStart('/') + context.Request.QueryString;
+        var adminUri = new Uri(instance.AdminUrl!);
+        return $"{adminUri.Scheme}://{adminUri.Host}:{instance.Port}";
+    }
+
+    private async Task ForwardAsync(
+        HttpContext context, Instance instance, string path, string bufferedBody, string? requestedModelName, CancellationToken ct)
+    {
+        var targetUrl = BuildInferenceBaseUrl(instance).TrimEnd('/') + "/" + path.TrimStart('/') + context.Request.QueryString;
+        var sourceId = instance.Id.ToString();
         var requestId = Guid.NewGuid().ToString("n");
         var sw = Stopwatch.StartNew();
-        BroadcastStarted(source.Id, requestId, context.Request.Method, path, requestedModelName, bufferedBody);
+        BroadcastStarted(sourceId, requestId, context.Request.Method, path, requestedModelName, bufferedBody);
 
         using var upstream = new HttpRequestMessage(new HttpMethod(context.Request.Method), targetUrl);
         if (context.Request.ContentLength is > 0)
@@ -311,7 +262,7 @@ public sealed class ModelProxyService : IModelProxyService
         {
             _logger.LogWarning(ex, "Proxy forward to {Url} failed.", targetUrl);
             await WriteErrorAsync(context, StatusCodes.Status502BadGateway, $"Could not reach the backend: {ex.Message}");
-            BroadcastFinished(source.Id, requestId, StatusCodes.Status502BadGateway, sw.ElapsedMilliseconds, ex.Message);
+            BroadcastFinished(sourceId, requestId, StatusCodes.Status502BadGateway, sw.ElapsedMilliseconds, ex.Message);
             return;
         }
 
@@ -327,10 +278,9 @@ public sealed class ModelProxyService : IModelProxyService
             // from buffering a streaming SSE response into one chunk.
             context.Response.Headers["X-Accel-Buffering"] = "no";
 
-            await StreamWithTeeAsync(context, upstreamResponse, source.Id, requestId, ct);
+            await StreamWithTeeAsync(context, upstreamResponse, sourceId, requestId, ct);
         }
-        _activity.Touch(source.Id);
-        BroadcastFinished(source.Id, requestId, context.Response.StatusCode, sw.ElapsedMilliseconds, null);
+        BroadcastFinished(sourceId, requestId, context.Response.StatusCode, sw.ElapsedMilliseconds, null);
     }
 
     /// <summary>Copies the upstream response body to the real client exactly as

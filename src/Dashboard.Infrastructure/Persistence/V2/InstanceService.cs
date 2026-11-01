@@ -9,6 +9,11 @@ public interface IInstanceService
 {
     Task<IReadOnlyList<Instance>> ListByServerAsync(int serverId, CancellationToken ct = default);
     Task<Instance?> GetAsync(int id, CancellationToken ct = default);
+
+    /// <summary>Resolves the proxy route's own identifier (P11:
+    /// <c>/proxy/&lt;slug&gt;/...</c>) -- the route segment is always the
+    /// slug, never a raw id, unlike the legacy source lookup it replaces.</summary>
+    Task<Instance?> GetBySlugAsync(string slug, CancellationToken ct = default);
     Task<Instance> CreateAsync(Instance instance, CancellationToken ct = default);
 
     /// <summary>Editing an existing instance's proxy slug is allowed, but it
@@ -54,6 +59,13 @@ public sealed class InstanceService : IInstanceService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         return await db.InstancesV2.FindAsync([id], ct);
+    }
+
+    public async Task<Instance?> GetBySlugAsync(string slug, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await db.InstancesV2.FirstOrDefaultAsync(i => i.ProxySlug == slug, ct);
     }
 
     public async Task<Instance> CreateAsync(Instance instance, CancellationToken ct = default)

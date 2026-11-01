@@ -1,4 +1,4 @@
-using Dashboard.Application.Proxy;
+using Dashboard.Infrastructure.Proxy;
 
 namespace Dashboard.Core.Tests;
 

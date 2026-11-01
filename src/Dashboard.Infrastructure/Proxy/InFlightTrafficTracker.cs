@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 
-namespace Dashboard.Application.Proxy;
+namespace Dashboard.Infrastructure.Proxy;
 
 /// <summary>
 /// Tracks requests currently streaming through the proxy, purely so a Live Traffic

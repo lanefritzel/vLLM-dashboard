@@ -31,11 +31,19 @@ recreating containers, per-model `LaunchSpec`, idle-unload):
 
 | File | Why |
 |---|---|
-| `DockerOrchestratorPayloadTests.cs` | Explicitly named in the P00 page -- container create/recreate payloads go away; the supervisor owns the vLLM process (invariant 4). |
-| `LaunchSpecTests.cs` | Explicitly named -- `LaunchSpec` is replaced by recipes (P09a/P09b). |
-| `ActivityTrackerTests.cs` | Backs `IdleUnloadService`'s idle-TTL check; idle-unload is retired per the Start Here decisions. |
+| `DockerOrchestratorPayloadTests.cs` | Explicitly named in the P00 page -- container create/recreate payloads go away; the supervisor owns the vLLM process (invariant 4). Still here: `DockerOrchestrator` itself is still reachable from the old UI's manual swap button until P14 replaces it, so this isn't P11's job -- final removal stays P16a's, per the Start Here's "don't delete files yet" rule. |
+| `LaunchSpecTests.cs` | Explicitly named -- `LaunchSpec` is replaced by recipes (P09a/P09b). Same reasoning as above: still reachable from the old UI, stays until P16a. |
+
+**Removed in P11** (explicitly named by its own page: "remove the hosted
+services and their tests"): `ActivityTrackerTests.cs`, alongside
+`ActivityTracker.cs`/`IActivityTracker.cs`, `IdleUnloadService.cs`, and
+`PreloadService.cs` themselves. Unlike the two rows above, idle-unload and
+preload-on-startup only ever existed on the proxy's OWN request path,
+which P11 rewrites from scratch -- there's no "old UI still calls it"
+reason to keep them around until P16a.
 
 ## Not yet classified
 
-None -- all 10 files in `tests/Dashboard.Core.Tests/` are listed above.
+None -- all 10 files originally in `tests/Dashboard.Core.Tests/` are
+accounted for above (one now removed, per P11).
 `tests/Dashboard.Web.Tests/` currently has no test files to classify.
