@@ -294,6 +294,71 @@ docker volume rm -f supervisor-state
 docker rmi supervisor-test
 ```
 
+### Cancel + Stop + Restart (P07)
+
+All three share the single-operation lock with `/admin/deploy`: Stop/Restart
+409 (`{"deployment_id": ...}`) against an in-flight deploy; Restart also
+409s (`{"state": ...}`) while idle/not ready, same rule as `/admin/smoke-test`.
+Cancel 409s (plain string detail) with nothing in flight or a stale id --
+unlike Stop, which is **idempotent** (200, `released:true`) when nothing
+is running at all.
+
+```bash
+AUTH='Authorization: Bearer secret'
+
+# Cancel phase 1 vs phase 2 is decided from LIVE process state, not timing --
+# curling two separate requests always gives the deploy task enough time to
+# actually stop the old process, so manual curl testing always lands in
+# phase 2 (below). Phase 1 (old model provably untouched) is only
+# deterministic in-process, with zero `await` between start_deploy() and
+# cancel_deploy() in the same event loop tick -- see
+# test_cancel_before_the_new_deploy_runs_at_all_leaves_old_model_untouched
+# in test_cancel_stop_restart.py if you need to re-verify that path.
+
+# Phase 2: deploy with a slow-loading child, cancel mid-load.
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -X POST http://localhost:18100/admin/deploy -d '{
+  "argv": ["python3", "/app/fake_vllm.py", "--port", "9001", "--served-model-name", "model-b", "--fake-slow-start", "20"],
+  "deployment_id": "d4", "health_timeout": 60, "smoke": {"skip": true}
+}'
+# (wait ~2-3s so it's actually in waiting_health, loading child spawned)
+curl -s -X POST -H "$AUTH" http://localhost:18100/admin/deployments/d4/cancel
+curl -s -H "$AUTH" http://localhost:18100/admin/status   # -> "state":"idle", child not running
+curl -s -H "$AUTH" "http://localhost:18100/admin/deployments/d4/events?after=0"
+# -> last event: {"state":"cancelled","detail":{"phase":"post_stop"}}
+# (phase is "pre_stop" instead if the old model was never actually touched)
+
+# Cancel with nothing in flight / a stale id -> 409.
+curl -s -w '\n%{http_code}\n' -X POST -H "$AUTH" http://localhost:18100/admin/deployments/nope/cancel
+
+# Stop -- idempotent while idle, releases + persists last_run_outcome="stopped" while serving.
+curl -s -X POST -H "$AUTH" http://localhost:18100/admin/stop
+# -> {"state":"idle","vram":{"released":true|false,"used_mb":...,"total_mb":...}}
+docker exec <container> cat /state/state.json   # -> "last_run_outcome": "stopped", last_good_argv still present
+
+# Restart -- same argv (+env), new PID, back through the normal deploy pipeline (smoke included).
+curl -s -X POST -H "$AUTH" http://localhost:18100/admin/restart
+curl -s -H "$AUTH" http://localhost:18100/admin/status   # -> new "pid", same "argv"
+```
+
+### Verifying Stop survives a reboot (the P07 owner decision)
+
+Needs the `/state` volume from the P02/P03a section above -- a fresh
+in-process object is NOT a real enough test here either, same reasoning as
+P05's restart-survival check.
+
+```bash
+docker volume create supervisor-state
+docker run -d --name supervisor-dev --init -v supervisor-state:/state \
+  -e SUPERVISOR_TOKEN=secret -p 18100:8000 supervisor-test
+# ... deploy, then stop (commands above) ...
+docker rm -f supervisor-dev
+docker run -d --name supervisor-dev --init -v supervisor-state:/state \
+  -e SUPERVISOR_TOKEN=secret -p 18100:8000 supervisor-test
+docker logs supervisor-dev
+# -> "boot decision -- replay=False (last run outcome was 'stopped', not healthy -- staying idle)"
+curl -s -H "$AUTH" http://localhost:18100/admin/status   # -> "state":"idle", nothing replayed
+```
+
 ### Smoke test (P06)
 
 Auto-runs as the final step of every successful deploy unless the body

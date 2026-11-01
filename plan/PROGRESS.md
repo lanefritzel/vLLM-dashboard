@@ -19,6 +19,7 @@ tokens, SSH/pg_dump commands, Docker build/run invocations) live in
 | P04 | done | 2026-11-01 | See below. |
 | P05 | done | 2026-11-01 | See below. |
 | P06 | done | 2026-11-01 | See below. |
+| P07 | done | 2026-11-01 | See below. |
 
 ## P00 -- Baseline & test harness
 
@@ -747,6 +748,110 @@ Out of scope, not touched: streaming smoke requests (always `stream:
 false`), any UI for displaying `smoke_ok` or offering Rollback (dashboard
 side, later phase), configurable default prompt/timeout via env var (only
 per-request override via the `smoke` body field, per the page).
+
+## P07 -- Cancel + Stop
+
+One decision confirmed with the owner before implementing (2026-11-01): a
+manual Stop **survives a container reboot** -- Stop sets
+`last_run_outcome="stopped"`, so P02's boot rule (replay only when the
+last run was `healthy`) leaves the instance idle after a reboot;
+`last_good_argv` is kept, so "redeploy last working" still works. The
+alternative (forgotten on reboot) would have needed a new flag distinct
+from `last_run_outcome`.
+
+**Cancel/stop with nothing to act on** (the page's own open question,
+"document which"): **Cancel is 409** (it names a specific deployment id,
+so with none in flight that's a genuine caller error) -- **Stop is
+idempotent 200** (it names no id; "already idle" is just success, not an
+error). Restart follows Cancel's rule (409, via the same `NotServingError`
+`/admin/smoke-test` already uses) since it also needs something
+concrete -- the currently-serving argv -- to act on.
+
+Found and fixed a real bug by hand, not caught by the first pass of unit
+tests: cancelling a deploy's `asyncio.Task` **before it has run a single
+line never executes the coroutine's body at all** -- not even its own
+`try/except/finally`. A test that called `cancel_deploy()` immediately
+after `start_deploy()`, with no intervening `await`, left
+`current_deployment_id` stuck set forever (the lock never released) and
+recorded no `cancelled` event, because `_run_deploy`'s own cleanup code
+never ran. Fixed by making `cancel_deploy()` itself the authoritative
+cleanup point: after awaiting the (possibly-never-started) task, if the
+lock is still held for that same deployment id, it means the task's body
+never ran, so `cancel_deploy()` does the same phase-appropriate cleanup
+itself instead of trusting the task to have done it. This only showed up
+because the test issued no `await` between `start_deploy()` and
+`cancel_deploy()` -- a scenario curl/HTTP can't easily hit (network
+round-trips always give the task time to start), but a legitimate race all
+the same.
+
+Also added a `cancel_event` (a plain `threading.Event`, not asyncio) so
+Cancel stays responsive even while blocked on a long `health_timeout`
+(default 600s): an asyncio `CancelledError` can only be *delivered* once
+the `to_thread()` call it's suspended on actually returns -- a blocking
+call can't be interrupted mid-flight -- so without this, cancelling during
+`waiting_health` could silently wait out the full timeout instead of
+responding in about a second.
+
+Done:
+- `deploy_runner.py`: phase detection for Cancel reads **live process
+  state**, not a flag set earlier in the function -- "phase 1" is exactly
+  "a child is running and it is NOT the argv of the deploy being
+  cancelled" (old model untouched); anything else is "phase 2" (kill
+  whatever's there, if anything, go idle). This is deliberately immune to
+  the asyncio-cancellation-timing race described in P03c's history: a flag
+  set only *after* an await can't be trusted, since the await might not
+  return until the awaited work has already finished. New `stop()`
+  (SIGTERM/wait/SIGKILL via `ProcessManager.stop`, then the same
+  GPU-release wait a swap uses, returned as `{released, used_mb,
+  total_mb}` rather than just a bool -- `_wait_for_gpu_release`'s old
+  logic was refactored onto a shared `_poll_gpu_release` helper that
+  returns the full reading, with its own behavior otherwise unchanged).
+  New `restart()` (stop + start the current argv **and env** -- added
+  `_current_env` tracking since `ProcessManager.ChildInfo` never carried
+  it and "no config change" needs it too). New exception
+  `NoDeployInProgressError` (Cancel, 409); `NotServingError` (added in
+  P06) reused for Restart.
+- `admin_api.py`: `POST /admin/deployments/{id}/cancel`, `POST
+  /admin/stop`, `POST /admin/restart`.
+- 20 new tests (`test_cancel_stop_restart.py`, a new file -- phase
+  1/phase 2/responsiveness/idempotency/conflicts, all against real
+  fake-vllm subprocesses; plus HTTP-layer additions to
+  `test_admin_api.py`). 130 total; `./scripts/gate.sh` green. Verified by
+  hand against the real `Dockerfile.test` image, including a volume-backed
+  restart to confirm Stop survives a reboot: Cancel phase 2 (mid-load,
+  `--fake-slow-start`) killed the loading child and went idle with the
+  full event sequence ending in `cancelled`/`post_stop`; Stop while idle
+  was idempotent (200, `released:true`); Stop while serving released the
+  child and persisted `last_run_outcome:"stopped"` to `/state/state.json`;
+  a fresh container on the **same volume** booted with `boot decision --
+  replay=False (last run outcome was 'stopped', not healthy -- staying
+  idle)`, and `last_good_argv` was still in the saved state; Restart got a
+  new PID with the same argv and reached `ready` (smoke included); Stop
+  and Restart both 409'd against an in-flight deploy; Restart 409'd while
+  idle; Cancel 409'd with nothing in flight.
+  **Note:** curling Cancel over real HTTP always landed in phase 2, never
+  phase 1 -- the network round-trip between "start the deploy" and "cancel
+  it" is enough time for the deploy task to reach and complete the actual
+  stop of the old process. Phase 1 (old model provably untouched) is only
+  deterministically exercisable in-process, with zero `await` between
+  `start_deploy()` and `cancel_deploy()` in the same event loop tick --
+  which is exactly what `test_cancel_before_the_new_deploy_runs_at_all_...`
+  does, and exactly the scenario that surfaced the never-started-task bug
+  above.
+
+Out of scope, not touched: UI labels/buttons (P14), dashboard-side
+`stop_reason` writing (P10a/P10b).
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Cancel phase 1 → old model untouched, deploy aborted, state back to ready | Yes | `test_cancel_before_the_new_deploy_runs_at_all_leaves_old_model_untouched` (deterministic, in-process) |
+| Cancel phase 2 (`--fake-slow-start`) → loading child killed, state idle, no child running, nothing restarted afterwards | Yes | `test_cancel_while_the_new_child_is_loading_kills_it_and_goes_idle` + real-container check above |
+| Stop on generic host → `released:true` via "assume released"; fake backend holding VRAM → `released:false` with numbers, recheck flips once cleared | Yes | `test_stop_kills_the_child_...` (generic) + `test_stop_reports_vram_still_held_then_recheck_flips_once_cleared` (fake backend) |
+| Restart → same argv, new PID, back to ready | Yes | `test_restart_gets_a_new_pid_with_the_same_argv_and_reaches_ready` + real-container check |
+| After manual Stop, restarting the container comes up idle; `last_good_argv` still present | Yes | real-container volume-backed reboot check above |
+| Cancel/stop with nothing to act on → clear 409/idempotent response, documented which | Yes | Cancel 409 (`NoDeployInProgressError`), Stop idempotent 200 -- both decided and written up above |
 
 ## Deviations / findings worth flagging
 

@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-from .deploy_runner import DeployInProgressError, DeployRunner, NotServingError
+from .deploy_runner import DeployInProgressError, DeployRunner, NoDeployInProgressError, NotServingError
 from .process_manager import ProcessManager
 from .state import Settings, StateStore, SupervisorState
 
@@ -115,6 +115,40 @@ def create_app(
         except NotServingError as exc:
             raise HTTPException(status_code=409, detail={"state": exc.state}) from exc
         return result.to_dict()
+
+    @admin.post("/admin/deployments/{deployment_id}/cancel")
+    async def cancel(deployment_id: str) -> dict:
+        # Hard stop, never a restore (P07) -- cancel_deploy() itself
+        # decides phase 1 (old model untouched) vs phase 2 (idle) from
+        # live process state; a mismatched/stale id or nothing in flight
+        # both raise NoDeployInProgressError -> 409 (unlike Stop, Cancel
+        # names a specific id, so "nothing to act on" is a caller error).
+        try:
+            return await deploy_runner.cancel_deploy(deployment_id)
+        except NoDeployInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @admin.post("/admin/stop")
+    async def stop() -> dict:
+        # Idempotent (P07): stopping an already-idle instance just
+        # succeeds. Only conflicts with an in-flight deploy (409 -- cancel
+        # that first).
+        try:
+            return await deploy_runner.stop()
+        except DeployInProgressError as exc:
+            raise HTTPException(status_code=409, detail={"deployment_id": exc.deployment_id}) from exc
+
+    @admin.post("/admin/restart")
+    async def restart() -> dict:
+        # Stop + start the current argv, no config change (P07) -- only
+        # valid while actually serving, same rule as /admin/smoke-test.
+        try:
+            deployment_id = deploy_runner.restart()
+        except NotServingError as exc:
+            raise HTTPException(status_code=409, detail={"state": exc.state}) from exc
+        except DeployInProgressError as exc:
+            raise HTTPException(status_code=409, detail={"deployment_id": exc.deployment_id}) from exc
+        return {"deployment_id": deployment_id}
 
     @admin.get("/admin/deployments/{deployment_id}/events")
     def events(deployment_id: str, after: int = 0) -> list[dict]:

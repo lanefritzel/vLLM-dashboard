@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -70,12 +71,20 @@ class DeployInProgressError(Exception):
 
 
 class NotServingError(Exception):
-    """POST /admin/smoke-test with no model actually serving (P06) --
-    carries the current state so the caller can report it (409 + state)."""
+    """POST /admin/smoke-test or /admin/restart with no model actually
+    serving (P06/P07) -- carries the current state so the caller can
+    report it (409 + state)."""
 
     def __init__(self, state: str) -> None:
         super().__init__(f"no model is currently serving (state={state!r})")
         self.state = state
+
+
+class NoDeployInProgressError(Exception):
+    """POST /admin/deployments/{id}/cancel with nothing in flight (P07) --
+    unlike Stop (idempotent: stopping an already-idle instance just
+    succeeds), Cancel names a specific deployment id to act on, so with
+    none in flight it's a genuine caller error -> 409."""
 
 
 class DeployRunner:
@@ -105,6 +114,29 @@ class DeployRunner:
         # cancelled at the start of the next deploy, since an intentional
         # stop for a redeploy is not a crash.
         self._post_ready_watcher: Optional[asyncio.Task] = None
+        # The in-flight deploy's own asyncio Task (P07) -- Cancel needs a
+        # handle to actually interrupt it; cleared alongside
+        # _current_deployment_id once the deploy concludes (normally OR via
+        # cancellation).
+        self._current_deploy_task: Optional[asyncio.Task] = None
+        # Lets cancel_deploy() wake a blocked health-poll thread quickly
+        # (P07) -- health_timeout defaults to 600s, and an asyncio
+        # CancelledError can only be DELIVERED once the to_thread() call
+        # it's suspended on actually returns (a blocking call can't be
+        # interrupted directly); without this, Cancel during
+        # "waiting_health" could silently wait out the whole timeout
+        # instead of responding in about a second.
+        self._cancel_event: Optional[threading.Event] = None
+        # The argv of the in-flight deploy (P07) -- cancel_deploy() needs
+        # this as a fallback for _handle_cancel() when the task never got
+        # to run its own body at all (see cancel_deploy's own comment).
+        self._current_deploy_argv: Optional[list[str]] = None
+        # The env of the most recent deploy attempt (P07's Restart: "same
+        # argv, no config change" needs the env too, not just argv --
+        # ProcessManager's ChildInfo doesn't carry it). Only meaningful
+        # while actually serving; Restart's own NotServingError check
+        # guards against reusing a stale value from a failed attempt.
+        self._current_env: Optional[dict[str, str]] = None
 
     @property
     def state(self) -> str:
@@ -154,7 +186,10 @@ class DeployRunner:
         409-equivalent if one's already running) and schedules the actual
         work as a background task. Returns the deployment id right away."""
         deployment_id = self._begin(deployment_id)
-        asyncio.create_task(self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout, smoke))
+        self._current_deploy_argv = argv
+        self._current_deploy_task = asyncio.create_task(
+            self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout, smoke)
+        )
         return deployment_id
 
     async def deploy_and_wait(
@@ -170,7 +205,15 @@ class DeployRunner:
         boot sequence, which needs to know the outcome before deciding
         whether to retry (P02's retry cap)."""
         deployment_id = self._begin(deployment_id)
-        return await self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout, smoke)
+        self._current_deploy_argv = argv
+        task = asyncio.create_task(
+            self._run_deploy(argv, deployment_id, env, graceful_timeout, health_timeout, smoke)
+        )
+        self._current_deploy_task = task
+        try:
+            return await task
+        except asyncio.CancelledError:
+            return False
 
     def _begin(self, deployment_id: Optional[str]) -> str:
         if self._current_deployment_id is not None:
@@ -248,6 +291,9 @@ class DeployRunner:
     ) -> bool:
         log_batch_task: Optional[asyncio.Task] = None
         vram_still_in_use = False
+        self._current_env = env
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
         try:
             if self._process_manager.is_running():
                 before_gpu = await asyncio.to_thread(self._gpu_backend.query)
@@ -266,6 +312,7 @@ class DeployRunner:
             port = _extract_port(argv)
             healthy, timed_out_while_alive = await asyncio.to_thread(
                 _wait_for_health, port, served_model_name, health_timeout, self._process_manager.is_running,
+                cancel_event,
             )
 
             if not healthy:
@@ -327,6 +374,18 @@ class DeployRunner:
 
             self._post_ready_watcher = asyncio.create_task(self._watch_for_crash(deployment_id))
             return True
+        except asyncio.CancelledError:
+            # Cancel (P07): the phase is read from live process state, not
+            # a flag set earlier in this function -- asyncio can only
+            # deliver the cancellation once the currently-awaited
+            # to_thread() call actually returns (a blocking subprocess
+            # call can't be interrupted mid-flight), so by the time we get
+            # here `self._process_manager.stop(...)` above may have
+            # already fully completed even though the CancelledError
+            # pre-empted the line right after it -- a flag set only after
+            # that await would have been wrong in exactly that window.
+            await self._handle_cancel(deployment_id, argv)
+            raise
         finally:
             if log_batch_task is not None:
                 log_batch_task.cancel()  # only runs "while a deployment is in flight" (doc 5)
@@ -345,6 +404,9 @@ class DeployRunner:
                 for line in self._process_manager.drain_pending_log_lines():
                     self._archive.append_log_line(deployment_id, line)
             self._current_deployment_id = None
+            self._current_deploy_task = None
+            self._cancel_event = None
+            self._current_deploy_argv = None
 
     async def run_smoke_test_now(self) -> SmokeResult:
         """POST /admin/smoke-test (P06): runs against the CURRENT active
@@ -360,23 +422,129 @@ class DeployRunner:
         self._last_smoke_ok = result.ok
         return result
 
+    async def _handle_cancel(self, deployment_id: str, argv: list[str]) -> None:
+        """Cancel (P07), phase-detected from live process state rather
+        than a flag: "phase 1" (old model untouched, still serving) is
+        exactly "a child is running and it's NOT the new argv we were
+        deploying" -- if that's true we leave it alone and revert to
+        ready. Anything else ("phase 2") -- nothing running at all, or the
+        NEW child is the one that's running/loading -- kills whatever's
+        there (if anything) and goes idle; no auto-restart, no
+        auto-rollback (doc 5/7: fix the recipe and deploy is one model
+        load, not two)."""
+        info = self._process_manager.info
+        old_still_serving = self._process_manager.is_running() and (info is None or info.argv != argv)
+        if old_still_serving:
+            self._record(deployment_id, "cancelled", {"phase": "pre_stop"})
+            self._state = "ready"
+            return
+        if self._process_manager.is_running():
+            await asyncio.to_thread(self._process_manager.stop)
+        self._record(deployment_id, "cancelled", {"phase": "post_stop"})
+        self._state = "idle"
+
+    async def cancel_deploy(self, deployment_id: str) -> dict:
+        if self._current_deployment_id is None or self._current_deploy_task is None:
+            raise NoDeployInProgressError("no deploy is currently in flight")
+        if deployment_id != self._current_deployment_id:
+            raise NoDeployInProgressError(f"deployment {deployment_id!r} is not the in-flight deploy")
+        if self._cancel_event is not None:
+            self._cancel_event.set()  # wakes a blocked health-poll thread quickly, see __init__'s comment
+        task = self._current_deploy_task
+        argv = self._current_deploy_argv or []
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # _run_deploy's own except/finally handles cleanup when the task
+        # actually got to run -- but cancelling a task before it has EVER
+        # run so much as its first line never executes the coroutine's
+        # body at all (found by hand: the "cancel immediately after
+        # start_deploy, same tick" test left the lock held and no
+        # "cancelled" event recorded). This is the fallback for exactly
+        # that case: if the lock is still held for OUR deployment_id after
+        # awaiting the task, _run_deploy's body never ran, so do the same
+        # phase-appropriate cleanup here instead.
+        if self._current_deployment_id == deployment_id:
+            await self._handle_cancel(deployment_id, argv)
+            self._current_deployment_id = None
+            self._current_deploy_task = None
+            self._cancel_event = None
+            self._current_deploy_argv = None
+        return {"deployment_id": deployment_id, "state": self._state}
+
+    async def stop(self, graceful_timeout: float = 5.0) -> dict:
+        """POST /admin/stop (P07): SIGTERM -> wait -> SIGKILL (exactly
+        ProcessManager.stop's own sequence), then verify VRAM release the
+        same way a swap does. Idempotent when nothing is running --
+        unlike Cancel, Stop names no deployment id, so "already idle" is
+        just success, not an error. Conflicts with an active deploy
+        though (ask the caller to Cancel that first), same lock as
+        start_deploy. Sets last_run_outcome="stopped" (not "healthy"),
+        so a reboot's boot-replay (P02) leaves this idle on purpose
+        (owner-confirmed 2026-11-01) -- last_good_argv is untouched, so
+        "redeploy last working" still works."""
+        if self._current_deployment_id is not None:
+            raise DeployInProgressError(self._current_deployment_id)
+        if self._post_ready_watcher is not None:
+            self._post_ready_watcher.cancel()
+            self._post_ready_watcher = None
+
+        before = await asyncio.to_thread(self._gpu_backend.query)
+        was_running = self._process_manager.is_running()
+        if was_running:
+            await asyncio.to_thread(self._process_manager.stop, graceful_timeout)
+            current = await asyncio.to_thread(self._poll_gpu_release, before)
+        else:
+            current = before
+
+        released = before.used_mb is None or current.used_mb is None or _vram_released(before.used_mb, current.used_mb)
+        self._state = "idle"
+        state = self._state_store.load() or SupervisorState()
+        state.last_run_outcome = "stopped"
+        self._state_store.save(state)
+        return {"state": "idle", "vram": {"released": released, "used_mb": current.used_mb, "total_mb": current.total_mb}}
+
+    def restart(self) -> str:
+        """POST /admin/restart (P07): stop + start the CURRENT argv, no
+        config change -- goes through the normal deploy pipeline (same
+        events, same smoke test) via start_deploy, which re-admits through
+        _begin() and so already 409s if a deploy is somehow in flight.
+        Only valid while actually serving, same rule as run_smoke_test_now."""
+        info = self._process_manager.info
+        if self._state != "ready" or info is None or not self._process_manager.is_running():
+            raise NotServingError(self._state)
+        return self.start_deploy(list(info.argv), env=self._current_env)
+
+    def _poll_gpu_release(self, before: GpuInfo) -> GpuInfo:
+        """The polling loop behind both the deploy swap's GPU-release wait
+        and Stop's own vram report (P07): wait ~2s, then poll up to ~10s
+        total for VRAM to drop toward `before`; returns whatever reading
+        the loop stopped on (released or not) for the caller to interpret
+        -- no backend/no baseline short-circuits to `before` itself
+        (used_mb None), same "assume released" contract as always."""
+        time.sleep(RELEASING_GPU_INITIAL_WAIT_SECONDS)
+        if before.used_mb is None:
+            return before
+        deadline = time.monotonic() + (RELEASING_GPU_MAX_WAIT_SECONDS - RELEASING_GPU_INITIAL_WAIT_SECONDS)
+        while True:
+            current = self._gpu_backend.query()
+            if current.used_mb is None or _vram_released(before.used_mb, current.used_mb):
+                return current
+            if time.monotonic() >= deadline:
+                return current  # still elevated -- proceed anyway, flagged
+            time.sleep(RELEASING_GPU_POLL_INTERVAL_SECONDS)
+
     def _wait_for_gpu_release(self, before: GpuInfo) -> bool:
         """Replaces P03a's blind 2s wait (doc 5): wait ~2s, then read VRAM;
         if still elevated after ~10s total, proceed anyway and return True
         so the caller can flag it in the failure report. No backend, or no
         usable baseline -> wait the initial 2s and assume released."""
-        time.sleep(RELEASING_GPU_INITIAL_WAIT_SECONDS)
-        if before.used_mb is None:
+        current = self._poll_gpu_release(before)
+        if before.used_mb is None or current.used_mb is None:
             return False
-
-        deadline = time.monotonic() + (RELEASING_GPU_MAX_WAIT_SECONDS - RELEASING_GPU_INITIAL_WAIT_SECONDS)
-        while True:
-            current = self._gpu_backend.query()
-            if current.used_mb is None or _vram_released(before.used_mb, current.used_mb):
-                return False
-            if time.monotonic() >= deadline:
-                return True  # still elevated -- proceed anyway, flagged
-            time.sleep(RELEASING_GPU_POLL_INTERVAL_SECONDS)
+        return not _vram_released(before.used_mb, current.used_mb)
 
     async def _watch_for_crash(self, deployment_id: str) -> None:
         """Runs only after a deploy reaches ready. If the child dies later
@@ -428,6 +596,7 @@ def _extract_port(argv: list[str], default: int = DEFAULT_CHILD_PORT) -> int:
 
 def _wait_for_health(
     port: int, served_model_name: Optional[str], timeout: float, is_child_alive,
+    cancel_event: Optional[threading.Event] = None,
 ) -> tuple[bool, bool]:
     """Child alive (GET /health 200) and, when the argv names a served
     model, that name actually shows up in GET /v1/models -- not just that
@@ -435,13 +604,19 @@ def _wait_for_health(
     appears"). Returns (healthy, timed_out_while_alive) -- the second value
     is what tells the caller "health_timeout" apart from "the child already
     exited" (fail-fast: this returns the moment `is_child_alive()` goes
-    false, instead of sleeping out the rest of `timeout`)."""
+    false, instead of sleeping out the rest of `timeout`). `cancel_event`
+    (P07) lets a pending Cancel wake this up within about a second instead
+    of waiting out the rest of `timeout` -- the return value in that case
+    is discarded anyway (asyncio delivers the CancelledError it's really
+    about once this call returns), so its exact shape doesn't matter."""
     deadline = time.monotonic() + timeout
     health_url = f"http://127.0.0.1:{port}/health"
     models_url = f"http://127.0.0.1:{port}/v1/models"
     while time.monotonic() < deadline:
         if not is_child_alive():
             return False, False
+        if cancel_event is not None and cancel_event.is_set():
+            return False, True
         try:
             with urllib.request.urlopen(health_url, timeout=2) as resp:
                 if resp.status != 200:

@@ -66,6 +66,9 @@ def test_every_admin_route_except_health_requires_auth(tmp_path):
         ("GET", "/admin/settings"),
         ("PUT", "/admin/settings"),
         ("POST", "/admin/smoke-test"),
+        ("POST", "/admin/deployments/x/cancel"),
+        ("POST", "/admin/stop"),
+        ("POST", "/admin/restart"),
     ]:
         resp = client.request(method, path, json={} if method in ("POST", "PUT") else None)
         assert resp.status_code == 401, f"{method} {path} should 401 without a token"
@@ -198,6 +201,86 @@ def test_smoke_test_endpoint_runs_on_demand_while_serving(tmp_path):
 
         status = client.get("/admin/status", headers=auth_headers()).json()
         assert status["smoke_ok"] is True
+    finally:
+        pm.stop()
+
+
+def test_stop_endpoint_is_idempotent_while_idle(tmp_path):
+    client = new_client(tmp_path)
+    resp = client.post("/admin/stop", headers=auth_headers())
+    assert resp.status_code == 200
+    assert resp.json() == {"state": "idle", "vram": {"released": True, "used_mb": None, "total_mb": None}}
+
+
+def test_restart_endpoint_409s_while_idle(tmp_path):
+    client = new_client(tmp_path)
+    resp = client.post("/admin/restart", headers=auth_headers())
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["state"] == "idle"
+
+
+def test_cancel_endpoint_409s_with_nothing_in_flight(tmp_path):
+    client = new_client(tmp_path)
+    resp = client.post("/admin/deployments/nope/cancel", headers=auth_headers())
+    assert resp.status_code == 409
+
+
+def test_restart_endpoint_translates_to_a_new_deployment_id(tmp_path):
+    # Restart's actual run-to-ready behavior (new PID, same argv, full event
+    # sequence) is covered against a real child under one continuous
+    # asyncio.run() in test_cancel_stop_restart.py -- TestClient drives its
+    # own event loop to completion per call, same reason /admin/deploy's
+    # own happy-path test lives there instead of here (see that file's
+    # module docstring). This just isolates the HTTP-layer translation:
+    # a 200 with a NEW deployment id, distinct from the one already serving.
+    import asyncio
+
+    fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    client = TestClient(app)
+
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    try:
+        argv = [sys.executable, fake_vllm, "--port", str(port), "--served-model-name", "model-a"]
+        ok = asyncio.run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+        assert ok is True
+
+        resp = client.post("/admin/restart", headers=auth_headers())
+        assert resp.status_code == 200
+        assert resp.json()["deployment_id"] != "d1"
+    finally:
+        pm.stop()
+
+
+def test_stop_endpoint_against_a_real_child_releases_it(tmp_path):
+    import asyncio
+
+    fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    client = TestClient(app)
+
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    try:
+        argv = [sys.executable, fake_vllm, "--port", str(port), "--served-model-name", "model-a"]
+        ok = asyncio.run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10))
+        assert ok is True
+
+        resp = client.post("/admin/stop", headers=auth_headers())
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "idle"
+        assert not pm.is_running()
     finally:
         pm.stop()
 
