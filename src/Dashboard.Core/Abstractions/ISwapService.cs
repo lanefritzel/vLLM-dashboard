@@ -21,8 +21,11 @@ public interface ISwapService
     /// byte-for-byte -- never the live recipe, which may have changed since.</summary>
     Task<SwapResult> RollbackAsync(int instanceId, CancellationToken ct = default);
 
-    /// <summary>Leaves the instance idle (no pending/active row); stop_reason="manual".</summary>
-    Task StopAsync(int instanceId, CancellationToken ct = default);
+    /// <summary>Leaves the instance idle (no pending/active row); stop_reason="manual".
+    /// Returns the supervisor's own stop response, including its VRAM reading (P14:
+    /// "VRAM released" line / re-check warning), so the UI doesn't need a second
+    /// round trip just to show what Stop itself already learned.</summary>
+    Task<SupervisorStopResult> StopAsync(int instanceId, CancellationToken ct = default);
 
     /// <summary>Cancels an in-flight swap; stop_reason="cancelled" on the
     /// cancelled pending row, and also on the previous-active row if the
@@ -44,4 +47,12 @@ public interface ISwapService
     /// acknowledgement gate -- this is an admin correction, not a live
     /// user-initiated model change.</summary>
     Task<SwapResult> ForceRedeployAsync(int instanceId, CancellationToken ct = default);
+
+    /// <summary>P14's Deployments page "[Redeploy this]": replays an arbitrary
+    /// HISTORICAL deployment row's own frozen args_snapshot on its instance --
+    /// unlike <see cref="RollbackAsync"/> (always "the previous" row) or
+    /// <see cref="ForceRedeployAsync"/> (always the current active row), the
+    /// caller picks which row by id. Fails if that instance already has a
+    /// pending/active deployment in the way, same as a normal swap would.</summary>
+    Task<SwapResult> RedeployAsync(int deploymentId, CancellationToken ct = default);
 }

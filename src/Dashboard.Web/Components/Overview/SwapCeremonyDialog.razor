@@ -1,0 +1,554 @@
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Supervisor
+@using Dashboard.Infrastructure.Persistence.V2
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IModelService Models
+@inject IRecipeService Recipes
+@inject IDeploymentService Deployments
+@inject ISwapService Swap
+@inject ISupervisorClient SupervisorClient
+@inject ISupervisorTokenProvider TokenProvider
+@inject IJSRuntime JS
+@inject Dashboard.Web.Components.Shared.IDialogService Dialogs
+
+<div class="modal-overlay" @onclick="@OnOverlayClick">
+    <div class="modal-dialog-custom" style="max-width: 720px;" @onclick:stopPropagation="true">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+            <div class="card-title mb-0">@Title()</div>
+            @if (_phase is Phase.Picking or Phase.Preview)
+            {
+                <button type="button" class="modal-close-btn" @onclick="@Close" aria-label="Close">✕</button>
+            }
+        </div>
+
+        @if (_phase == Phase.Picking)
+        {
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Model</label>
+                    <select class="form-select" @bind="_pickedModelId" @bind:after="@OnPickedModelChangedAsync">
+                        <option value="0">-- choose a model --</option>
+                        @foreach (var m in Models_)
+                        {
+                            <option value="@m.Id">@m.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Recipe</label>
+                    <select class="form-select" @bind="_pickedRecipeId" disabled="@(_pickedModelId == 0)">
+                        <option value="0">-- choose a recipe --</option>
+                        @foreach (var r in Recipes_)
+                        {
+                            <option value="@r.Id">@r.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-12 text-end">
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@Close">Cancel</button>
+                    <button type="button" class="btn btn-primary btn-sm" disabled="@(_pickedModelId == 0 || _pickedRecipeId == 0)" @onclick="@GoToPreviewAsync">Preview</button>
+                </div>
+            </div>
+        }
+        else if (_phase == Phase.Preview)
+        {
+            <div class="mb-2 text-muted small">
+                The vLLM process will restart inside the container. Endpoint down ~30–60s.
+            </div>
+            <table class="table table-sm">
+                <thead><tr><th>Field</th><th>Current</th><th></th><th>New</th></tr></thead>
+                <tbody>
+                    @foreach (var row in _diff)
+                    {
+                        <tr class="@(row.Changed ? "diff-changed" : "")">
+                            <td>@row.Label</td>
+                            <td>@(row.Old ?? "—")</td>
+                            <td class="text-center">@(row.Changed ? "→" : "=")</td>
+                            <td>@(row.New ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (_softWarnings.Count > 0)
+            {
+                <div class="alert alert-warning py-2">
+                    <ul class="mb-0">
+                        @foreach (var w in _softWarnings) { <li>@w</li> }
+                    </ul>
+                </div>
+            }
+
+            @if (_servedNameChanging)
+            {
+                <div class="alert alert-warning py-2">
+                    <label class="form-label mb-0">
+                        <input type="checkbox" class="form-check-input" @bind="_ackServedNameChange" />
+                        Clients sending model: "@_oldServedName" will stop working — the served name is changing to "@_newServedName".
+                    </label>
+                </div>
+            }
+
+            <div class="text-end">
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="@(() => _phase = Phase.Picking)">Back</button>
+                <button type="button" class="btn btn-primary btn-sm" disabled="@(_servedNameChanging && !_ackServedNameChange)" @onclick="@ConfirmSwapAsync">Swap now</button>
+            </div>
+        }
+        else if (_phase == Phase.Progress)
+        {
+            <ol class="ceremony-steps">
+                @foreach (var step in Steps)
+                {
+                    var state = StepState(step.Key);
+                    <li class="@StepCssClass(state)">@step.Label</li>
+                }
+            </ol>
+
+            @if (_lastDetail is not null)
+            {
+                <div class="text-muted small mt-2">@_lastDetail</div>
+            }
+
+            <div class="log-pane mt-2" id="ceremony-log" style="max-height:160px; overflow-y:auto; font-family:monospace; font-size:0.8rem;">
+                @foreach (var line in _logLines)
+                {
+                    <div>@line</div>
+                }
+            </div>
+
+            <div class="mt-3 text-end">
+                <button type="button" class="btn btn-outline btn-sm" @onclick="@CancelAsync">@CancelLabel()</button>
+            </div>
+        }
+        else if (_phase == Phase.Result)
+        {
+            @if (_resultSucceeded)
+            {
+                <div class="alert alert-success py-2">
+                    ✓ @_resultModelName is ready · served as "@_resultServedName" · @_resultElapsedSeconds s
+                </div>
+                <div class="text-end">
+                    <button type="button" class="btn btn-outline btn-sm" @onclick="@RunSmokeTestAsync">Run smoke test</button>
+                    <button type="button" class="btn btn-outline btn-sm" @onclick="@RollbackAsync">Rollback to previous</button>
+                    <button type="button" class="btn btn-primary btn-sm" @onclick="@Close">Done</button>
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-danger py-2">
+                    ✗ Swap failed — @_resultFailureReason (code @(_resultExitCode?.ToString() ?? "n/a"))
+                </div>
+                @if (_logLines.Count > 0)
+                {
+                    <div class="log-pane mb-2" style="max-height:160px; overflow-y:auto; font-family:monospace; font-size:0.8rem;">
+                        @foreach (var line in _logLines.TakeLast(20)) { <div>@line</div> }
+                    </div>
+                }
+                <div class="text-end">
+                    <button type="button" class="btn btn-outline btn-sm" @onclick="@RetryAsync">Retry</button>
+                    <button type="button" class="btn btn-outline btn-sm" @onclick="@RollbackAsync">Rollback</button>
+                    <button type="button" class="btn btn-primary btn-sm" @onclick="@Close">Done</button>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private enum Phase { Picking, Preview, Progress, Result }
+    private enum StepStatus { Pending, Current, Done, Failed }
+
+    [Parameter, EditorRequired] public Instance Instance { get; set; } = null!;
+    [Parameter] public Model? CurrentModel { get; set; }
+    [Parameter] public Recipe? CurrentRecipe { get; set; }
+    [Parameter, EditorRequired] public List<Model> Models_ { get; set; } = new();
+    [Parameter, EditorRequired] public List<Recipe> Recipes_ { get; set; } = new();
+
+    /// <summary>When set, the dialog opens directly into the Progress phase for
+    /// this already-pending (or already-just-finished) deployment, instead of
+    /// the picker -- the hero auto-resumes a swap that was in flight when the
+    /// page loaded/reloaded.</summary>
+    [Parameter] public int? ResumeDeploymentId { get; set; }
+
+    [Parameter] public EventCallback OnClosed { get; set; }
+    [Parameter] public EventCallback OnDeploymentSettled { get; set; }
+
+    private static readonly (string Key, string Label)[] Steps =
+    {
+        ("stop", "Stop old process"),
+        ("releasing_gpu", "Release GPU"),
+        ("starting", "Start new process"),
+        ("loading", "Load weights"),
+        ("waiting_health", "Health check"),
+        ("smoke", "Smoke test"),
+    };
+
+    private Phase _phase = Phase.Picking;
+    private int _pickedModelId;
+    private int _pickedRecipeId;
+    private List<(string Label, string? Old, string? New, bool Changed)> _diff = new();
+    private List<string> _softWarnings = new();
+    private bool _servedNameChanging;
+    private bool _ackServedNameChange;
+    private string? _oldServedName;
+    private string? _newServedName;
+
+    private int _deploymentId;
+    private DateTime _deployStartedAt;
+    private int _maxSeenStepIndex = -1;
+    private bool _terminalSeen;
+    private string? _lastDetail;
+    private readonly List<string> _logLines = new();
+
+    private bool _resultSucceeded;
+    private string _resultModelName = "";
+    private string _resultServedName = "";
+    private double _resultElapsedSeconds;
+    private string? _resultFailureReason;
+    private int? _resultExitCode;
+
+    private DotNetObjectReference<SwapCeremonyDialog>? _receiver;
+    private bool _hubStarted;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (ResumeDeploymentId is { } id)
+        {
+            _deploymentId = id;
+            var deployment = await Deployments.GetAsync(id);
+            if (deployment is not null)
+            {
+                _deployStartedAt = deployment.StartedAt ?? deployment.CreatedAt;
+                if (deployment.Status is "active")
+                {
+                    await EnterResultAsync(deployment);
+                }
+                else if (deployment.Status is "stopped" or "failed")
+                {
+                    await EnterResultAsync(deployment);
+                }
+                else
+                {
+                    var events = await Deployments.ListEventsAsync(id);
+                    foreach (var e in events)
+                        ApplyState(e.State, e.Detail);
+                    _phase = Phase.Progress;
+                }
+            }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_phase != Phase.Progress || _hubStarted) return;
+        _receiver = DotNetObjectReference.Create(this);
+        try
+        {
+            await JS.InvokeVoidAsync("deploymenthub_start", _receiver);
+            await JS.InvokeVoidAsync("deploymenthub_join", _deploymentId);
+            _hubStarted = true;
+        }
+        catch
+        {
+            // JS not ready yet (prerender) -- retried on the next render.
+        }
+    }
+
+    [JSInvokable]
+    public Task OnState(string json) => InvokeAsync(async () =>
+    {
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+            var state = payload.GetProperty("state").GetString() ?? "";
+            string? detail = payload.TryGetProperty("detail", out var d) && d.ValueKind != System.Text.Json.JsonValueKind.Null
+                ? d.ToString() : null;
+            ApplyState(state, detail);
+
+            if (state is "ready" or "crashed" or "failed")
+            {
+                // The "ready" state event is broadcast BEFORE the server flips the
+                // deployment row to "active" (DeploymentEventApplier applies the
+                // event, broadcasts it, THEN calls ActivateAndStopPreviousAsync) --
+                // a single immediate read here can race and see a stale "pending"
+                // status. Briefly poll for the row to reach its terminal status
+                // rather than trusting the very first read.
+                var deployment = await WaitForTerminalStatusAsync(_deploymentId);
+                if (deployment is not null)
+                    await EnterResultAsync(deployment);
+                await OnDeploymentSettled.InvokeAsync();
+            }
+            StateHasChanged();
+        }
+        catch
+        {
+            // Malformed/unexpected payload -- ignore, next event may still resolve it.
+        }
+    });
+
+    [JSInvokable]
+    public Task OnLog(string line) => InvokeAsync(() =>
+    {
+        _logLines.Add(line);
+        if (_logLines.Count > 200) _logLines.RemoveAt(0);
+        StateHasChanged();
+        return Task.CompletedTask;
+    });
+
+    private void ApplyState(string state, string? detail)
+    {
+        _lastDetail = detail;
+        var idx = Array.FindIndex(Steps, s => s.Key == state);
+        if (idx >= 0)
+            _maxSeenStepIndex = Math.Max(_maxSeenStepIndex, idx);
+        if (state is "ready" or "crashed" or "failed")
+            _terminalSeen = true;
+    }
+
+    private StepStatus StepState(string key)
+    {
+        var idx = Array.FindIndex(Steps, s => s.Key == key);
+        if (_terminalSeen && !_resultSucceeded && idx == _maxSeenStepIndex + 1)
+            return StepStatus.Failed;
+        if (idx <= _maxSeenStepIndex)
+            return StepStatus.Done;
+        if (idx == _maxSeenStepIndex + 1 && !_terminalSeen)
+            return StepStatus.Current;
+        return StepStatus.Pending;
+    }
+
+    private static string StepCssClass(StepStatus s) => s switch
+    {
+        StepStatus.Done => "step-done",
+        StepStatus.Current => "step-current",
+        StepStatus.Failed => "step-failed",
+        _ => "step-pending",
+    };
+
+    /// <summary>Phase 1 (old model untouched) vs phase 2 (old already gone) for
+    /// Cancel's label -- "starting" is the first step that only happens once the
+    /// old process is fully gone.</summary>
+    private string CancelLabel() => _maxSeenStepIndex < Array.FindIndex(Steps, s => s.Key == "starting")
+        ? "Cancel — nothing has changed yet."
+        : "Cancel — stop the swap; instance will be left idle.";
+
+    private string Title() => _phase switch
+    {
+        Phase.Picking => "Swap model",
+        Phase.Preview => "Review changes",
+        Phase.Progress => "Swapping…",
+        _ => "Swap result",
+    };
+
+    private async Task OnPickedModelChangedAsync()
+    {
+        _pickedRecipeId = 0;
+        await Task.CompletedTask;
+    }
+
+    private async Task GoToPreviewAsync()
+    {
+        var newModel = Models_.First(m => m.Id == _pickedModelId);
+        var newRecipe = Recipes_.First(r => r.Id == _pickedRecipeId);
+
+        _diff = BuildDiff(CurrentModel, CurrentRecipe, newModel, newRecipe);
+
+        _oldServedName = CurrentRecipe?.ServedModelName;
+        _newServedName = newRecipe.ServedModelName;
+        _servedNameChanging = CurrentRecipe is not null && !string.Equals(_oldServedName, _newServedName, StringComparison.Ordinal);
+        _ackServedNameChange = false;
+
+        try
+        {
+            var result = await Recipes.ValidateDraftAsync(newRecipe, newModel.Id);
+            _softWarnings = result.SoftWarnings.Select(i => i.Message).ToList();
+        }
+        catch
+        {
+            _softWarnings = new();
+        }
+
+        _phase = Phase.Preview;
+    }
+
+    private static List<(string Label, string? Old, string? New, bool Changed)> BuildDiff(
+        Model? oldModel, Recipe? oldRecipe, Model newModel, Recipe newRecipe)
+    {
+        var rows = new List<(string, string?, string?, bool)>
+        {
+            ("Model", oldModel?.Name, newModel.Name, oldModel?.Id != newModel.Id),
+            ("Recipe", oldRecipe?.Name, newRecipe.Name, oldRecipe?.Id != newRecipe.Id),
+            ("Served as", oldRecipe?.ServedModelName, newRecipe.ServedModelName, oldRecipe?.ServedModelName != newRecipe.ServedModelName),
+            ("Max model length", oldRecipe?.MaxModelLen.ToString("N0"), newRecipe.MaxModelLen.ToString("N0"), oldRecipe?.MaxModelLen != newRecipe.MaxModelLen),
+            ("GPU memory utilization", oldRecipe?.GpuMemoryUtilization.ToString("0.##"), newRecipe.GpuMemoryUtilization.ToString("0.##"), oldRecipe?.GpuMemoryUtilization != newRecipe.GpuMemoryUtilization),
+            ("Dtype", oldRecipe?.Dtype, newRecipe.Dtype, oldRecipe?.Dtype != newRecipe.Dtype),
+            ("KV cache dtype", oldRecipe?.KvCacheDtype, newRecipe.KvCacheDtype, oldRecipe?.KvCacheDtype != newRecipe.KvCacheDtype),
+        };
+        return rows;
+    }
+
+    private async Task ConfirmSwapAsync()
+    {
+        try
+        {
+            var result = await Swap.SwapAsync(Instance.Id, _pickedModelId, _pickedRecipeId, _ackServedNameChange);
+            if (result.Outcome == "already_active")
+            {
+                await Close();
+                return;
+            }
+            _deploymentId = result.DeploymentId!.Value;
+            _deployStartedAt = DateTime.UtcNow;
+            _maxSeenStepIndex = -1;
+            _terminalSeen = false;
+            _logLines.Clear();
+            _phase = Phase.Progress;
+        }
+        catch (ServedNameChangeRequiresAcknowledgementException)
+        {
+            _servedNameChanging = true;
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Swap failed: " + ex.Message);
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        try
+        {
+            await Swap.CancelAsync(Instance.Id);
+            await OnDeploymentSettled.InvokeAsync();
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not cancel: " + ex.Message);
+        }
+    }
+
+    /// <summary>Polls briefly for a deployment row to reach "active"/"stopped"/
+    /// "failed" -- see the comment at its call site for why a single read
+    /// right after a terminal state event can still see a stale "pending".</summary>
+    private async Task<Deployment?> WaitForTerminalStatusAsync(int deploymentId)
+    {
+        Deployment? last = null;
+        for (var i = 0; i < 20; i++)
+        {
+            last = await Deployments.GetAsync(deploymentId);
+            if (last is { Status: "active" or "stopped" or "failed" })
+                return last;
+            await Task.Delay(150);
+        }
+        return last;
+    }
+
+    private async Task EnterResultAsync(Deployment deployment)
+    {
+        _resultSucceeded = deployment.Status == "active";
+        _resultElapsedSeconds = deployment.StartedAt is { } started
+            ? (DateTime.UtcNow - started).TotalSeconds
+            : 0;
+        _resultFailureReason = deployment.FailureReason;
+        _resultExitCode = deployment.ExitCode;
+        if (!string.IsNullOrEmpty(deployment.LogTail))
+        {
+            _logLines.Clear();
+            _logLines.AddRange(deployment.LogTail.Split('\n'));
+        }
+
+        var model = await Models.GetAsync(deployment.ModelId);
+        var recipe = await Recipes.GetAsync(deployment.RecipeId);
+        _resultModelName = model?.Name ?? "model";
+        _resultServedName = recipe?.ServedModelName ?? "main";
+
+        _phase = Phase.Result;
+    }
+
+    private async Task RunSmokeTestAsync()
+    {
+        if (Instance.AdminUrl is null) return;
+        var token = TokenProvider.GetToken(Instance.Id);
+        if (token is null) return;
+        try
+        {
+            var result = await SupervisorClient.SmokeTestAsync(Instance.AdminUrl, token);
+            await Dialogs.AlertAsync(result.Ok ? "Smoke test passed." : "Smoke test failed: " + result.Excerpt);
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Smoke test failed: " + ex.Message);
+        }
+    }
+
+    private async Task RollbackAsync()
+    {
+        try
+        {
+            var result = await Swap.RollbackAsync(Instance.Id);
+            _deploymentId = result.DeploymentId!.Value;
+            _deployStartedAt = DateTime.UtcNow;
+            _maxSeenStepIndex = -1;
+            _terminalSeen = false;
+            _logLines.Clear();
+            _hubStarted = false;
+            _phase = Phase.Progress;
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Rollback failed: " + ex.Message);
+        }
+    }
+
+    private async Task RetryAsync()
+    {
+        try
+        {
+            var result = await Swap.SwapAsync(Instance.Id, _pickedModelId != 0 ? _pickedModelId : (CurrentModel?.Id ?? 0), _pickedRecipeId != 0 ? _pickedRecipeId : (CurrentRecipe?.Id ?? 0), true);
+            if (result.DeploymentId is { } id)
+            {
+                _deploymentId = id;
+                _deployStartedAt = DateTime.UtcNow;
+                _maxSeenStepIndex = -1;
+                _terminalSeen = false;
+                _logLines.Clear();
+                _hubStarted = false;
+                _phase = Phase.Progress;
+            }
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Retry failed: " + ex.Message);
+        }
+    }
+
+    private async Task OnOverlayClick()
+    {
+        if (_phase is Phase.Picking or Phase.Preview)
+            await Close();
+    }
+
+    private async Task Close()
+    {
+        await OnClosed.InvokeAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hubStarted)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("deploymenthub_leave", _deploymentId);
+                await JS.InvokeVoidAsync("deploymenthub_stop");
+            }
+            catch
+            {
+                // Circuit may already be gone -- nothing to clean up on the client then.
+            }
+        }
+        _receiver?.Dispose();
+    }
+}

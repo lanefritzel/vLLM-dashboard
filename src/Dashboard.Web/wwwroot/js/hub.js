@@ -110,4 +110,44 @@
     var el = document.getElementById(elId);
     if (el) el.scrollTop = el.scrollHeight;
   };
+
+  // Separate connection for the swap ceremony's live progress (P14) -- its own
+  // hub, its own group membership (one group per deployment id, not per
+  // source), independent of every other connection above.
+  var deploymentConn = null;
+  var deploymentCurrentId = null;
+
+  window.deploymenthub_start = function (receiver) {
+    if (deploymentConn) { try { deploymentConn.stop(); } catch (e) {} deploymentConn = null; }
+    var c = new signalR.HubConnectionBuilder()
+      .withUrl('/deployment-hub')
+      .withAutomaticReconnect([0, 250, 1000, 5000, 10000])
+      .build();
+
+    c.on('receiveState', function (s) { receiver.invokeMethodAsync('OnState', JSON.stringify(s)); });
+    c.on('receiveLog', function (lines) {
+      (Array.isArray(lines) ? lines : [lines]).forEach(function (l) {
+        receiver.invokeMethodAsync('OnLog', l);
+      });
+    });
+    c.onreconnected(function () { if (deploymentCurrentId) c.invoke('JoinDeployment', deploymentCurrentId).catch(function () {}); });
+
+    deploymentConn = c;
+    return c.start();
+  };
+
+  window.deploymenthub_join = function (deploymentId) {
+    deploymentCurrentId = deploymentId;
+    if (deploymentConn && deploymentId) return deploymentConn.invoke('JoinDeployment', deploymentId).catch(function () {});
+    return Promise.resolve();
+  };
+
+  window.deploymenthub_leave = function (deploymentId) {
+    if (deploymentConn && deploymentId) return deploymentConn.invoke('LeaveDeployment', deploymentId).catch(function () {});
+    return Promise.resolve();
+  };
+
+  window.deploymenthub_stop = function () {
+    if (deploymentConn) { try { deploymentConn.stop(); } catch (e) {} deploymentConn = null; }
+  };
 })();

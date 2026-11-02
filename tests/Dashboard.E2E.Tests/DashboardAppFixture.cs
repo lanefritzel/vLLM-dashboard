@@ -55,8 +55,10 @@ public sealed class DashboardAppFixture : IAsyncLifetime
         startInfo.EnvironmentVariables["ConnectionStrings__DefaultConnection"] = _postgres.GetConnectionString();
         startInfo.EnvironmentVariables["DetailedErrors"] = "true";
         // ConfigSupervisorTokenProvider reads this for every instance -- needed for
-        // the Add Model Hugging Face flow to treat any instance as having a token.
-        startInfo.EnvironmentVariables["Supervisor__Token"] = "e2e-test-token";
+        // the Add Model Hugging Face flow to treat any instance as having a token,
+        // and (P14) must match SupervisorImageFixture.Token exactly so the swap
+        // ceremony E2E tests' real supervisor container accepts this app's calls.
+        startInfo.EnvironmentVariables["Supervisor__Token"] = Dashboard.Infrastructure.Tests.SupervisorImageFixture.Token;
 
         _appProcess = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start Dashboard.Web.");
         // Drain stdout/stderr so the child never blocks on a full pipe buffer.

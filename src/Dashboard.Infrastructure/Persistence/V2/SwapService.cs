@@ -131,11 +131,30 @@ public sealed class SwapService : ISwapService
         return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct);
     }
 
-    public async Task StopAsync(int instanceId, CancellationToken ct = default)
+    public async Task<SwapResult> RedeployAsync(int deploymentId, CancellationToken ct = default)
+    {
+        var source = await _deployments.GetAsync(deploymentId, ct)
+            ?? throw new KeyNotFoundException($"No deployment with id {deploymentId}.");
+        var instance = await RequireInstanceAsync(source.InstanceId, ct);
+        var token = RequireToken(source.InstanceId);
+
+        var argv = JsonSerializer.Deserialize<List<string>>(source.ArgsSnapshot)
+            ?? throw new InvalidOperationException($"Deployment {source.Id}'s args_snapshot could not be read.");
+
+        var deployment = await _deployments.CreateAsync(new Deployment
+        {
+            InstanceId = source.InstanceId, ModelId = source.ModelId, RecipeId = source.RecipeId,
+            ArgsSnapshot = source.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
+        }, ct);
+
+        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct);
+    }
+
+    public async Task<SupervisorStopResult> StopAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
         var token = RequireToken(instanceId);
-        await _supervisorClient.StopAsync(instance.AdminUrl!, token, ct);
+        var result = await _supervisorClient.StopAsync(instance.AdminUrl!, token, ct);
 
         var now = DateTime.UtcNow;
         var active = await _deployments.GetActiveAsync(instanceId, ct);
@@ -144,6 +163,8 @@ public sealed class SwapService : ISwapService
         var pending = await _deployments.GetPendingAsync(instanceId, ct);
         if (pending is not null)
             await _deployments.TransitionAsync(pending.Id, status: "stopped", stopReason: "manual", stoppedAt: now, ct: ct);
+
+        return result;
     }
 
     public async Task<SwapResult> CancelAsync(int instanceId, CancellationToken ct = default)

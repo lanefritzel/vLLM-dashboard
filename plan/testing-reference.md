@@ -704,3 +704,93 @@ curl -s -H "$AUTH" "http://localhost:18100/admin/deployments/d1/events?after=0"
 #    state-machine transition: runner.state (and /admin/status's "state")
 #    stays "ready" through it, never flips to "smoke".
 ```
+
+## Overview hero, swap ceremony, Deployments (P14)
+
+```bash
+# Postgres-only: page rendering, picker/preview, error handling, Deployments
+# table -- no real supervisor needed for these (covered by manual Playwright
+# verification in this phase, not automated -- see PROGRESS.md's DoD table).
+
+# Real supervisor: the swap ceremony's live progress + result screens.
+dotnet test tests/Dashboard.E2E.Tests --filter FullyQualifiedName~SwapCeremonyE2ETests
+
+# Whole E2E suite (now 21 tests, ~8 min serialized):
+dotnet test tests/Dashboard.E2E.Tests
+```
+
+**The E2E suite now has two collections, deliberately NOT allowed to run in
+parallel with each other.** `"E2E"` (P13's `DashboardAppFixture` alone) and
+`"E2EWithSupervisor"` (P14's `DashboardAppFixture` + a real
+`SupervisorImageFixture`-built container, reused from
+`Dashboard.Infrastructure.Tests` via a project reference) each spin up a
+full `Dashboard.Web` process + Postgres container + browser; running both at
+once on one machine produced a real Playwright timeout flake (not a product
+bug) the first time this phase's tests were added to `gate.sh`.
+`tests/Dashboard.E2E.Tests/AssemblyInfo.cs`'s
+`[assembly: CollectionBehavior(DisableTestParallelization = true)]` fixes
+this — the whole suite still finishes in under 8 minutes serialized. Don't
+remove it without re-verifying under load; two heavyweight collections
+racing each other buys nothing.
+
+**A real race condition, not a test artifact, was found and fixed while
+writing `SwapCeremonyE2ETests`**: `DeploymentEventApplier.ApplyStateEventAsync`
+broadcasts a state event over `DeploymentHub` BEFORE applying its own
+side effects for that state (for `"ready"`, flipping the deployment row to
+`"active"` via `ActivateAndStopPreviousAsync` happens strictly after the
+`SendAsync` call, not before). A client reacting to the live `"ready"`
+event and immediately re-reading the deployment row can see a stale
+`"pending"` row. `SwapCeremonyDialog.razor`'s `WaitForTerminalStatusAsync`
+polls (up to 20 x 150ms) for the row to actually reach a terminal status
+before deciding success/failure, rather than trusting the first read. If a
+future phase adds another live-event consumer reading deployment state
+right off a push, give it the same treatment — this isn't a one-off fixed
+at the source, since the broadcast-before-activate ordering in
+`DeploymentEventApplier` is left as-is (P10b's own code, not touched here).
+
+**`SupervisorImageFixture` reuse**: `Dashboard.E2E.Tests.csproj` has a
+project reference to `Dashboard.Infrastructure.Tests` purely to reuse this
+one fixture class (builds `supervisor/Dockerfile.test` once) rather than
+duplicating ~60 lines of Testcontainers setup. `DashboardAppFixture`'s
+`Supervisor__Token` env var is set to `SupervisorImageFixture.Token`
+("test-token") so the launched app's own supervisor calls are accepted by
+that real container — if that constant ever changes, this is the other
+place that needs to change with it.
+
+**Every DoD bullet now has a real-supervisor E2E test** -- the served-name-
+change acknowledgement panel, Cancel's phase-1/phase-2 labels and outcome,
+Stop's VRAM-released and VRAM-stuck-warning paths, Rollback and "[Redeploy
+this]", and the idle hero's two buttons. See PROGRESS.md's DoD table for
+which test covers which bullet.
+
+**`SupervisorImageFixture.StartContainerAsync` takes an optional
+`extraEnv`** (`IReadOnlyDictionary<string, string>?`, backward compatible)
+so a test can select e.g. `GPU_BACKEND=fake` -- the Stop/VRAM tests then use
+`IContainer.ExecAsync` to write a controlled reading into
+`/tmp/fake_gpu_backend.json` inside the running container (the same
+`FakeBackend` `supervisor/tests/test_gpu_release.py` already exercises
+in-process, just reached here through the real HTTP/UI path). The VRAM math
+itself (`_vram_released`, in `supervisor/supervisor/deploy_runner.py`)
+compares a *before* and *after* reading, not an absolute threshold, so a
+static fake value (used_mb unchanged across the whole Stop call) reliably
+reads as "not released" -- don't "simplify" it to a single post-Stop read.
+
+**A real UI bug was found by `Stop_WithTheFakeGpuBackendHoldingVram_...`**:
+`Overview.razor`'s idle-state branch (which Stop always lands on, since it
+unconditionally moves the deployment to "stopped" regardless of whether
+VRAM actually released) rendered only `_vramReleasedMessage`, never
+`_vramWarning` -- a stuck-VRAM warning was silently dropped the instant the
+hero flipped to idle. Fixed by mirroring the ready-branch's warning block
+(text + [Re-check] + [Hard reset container]) into the idle branch too. If a
+future phase adds a third hero variant, check it renders both messages, not
+just the success one -- this is an easy thing to drop again.
+
+**Cancel's phase-1 window needs a genuinely active deployment to swap away
+from** -- an idle -> active swap never emits a `"stop"` event at all
+(nothing to stop), so phase 1 is unobservable against a truly idle
+instance. `Cancel_ShowsPhase1LabelThenPhase2Label_...` does a real swap to
+active first, then a second swap into a recipe with
+`ExtraArgs = [{"key":"fake-slow-start","value":"8"}]` (a `tests/fake-vllm`
+flag passed straight through as a CLI arg, not a dashboard-side special
+case -- same mechanism `fake-crash` uses) to hold phase 2 open long enough
+to assert against.

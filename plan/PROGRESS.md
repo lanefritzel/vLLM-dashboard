@@ -1759,3 +1759,180 @@ old Models page/nav link.
 | Duplicate creates `name-copy`; delete asks for confirmation | Yes | `ModelsRecipesE2ETests.Duplicate_CreatesNameCopy_AndDelete_AsksForConfirmation` |
 | Add model against a stubbed repo shows the progress bar and ends "available"; stubbed low disk blocks with required-vs-available text; Add model disabled during a download | Yes | `AddModelDownloadE2ETests.AddModel_AgainstAStubbedRepo_ShowsProgressBar_AndEndsAvailable`, `..._AgainstAStubbedLowDiskRepo_BlocksWithRequiredVsAvailableText`, `..._CannotBeClosedOrCancelled_WhileADownloadIsInFlight` |
 | A migrated database's converted model/recipe is listed and editable | Not E2E-tested | The legacy -> V2 conversion itself is unit-tested (`RecipeService_ValidateAsync_OnALegacyShapedRow...`, an earlier phase); every E2E test here seeds `ModelsV2`/`RecipesV2` rows directly, the same shape a conversion produces (including the "blank model path" test above, a realistic legacy-row trait), so the page's list/edit behavior is exercised the same way, but no test runs an actual conversion and then drives the page against its output end to end. Flagged, not silently assumed -- closing this fully would mean standing up a legacy-schema seed + running the real conversion inside the E2E fixture, a bigger addition than the other gaps. |
+
+## P14 -- UX: Overview hero, swap ceremony, Deployments
+
+Replaces the dashboard's `/` page entirely (owner decision: same pattern P13
+used for a new page, but here the old page's own data model -- the legacy
+`Source`/`ISampleStore` system -- has nothing to do with the new V2
+`Server`/`Instance`/`Deployment` schema this phase's hero is built on, so
+coexistence at the same route wasn't an option). The old page survives at
+`/legacy-overview`, reachable from the nav under Settings, untouched.
+
+**Found a real gap before writing any UI**: the entire metrics-scraping
+pipeline (`IMetricsService`, `MetricsHub`, `ISampleStore`) was wired only to
+the legacy `Source` table -- V2 `Instance` has no metrics path at all. Asked
+the owner rather than silently building a second scraping stack or silently
+dropping live metrics from the hero; owner chose reusing the existing
+pipeline unchanged, fed a synthetic per-instance `SourceInfo` (id prefixed
+`instance-`). New `InstanceMetricsPollingService` lives in `Dashboard.Web`,
+not `Dashboard.Infrastructure` where it would naturally sit alongside the
+other V2 hosted services, because of a real layering constraint found while
+placing it: `MetricsHub` lives in `Dashboard.Application`, and
+`Dashboard.Infrastructure` has no project reference to `Dashboard.Application`
+(the dependency runs the other way). `Dashboard.Web`, the composition root,
+is the only project that can see both it and the V2 `AppDbContext`/`Instance`
+entities, so that's where the poller had to go. Periodic rebind (not
+event-driven like the legacy `MetricsPollingService`) since V2 instances
+have no change-notification event to subscribe to.
+
+**Swap ceremony** (`SwapCeremonyDialog.razor`) is one component spanning all
+four doc-described phases (picker -> diff preview -> live progress -> result),
+subscribed to `DeploymentHub` (P10b built the server-side push, no UI had
+ever consumed it until now) via new `deploymenthub_*` JS client functions in
+`hub.js`, same shape as the existing metrics/traffic/logs hub clients.
+
+**Found and fixed a real race condition while E2E-testing the live
+progress** (not caught by manual testing, since clicking through by hand is
+slow enough to never hit it): `DeploymentEventApplier` broadcasts the
+"ready" state event over SignalR *before* it flips the deployment row to
+"active" in the DB (`ApplyStateEventAsync` sends, then separately calls
+`ActivateAndStopPreviousAsync`). The ceremony dialog's own `OnState` handler
+was re-reading the deployment row immediately on receiving "ready" to decide
+success/failure -- a successful swap could render as "Swap failed" if that
+read landed in the gap between the two writes. Fixed by polling briefly
+(`WaitForTerminalStatusAsync`) for the row to actually reach "active" rather
+than trusting a single read; this is a client-side fix, not a change to
+P10b's own broadcast ordering, which is left as-is.
+
+**Found and fixed a second bug while writing the E2E tests for this gap**: a
+real xUnit resource-contention flake, not a product bug -- the new
+real-supervisor E2E collection (`E2EWithSupervisor`) was running in
+parallel with the existing Postgres-only one (`E2E`), both spinning up a
+full `Dashboard.Web` process + Postgres + browser (plus a real supervisor
+container for the new one) at the same time. Fixed with
+`[assembly: CollectionBehavior(DisableTestParallelization = true)]` in a new
+`AssemblyInfo.cs` -- the whole E2E suite still finishes in under 8 minutes
+serialized, and racing two heavyweight stacks against each other bought
+nothing but flakiness.
+
+**`ISwapService.StopAsync`** now returns the supervisor's own
+`SupervisorStopResult` (was `Task`, discarding it) so the hero can show the
+"VRAM released" line from the same round trip Stop already makes, instead of
+a second call. **`ISwapService.RedeployAsync`** (new) replays an arbitrary
+historical deployment row's own frozen `args_snapshot` on its instance --
+unlike `RollbackAsync` (always "the previous" row) or `ForceRedeployAsync`
+(P12, always the current active row), the Deployments page's "[Redeploy
+this]" button needs to pick an arbitrary row by id.
+
+### Files changed
+
+- `src/Dashboard.Infrastructure/Proxy/ModelProxyService.cs`:
+  `BuildInferenceBaseUrl` made `public` (was `private`) so the new metrics
+  poller, in a different project, can reuse the exact same host-derivation
+  logic rather than duplicating it.
+- `src/Dashboard.Web/Metrics/InstanceMetricsPollingService.cs` (new): see
+  above. Lives in `Dashboard.Web`, not `Dashboard.Infrastructure` -- see
+  Deviations for why.
+- `src/Dashboard.Web/Program.cs`: registers the new poller; no other DI
+  changes (the hub routes it needs, `/metrics-hub` and `/deployment-hub`,
+  already existed).
+- `src/Dashboard.Core/Abstractions/ISwapService.cs` /
+  `src/Dashboard.Infrastructure/Persistence/V2/SwapService.cs`:
+  `StopAsync` return type change, `RedeployAsync` addition (both above).
+- `src/Dashboard.Infrastructure/Persistence/V2/DeploymentService.cs`:
+  `ListEventsAsync` added to `IDeploymentService` -- seeds the ceremony's
+  step list when resuming an in-flight or just-finished deployment on page
+  load, before any live SignalR event arrives.
+- `src/Dashboard.Web/Components/Pages/Overview.razor` (rewritten): the new
+  hero -- ready/idle states, recent swaps, metrics below the fold (reusing
+  the existing Chart.js helpers, now fed by the new instance-scoped
+  samples), Stop/Rollback wiring, VRAM re-check/hard-reset affordances.
+- `src/Dashboard.Web/Components/Pages/LegacyOverview.razor` (renamed from
+  `Overview.razor`, route changed to `/legacy-overview`): otherwise
+  untouched.
+- `src/Dashboard.Web/Components/Overview/SwapCeremonyDialog.razor` (new):
+  the full ceremony component described above.
+- `src/Dashboard.Web/Components/Pages/Deployments.razor` (new): table with
+  status/name filters, expandable rows (args_snapshot, failure report, log
+  tail), "[Redeploy this]".
+- `src/Dashboard.Web/wwwroot/js/hub.js`: `deploymenthub_start/join/leave/
+  stop` added, same pattern as the existing metrics/traffic/logs clients.
+- `src/Dashboard.Web/Components/Layout/NavMenu.razor`: "Deployments" link
+  added; "Models" link's old neighbor renamed to "Legacy Overview".
+- `tests/Dashboard.E2E.Tests/AssemblyInfo.cs` (new): disables cross-
+  collection parallelism (see above).
+- `tests/Dashboard.E2E.Tests/SwapCeremonyE2ETests.cs` (new, 9 tests): the
+  full swap-through-the-UI/fake-crash pair, plus the served-name-change
+  acknowledgement panel, Cancel's phase-1/phase-2 labels and outcome,
+  Stop's VRAM-released and VRAM-stuck-warning paths, Rollback + the
+  Deployments page's expandable argv, "[Redeploy this]", and the idle
+  hero's two buttons. Runs against a REAL supervisor container, reusing
+  `SupervisorImageFixture` from `Dashboard.Infrastructure.Tests` via a new
+  project reference (added to `Dashboard.E2E.Tests.csproj`) rather than
+  duplicating that fixture.
+- `tests/Dashboard.Infrastructure.Tests/SupervisorFixture.cs`:
+  `StartContainerAsync` gained an optional `extraEnv` parameter (backward
+  compatible) so a test can start the container with `GPU_BACKEND=fake`.
+- `tests/Dashboard.E2E.Tests/DashboardAppFixture.cs`: `Supervisor__Token`
+  env var now reads `SupervisorImageFixture.Token` instead of a locally
+  made-up string, so this app's calls are accepted by that real container.
+- `src/Dashboard.Web/Components/Pages/Overview.razor`: idle-state branch
+  now also renders `_vramWarning` (was success-message-only) -- the bug
+  described above.
+- 179 Core + 72 Infrastructure + 21 E2E .NET tests (up from 179 + 72 + 12),
+  127 Python tests; `./scripts/gate.sh` green.
+
+Out of scope, not touched: the Servers-page registration flow (P15b),
+Playground/Live Traffic/Instances (P15a), deleting the old Models page.
+
+All remaining gaps closed on request (owner: "let's knock them all out. DoD
+has not been met") with 7 more real-supervisor E2E tests in
+`SwapCeremonyE2ETests.cs` (now 9 tests total in that file, 21 across the
+whole E2E suite, ~8 min serialized). Two more real bugs turned up while
+writing them, both fixed:
+
+- **A resource-contention test flake**, not a product bug: the new
+  `E2EWithSupervisor` collection ran in parallel with the existing `E2E`
+  one, each spinning up a full app + Postgres (+ a real supervisor
+  container for the former) at once. Fixed with
+  `[assembly: CollectionBehavior(DisableTestParallelization = true)]`
+  (`tests/Dashboard.E2E.Tests/AssemblyInfo.cs`, new).
+- **A real UI bug**, found by `Stop_WithTheFakeGpuBackendHoldingVram_...`:
+  `Overview.razor`'s idle-state branch (which Stop always lands on, since
+  it unconditionally transitions the deployment to "stopped" regardless of
+  whether VRAM actually released) only ever rendered `_vramReleasedMessage`
+  -- never `_vramWarning`. A stuck-VRAM warning after Stop was silently
+  dropped the instant the hero flipped to idle. Fixed by adding the same
+  warning block (text + [Re-check] + [Hard reset container]) to the idle
+  branch too.
+
+`SupervisorImageFixture.StartContainerAsync` (in
+`Dashboard.Infrastructure.Tests`) gained an optional `extraEnv` parameter
+(backward compatible, existing callers unaffected) so the new Stop/VRAM
+tests can start a container with `GPU_BACKEND=fake` and write a controlled
+VRAM reading into it via `IContainer.ExecAsync` -- same `FakeBackend`
+(`supervisor/supervisor/gpu_backend.py`) the Python test suite's own
+`test_gpu_release.py` already uses, just reached here through the real
+HTTP/UI path instead of in-process.
+
+The Cancel phase-1/phase-2 test (`Cancel_ShowsPhase1LabelThenPhase2Label_...`)
+needed a genuinely active deployment to swap away from first -- an idle ->
+active swap never emits a "stop" event at all (nothing to stop), so phase 1
+would never be observable against a truly idle instance. The test does a
+real swap to active first, then a second swap into a `--fake-slow-start 8`
+recipe (the `tests/fake-vllm` flag, not a recipe extra-arg that exists on
+the dashboard side already -- same mechanism `fake-crash` uses) to hold
+phase 2 open long enough to assert against.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Drive a swap through the UI end to end; preview shows the full diff; progress steps appear as events arrive (assert order); result screen shows the new model | Yes | `SwapCeremonyE2ETests.FullSwapThroughTheUi_ShowsLiveProgress_AndResultShowsTheNewModel`; diff preview and picker also manually verified via Playwright screenshots (`plan/screenshots/swap_picker.png`, `swap_preview.png`) |
+| Different served name -> acknowledge panel appears, [Swap now] disabled until checked; same served name -> no panel | Yes | `ServedNameChange_ShowsAcknowledgePanel_AndGatesSwapNowUntilChecked` (asserts the panel + disabled button, then checks the box and asserts it's enabled; deliberately stops short of clicking through, since the seeded "active" row isn't something the real supervisor is actually running) |
+| Swap to a `--fake-crash` model -> result shows reason + exit code + log lines; reload and the Deployments row still shows them | Yes | `FakeCrashSwap_ShowsFailureReasonAndExitCode_AndPersistsAfterReload` |
+| Cancel in phase 1 (old model still serving) and phase 2 (instance idle) use the right labels and outcomes | Yes | `Cancel_ShowsPhase1LabelThenPhase2Label_AndLeavesTheInstanceIdle` (polls the Cancel button's own text through both phases of a real in-flight swap, then confirms the idle hero after clicking it) |
+| Stop -> "VRAM released" line; fake GPU backend holding VRAM -> warning + [Re-check] | Yes | `Stop_AfterASuccessfulSwap_ShowsVramReleased`, `Stop_WithTheFakeGpuBackendHoldingVram_ShowsAWarningAndRecheck` (the latter caught the idle-branch rendering bug above) |
+| Rollback replays the previous snapshot; Deployments lists the new row, expanding shows the argv that ran; [Redeploy this] works | Yes | `Rollback_ReplaysThePreviousSnapshot_AndDeploymentsPageShowsItsArgv`, `RedeployThis_FromTheDeploymentsPage_StartsANewDeployment` |
+| Idle hero offers both buttons and neither dead-ends | Yes | `IdleHero_OffersBothButtons_AndNeitherDeadEnds` (opens and backs out of the picker, then builds real "last working" history and completes a redeploy through it) |

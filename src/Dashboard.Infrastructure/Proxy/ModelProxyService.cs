@@ -214,8 +214,11 @@ public sealed class ModelProxyService : IModelProxyService
     /// (the supervisor and vLLM always run in the same container, doc 5, so an
     /// already-registered instance doesn't need Host set too). Either way, always the
     /// instance's own Port, never whatever port AdminUrl itself uses. Returns null when
-    /// there's no host to derive from either way -- the caller's job to 502.</summary>
-    private static string? BuildInferenceBaseUrl(Instance instance)
+    /// there's no host to derive from either way -- the caller's job to 502.
+    /// Public (not private): P14's instance metrics poller, in Dashboard.Web,
+    /// reuses this exact derivation rather than duplicating it, since it needs
+    /// the same URL to scrape /metrics from.</summary>
+    public static string? BuildInferenceBaseUrl(Instance instance)
     {
         if (!string.IsNullOrWhiteSpace(instance.Host))
             return $"http://{instance.Host}:{instance.Port}";

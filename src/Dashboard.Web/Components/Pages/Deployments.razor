@@ -1,0 +1,188 @@
+@page "/deployments"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Core.Abstractions
+@using Dashboard.Infrastructure.Persistence.V2
+@inject IServerService Servers
+@inject IInstanceService Instances
+@inject IModelService Models
+@inject IRecipeService Recipes
+@inject IDeploymentService DeploymentsSvc
+@inject ISwapService Swap
+@inject Dashboard.Web.Components.Shared.IDialogService Dialogs
+
+<PageTitle>Deployments — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Deployments</h1>
+
+@if (_loading)
+{
+    <p class="text-muted">Loading…</p>
+}
+else if (_instance is null)
+{
+    <div class="card"><div class="card-body">
+        <p class="text-muted mb-0">No instance configured yet.</p>
+    </div></div>
+}
+else
+{
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger py-2">@_error</div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">Status</label>
+                    <select class="form-select" @bind="_statusFilter">
+                        <option value="all">All</option>
+                        <option value="active">Active</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Search (model/recipe name)</label>
+                    <input class="form-control" @bind="_nameSearch" @bind:event="oninput" placeholder="Filter by name…" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <table class="table table-sm">
+                <thead><tr><th>#</th><th>Recipe</th><th>Model</th><th>Status</th><th>Started</th><th>Duration</th><th>Stopped by</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var d in Filtered())
+                    {
+                        var failed = d.Status is "failed" || d.FailureReason is not null;
+                        <tr class="@(failed ? "deployment-row-failed" : "")" @onclick="@(() => ToggleExpand(d.Id))" style="cursor:pointer;">
+                            <td>@d.Id</td>
+                            <td>@NameFor(d.RecipeId, _recipes)</td>
+                            <td>@NameFor(d.ModelId, _models)</td>
+                            <td>@d.Status</td>
+                            <td>@(d.StartedAt?.ToLocalTime().ToString("MMM d, HH:mm") ?? "—")</td>
+                            <td>@DurationText(d)</td>
+                            <td>@(d.StopReason ?? "—")</td>
+                            <td class="text-end">
+                                <button class="btn btn-outline btn-sm" @onclick="@(() => RedeployAsync(d.Id))" @onclick:stopPropagation="true">Redeploy this</button>
+                            </td>
+                        </tr>
+                        @if (_expandedId == d.Id)
+                        {
+                            <tr>
+                                <td colspan="8">
+                                    <div class="small">
+                                        <div><strong>args_snapshot:</strong> <code>@d.ArgsSnapshot</code></div>
+                                        @if (d.FailureReason is not null)
+                                        {
+                                            <div class="mt-1"><strong>Failure:</strong> @d.FailureReason (exit code @(d.ExitCode?.ToString() ?? "n/a"))</div>
+                                        }
+                                        @if (!string.IsNullOrEmpty(d.LogTail))
+                                        {
+                                            <details class="mt-1">
+                                                <summary style="cursor:pointer">Log tail</summary>
+                                                <pre class="small">@d.LogTail</pre>
+                                            </details>
+                                        }
+                                        <div class="mt-1"><a href="@("logs")">View full log on the Logs page →</a></div>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                    @if (Filtered().Count == 0)
+                    {
+                        <tr><td colspan="8" class="text-muted">No deployments match this filter.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private string? _error;
+
+    private Instance? _instance;
+    private List<Model> _models = new();
+    private List<Recipe> _recipes = new();
+    private List<Deployment> _deployments = new();
+
+    private string _statusFilter = "all";
+    private string _nameSearch = "";
+    private int? _expandedId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var servers = (await Servers.ListAsync()).ToList();
+            if (servers.Count > 0)
+            {
+                var instances = await Instances.ListByServerAsync(servers[0].Id);
+                _instance = instances.FirstOrDefault();
+                if (_instance is not null)
+                {
+                    _models = (await Models.ListByServerAsync(servers[0].Id)).ToList();
+                    _recipes = (await Recipes.ListByServerAsync(servers[0].Id)).ToList();
+                    _deployments = (await DeploymentsSvc.ListByInstanceAsync(_instance.Id)).ToList();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not load: " + ex.Message;
+        }
+        _loading = false;
+    }
+
+    private List<Deployment> Filtered()
+    {
+        IEnumerable<Deployment> q = _deployments;
+        if (_statusFilter == "active")
+            q = q.Where(d => d.Status == "active");
+        else if (_statusFilter == "failed")
+            q = q.Where(d => d.Status == "failed" || d.FailureReason is not null);
+
+        if (!string.IsNullOrWhiteSpace(_nameSearch))
+        {
+            var needle = _nameSearch.Trim();
+            q = q.Where(d =>
+                NameFor(d.ModelId, _models).Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+                NameFor(d.RecipeId, _recipes).Contains(needle, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return q.ToList();
+    }
+
+    private static string NameFor(int id, List<Model> models) => models.FirstOrDefault(m => m.Id == id)?.Name ?? $"#{id}";
+    private static string NameFor(int id, List<Recipe> recipes) => recipes.FirstOrDefault(r => r.Id == id)?.Name ?? $"#{id}";
+
+    private static string DurationText(Deployment d)
+    {
+        if (d.StartedAt is not { } started) return "—";
+        var end = d.StoppedAt ?? DateTime.UtcNow;
+        var span = end - started;
+        return span.TotalHours >= 1 ? $"{(int)span.TotalHours}h {span.Minutes}m" : $"{span.Minutes}m {span.Seconds}s";
+    }
+
+    private void ToggleExpand(int id) => _expandedId = _expandedId == id ? null : id;
+
+    private async Task RedeployAsync(int deploymentId)
+    {
+        try
+        {
+            await Swap.RedeployAsync(deploymentId);
+            await Dialogs.AlertAsync("Redeploy started -- check the Overview page for live progress.");
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not redeploy: " + ex.Message);
+        }
+    }
+}

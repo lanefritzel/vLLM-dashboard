@@ -167,6 +167,7 @@ builder.Services.AddSingleton<Dashboard.Core.Abstractions.IMinimalDockerClient, 
 // polling and rollup loops that depend on the schema.
 builder.Services.AddHostedService<Dashboard.Web.DbInitializerHostedService>();
 builder.Services.AddHostedService<MetricsPollingService>();
+builder.Services.AddHostedService<Dashboard.Web.Metrics.InstanceMetricsPollingService>();
 builder.Services.AddHostedService<RollupService>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>

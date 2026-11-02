@@ -42,6 +42,12 @@ public interface IDeploymentService
     /// (one_active_per_instance) is checked per-statement, not deferred;
     /// activating first would violate it while the old row is still active.</summary>
     Task<Deployment> ActivateAndStopPreviousAsync(int deploymentId, string previousStopReason, CancellationToken ct = default);
+
+    /// <summary>Every state event recorded for a deployment, oldest first (P14) --
+    /// seeds the swap ceremony's step list on page load/reload, before any live
+    /// SignalR event arrives. The events themselves are only ever written by
+    /// <see cref="IDeploymentEventApplier"/>; this is a plain read.</summary>
+    Task<IReadOnlyList<DeploymentEvent>> ListEventsAsync(int deploymentId, CancellationToken ct = default);
 }
 
 /// <summary>CRUD (create + status transitions only) for the new-schema
@@ -179,5 +185,15 @@ public sealed class DeploymentService : IDeploymentService
 
         await transaction.CommitAsync(ct);
         return deployment;
+    }
+
+    public async Task<IReadOnlyList<DeploymentEvent>> ListEventsAsync(int deploymentId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await db.DeploymentEventsV2
+            .Where(e => e.DeploymentId == deploymentId)
+            .OrderBy(e => e.Seq)
+            .ToListAsync(ct);
     }
 }

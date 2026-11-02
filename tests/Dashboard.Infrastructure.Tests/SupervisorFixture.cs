@@ -36,15 +36,24 @@ public sealed class SupervisorImageFixture : IAsyncLifetime
             await _image.DisposeAsync();
     }
 
-    public async Task<IContainer> StartContainerAsync()
+    /// <summary><paramref name="extraEnv"/> (P14) lets a caller select e.g.
+    /// <c>GPU_BACKEND=fake</c> + <c>GPU_BACKEND_FAKE_PATH</c> to control what
+    /// <c>/admin/gpu</c> reports -- used by the Stop/VRAM-release E2E tests,
+    /// which need to simulate VRAM staying held after Stop without a real GPU.</summary>
+    public async Task<IContainer> StartContainerAsync(IReadOnlyDictionary<string, string>? extraEnv = null)
     {
-        var container = new ContainerBuilder(_image!)
+        var builder = new ContainerBuilder(_image!)
             .WithPortBinding(AdminPort, true)
             .WithEnvironment("SUPERVISOR_TOKEN", Token)
             .WithEnvironment("ADMIN_PORT", AdminPort.ToString())
             .WithEnvironment("AUTO_START", "off")
-            .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(AdminPort).ForPath("/admin/health")))
-            .Build();
+            .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(AdminPort).ForPath("/admin/health")));
+        if (extraEnv is not null)
+        {
+            foreach (var (key, value) in extraEnv)
+                builder = builder.WithEnvironment(key, value);
+        }
+        var container = builder.Build();
         await container.StartAsync();
         return container;
     }

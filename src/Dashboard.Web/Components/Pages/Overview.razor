@@ -1,311 +1,261 @@
 @page "/"
 @rendermode InteractiveServer
 @attribute [Authorize]
-@implements IDisposable
+@implements IAsyncDisposable
 @using System.Text.Json
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
+@using Dashboard.Core.Supervisor
+@using Dashboard.Infrastructure.Persistence.V2
+@using Dashboard.Web.Components.Overview
 @using Microsoft.JSInterop
+@inject IServerService Servers
+@inject IInstanceService Instances
+@inject IModelService Models
+@inject IRecipeService Recipes
+@inject IDeploymentService Deployments
+@inject ISwapService Swap
+@inject ISupervisorClient SupervisorClient
+@inject ISupervisorTokenProvider TokenProvider
 @inject IJSRuntime JS
-@inject ISampleStore Samples
-@inject ISourceCatalog Sources
-@inject IMetricsHistory History
-@inject SourceSelection Selection
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
 
 <h1 class="page-title">Overview</h1>
 
-@if (SelectedSource is null)
+@if (_loading)
 {
-    <div class="card">
-        <div class="card-body">
-            <p class="text-muted mb-0">
-                No source is selected. Add one on the <a href="settings">Settings</a> page.
-            </p>
-        </div>
-    </div>
+    <p class="text-muted">Loading…</p>
 }
-
-@if (SelectedSource is { } src)
+else if (_instance is null)
 {
-    @if (Latest is { Up: false } down)
+    <div class="card"><div class="card-body">
+        <p class="text-muted mb-0">No instance configured yet. Register one on the Servers page.</p>
+    </div></div>
+}
+else
+{
+    @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="card status-card status-down mb-3">
-            <div class="card-body d-flex align-items-center gap-3 py-2">
-                <span class="dot dot-down"></span>
-                <div class="flex-grow-1">
-                    <strong>@src.Label — unreachable</strong>
-                    <div class="text-muted small">@down.Error</div>
-                </div>
-            </div>
-        </div>
-    }
-    else if (Latest is null && !Loading)
-    {
-        <div class="card status-card status-wait mb-3">
-            <div class="card-body d-flex align-items-center gap-3 py-2">
-                <span class="dot dot-off"></span>
-                <div class="text-muted">Waiting for the first sample from @src.Label…</div>
-            </div>
-        </div>
+        <div class="alert alert-danger py-2">@_error</div>
     }
 
-    @if (src.Type == SourceType.Ollama)
+    @if (_pendingDeployment is not null && !_swapOpen)
     {
-        <div class="row g-3">
-            <div class="col-lg-5">
-                <div class="card h-100">
-                    <div class="card-body">
-                        <div class="card-title mb-2">Loaded models</div>
-                        @if (Latest?.LoadedModels is { } models && models.Count > 0)
-                        {
-                            <div class="model-chips">
-                                @foreach (var m in models)
-                                {
-                                    <span class="chip">@m</span>
-                                }
-                            </div>
-                        }
-                        else
-                        {
-                            <span class="text-muted">None loaded</span>
-                        }
-                    </div>
-                </div>
+        <div class="card status-card mb-3">
+            <div class="card-body d-flex align-items-center gap-3 py-2">
+                <span class="dot dot-wait"></span>
+                <div class="flex-grow-1">A swap is in progress on this instance.</div>
+                <button class="btn btn-outline btn-sm" @onclick="@(() => OpenCeremony(_pendingDeployment.Id))">View progress</button>
             </div>
-            <div class="col-lg-3">
-                <div class="card h-100">
-                    <div class="card-body py-3">
-                        <div class="kpi-label">VRAM (loaded)</div>
-                        <div class="kpi-value">@FmtBytes(Latest?.TotalVramBytes)</div>
-                    </div>
+        </div>
+    }
+    else if (_activeDeployment is not null)
+    {
+        <div class="card status-card status-up mb-3">
+            <div class="card-body py-3">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span class="dot dot-up"></span>
+                    <strong>Ready</strong>
+                    <span class="text-muted">· Serving: @(_activeModel?.Name ?? "—")</span>
+                    <span class="text-muted">· recipe: @(_activeRecipe?.Name ?? "—")</span>
+                    <span class="text-muted">· @_instance.Label</span>
                 </div>
-            </div>
-            <div class="col-lg-4">
-                <div class="card h-100">
-                    <div class="card-body py-3">
-                        <div class="kpi-label">Catalog</div>
-                        <div class="kpi-value">@(Latest?.CatalogCount?.ToString() ?? "—") models</div>
-                        @if (!string.IsNullOrEmpty(Latest?.ModelName))
-                        {
-                            <div class="kpi-label mt-2">Active</div>
-                            <div class="small">@Latest.ModelName</div>
-                        }
-                    </div>
+                <div class="text-muted small mt-1">
+                    proxy: <code>/proxy/@(_instance.ProxySlug)/v1</code>
+                    · served as "@(_activeRecipe?.ServedModelName ?? "main")"
+                    · Uptime @UptimeText()
+                    · VRAM @VramText()
+                    · @ReqPerSecText() req/s
                 </div>
+                <div class="mt-2">
+                    <button class="btn btn-primary btn-sm" @onclick="@(() => OpenCeremony(null))">Swap</button>
+                    <a class="btn btn-outline btn-sm" href="@("/proxy/" + _instance.ProxySlug + "/v1")" target="_blank">Playground</a>
+                    <button class="btn btn-outline btn-sm" @onclick="@StopAsync">Stop</button>
+                    <button class="btn btn-outline btn-sm" disabled="@(!_canRollback)" @onclick="@(() => OpenCeremony(null, rollback: true))">Rollback</button>
+                </div>
+
+                @if (_vramWarning is not null)
+                {
+                    <div class="alert alert-warning py-2 mt-2">
+                        @_vramWarning
+                        <div class="mt-1">
+                            <button class="btn btn-outline btn-sm" @onclick="@RecheckVramAsync">Re-check</button>
+                            <button class="btn btn-outline btn-sm" @onclick="@HardResetAsync">Hard reset container</button>
+                        </div>
+                    </div>
+                }
+                @if (_vramReleasedMessage is not null)
+                {
+                    <div class="alert alert-success py-2 mt-2">@_vramReleasedMessage</div>
+                }
             </div>
         </div>
     }
     else
     {
-        <div class="row g-3 mb-3">
-            <div class="col-6 col-lg-2">
-                <div class="card kpi-card h-100">
-                    <div class="card-body py-2">
-                        <div class="kpi-label">Running</div>
-                        <div class="kpi-value">@Fmt(Latest?.Running)</div>
-                    </div>
+        <div class="card status-card mb-3">
+            <div class="card-body py-3">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="dot dot-off"></span>
+                    <strong>No active model — instance is idle</strong>
                 </div>
-            </div>
-            <div class="col-6 col-lg-2">
-                <div class="card kpi-card h-100">
-                    <div class="card-body py-2">
-                        <div class="kpi-label">Waiting</div>
-                        <div class="kpi-value">@Fmt(Latest?.Waiting)</div>
+                @if (_lastFailed is not null)
+                {
+                    <div class="alert alert-danger py-2 mt-2">
+                        ✗ Last run failed — @(_lastFailed.FailureReason ?? "unknown reason") (code @(_lastFailed.ExitCode?.ToString() ?? "n/a"))
                     </div>
+                }
+                <div class="mt-2">
+                    @if (_lastWorking is not null)
+                    {
+                        <button class="btn btn-primary btn-sm" @onclick="@RedeployLastWorkingAsync">
+                            Re-deploy last working: @(_lastWorkingModelName) · @(_lastWorkingRecipeName)
+                        </button>
+                    }
+                    <button class="btn btn-outline btn-sm" @onclick="@(() => OpenCeremony(null))">Pick a recipe</button>
                 </div>
-            </div>
-            <div class="col-6 col-lg-2">
-                <div class="card kpi-card h-100">
-                    <div class="card-body py-2">
-                        <div class="kpi-label">KV cache</div>
-                        <div class="kpi-value">@KvText</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-lg-3">
-                <div class="card kpi-card h-100">
-                    <div class="card-body py-2">
-                        <div class="kpi-label">Generation</div>
-                        <div class="d-flex align-items-end justify-content-between gap-2">
-                            <div>
-                                <div class="kpi-value">@Fmt(Latest?.GenTps)</div>
-                                <div class="kpi-unit">tok/s</div>
-                            </div>
-                            <div class="gen-stats">
-                                <div title="Peak generation throughput in the last 30 days">▲ @Fmt(_genStats?.Peak)</div>
-                                <div title="Average generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Avg) avg</div>
-                                <div title="Lowest generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Low) low</div>
-                                <a href="javascript:void(0)" class="gen-stats-reset" title="Delete generation history and reset these stats" @onclick="ResetGenStatsAsync">reset</a>
-                            </div>
+
+                @if (_vramWarning is not null)
+                {
+                    <div class="alert alert-warning py-2 mt-2">
+                        @_vramWarning
+                        <div class="mt-1">
+                            <button class="btn btn-outline btn-sm" @onclick="@RecheckVramAsync">Re-check</button>
+                            <button class="btn btn-outline btn-sm" @onclick="@HardResetAsync">Hard reset container</button>
                         </div>
                     </div>
-                </div>
-            </div>
-            <div class="col-6 col-lg-2">
-                <div class="card kpi-card h-100">
-                    <div class="card-body py-2">
-                        <div class="kpi-label">Requests</div>
-                        <div class="kpi-value">@Fmt(Latest?.ReqTps)</div>
-                        <div class="kpi-unit">req/s</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-lg-2">
-                <div class="card kpi-card h-100">
-                    <div class="card-body py-2">
-                        <div class="kpi-label">TTFT avg</div>
-                        <div class="kpi-value">@FmtSec(Latest?.TtftAvgSec)</div>
-                        <div class="kpi-unit">s</div>
-                    </div>
-                </div>
+                }
+                @if (_vramReleasedMessage is not null)
+                {
+                    <div class="alert alert-success py-2 mt-2">@_vramReleasedMessage</div>
+                }
             </div>
         </div>
+    }
 
-        <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-            <div class="card-title">Live metrics — @(Latest?.ModelName ?? "unknown model")</div>
-            <div class="d-flex align-items-center gap-2">
-                <span class="text-muted small">Poll</span>
-                <select class="form-select window-select" @onchange="@OnPollIntervalChanged" title="Polling interval — how often the dashboard scrapes this source">
-                    <option value="1" selected="@(src.ScrapeIntervalSeconds == 1)">1 s</option>
-                    <option value="2" selected="@(src.ScrapeIntervalSeconds == 2)">2 s</option>
-                    <option value="5" selected="@(src.ScrapeIntervalSeconds == 5)">5 s</option>
-                    <option value="10" selected="@(src.ScrapeIntervalSeconds == 10)">10 s</option>
-                    <option value="15" selected="@(src.ScrapeIntervalSeconds == 15)">15 s</option>
-                    <option value="30" selected="@(src.ScrapeIntervalSeconds == 30)">30 s</option>
-                    <option value="60" selected="@(src.ScrapeIntervalSeconds == 60)">60 s</option>
-                </select>
-                <span class="text-muted small">Window</span>
-                <select class="form-select window-select" @onchange="@OnWindowChanged" title="Chart window">
-                    <option value="1" selected="@(WindowMinutes == 1)">1 min</option>
-                    <option value="5" selected="@(WindowMinutes == 5)">5 min</option>
-                    <option value="30" selected="@(WindowMinutes == 30)">30 min</option>
-                </select>
+    @if (_recentDeployments.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="card-title mb-2">Recent swaps</div>
+                <table class="table table-sm">
+                    <thead><tr><th>Model</th><th>Recipe</th><th>Status</th><th>Stopped by</th><th>When</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in _recentDeployments)
+                        {
+                            <tr>
+                                <td>@NameFor(d.ModelId, _models)</td>
+                                <td>@NameFor(d.RecipeId, _recipes)</td>
+                                <td>@d.Status</td>
+                                <td>@(d.StopReason ?? "—")</td>
+                                <td>@(d.StoppedAt ?? d.CreatedAt).ToLocalTime().ToString("MMM d, HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
             </div>
         </div>
+    }
 
+    <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+        <div class="card-title">Live metrics</div>
+        <div class="d-flex align-items-center gap-2">
+            <span class="text-muted small">Window</span>
+            <select class="form-select window-select" @onchange="@OnWindowChanged">
+                <option value="1" selected="@(_windowMinutes == 1)">1 min</option>
+                <option value="5" selected="@(_windowMinutes == 5)">5 min</option>
+                <option value="30" selected="@(_windowMinutes == 30)">30 min</option>
+            </select>
+        </div>
+    </div>
+
+    @if (_latestSample is null)
+    {
+        <div class="card"><div class="card-body text-muted">No traffic in this window.</div></div>
+    }
+    else
+    {
         <div class="row g-3">
             <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-body">
-                        <div class="card-title d-flex align-items-center flex-wrap gap-2">
-                            <span>Throughput (tok/s)</span>
-                            <div class="series-toggles">
-                                <label class="series-toggle @(_showGen ? "" : "off")">
-                                    <input type="checkbox" checked="@_showGen" @onchange="OnToggleGen" />
-                                    <span class="dot" style="background:#4c8dff"></span> generation
-                                </label>
-                                <label class="series-toggle @(_showPrompt ? "" : "off")">
-                                    <input type="checkbox" checked="@_showPrompt" @onchange="OnTogglePrompt" />
-                                    <span class="dot" style="background:#31c06b"></span> prompt
-                                </label>
-                            </div>
-                        </div>
-                        <div class="chart-wrap"><canvas id="ov-throughput"></canvas></div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-body">
-                        <div class="card-title">KV cache usage (%)</div>
-                        <div class="chart-wrap"><canvas id="ov-kv"></canvas></div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-body">
-                        <div class="card-title">Scheduler</div>
-                        <div class="chart-wrap"><canvas id="ov-scheduler"></canvas></div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-body">
-                        <div class="card-title">Latency (s)</div>
-                        <div class="chart-wrap"><canvas id="ov-latency"></canvas></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row g-3 mt-0 bonus-strip">
-            <div class="col-6 col-lg-3">
-                <div class="card kpi-card"><div class="card-body py-2">
-                    <div class="kpi-label">Prefix cache hit</div>
-                    <div class="kpi-value small">@PctText(Latest?.PrefixHitRatio)</div>
+                <div class="card h-100"><div class="card-body">
+                    <div class="card-title">Throughput (tok/s)</div>
+                    <div class="chart-wrap"><canvas id="ov2-throughput"></canvas></div>
                 </div></div>
             </div>
-            <div class="col-6 col-lg-3">
-                <div class="card kpi-card"><div class="card-body py-2">
-                    <div class="kpi-label">Preemptions (total)</div>
-                    <div class="kpi-value small">@(Latest?.PreemptionsTotal?.ToString() ?? "—")</div>
-                </div></div>
-            </div>
-            <div class="col-6 col-lg-3">
-                <div class="card kpi-card"><div class="card-body py-2">
-                    <div class="kpi-label">Queue avg</div>
-                    <div class="kpi-value small">@FmtSec(Latest?.QueueAvgSec) s</div>
-                </div></div>
-            </div>
-            <div class="col-6 col-lg-3">
-                <div class="card kpi-card"><div class="card-body py-2">
-                    <div class="kpi-label">E2E avg</div>
-                    <div class="kpi-value small">@FmtSec(Latest?.E2eAvgSec) s</div>
+            <div class="col-lg-6">
+                <div class="card h-100"><div class="card-body">
+                    <div class="card-title">KV cache usage (%)</div>
+                    <div class="chart-wrap"><canvas id="ov2-kv"></canvas></div>
                 </div></div>
             </div>
         </div>
     }
 }
 
+@if (_swapOpen && _instance is not null)
+{
+    <SwapCeremonyDialog Instance="@_instance" CurrentModel="@_activeModel" CurrentRecipe="@_activeRecipe"
+                         Models_="@_models" Recipes_="@_recipes" ResumeDeploymentId="@_resumeDeploymentId"
+                         OnClosed="@CloseCeremonyAsync" OnDeploymentSettled="@RefreshDeploymentStateAsync" />
+}
+
 @code {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    private readonly object _lock = new();
+    private bool _loading = true;
+    private string? _error;
+
+    private List<Server> _servers = new();
+    private Instance? _instance;
+    private List<Model> _models = new();
+    private List<Recipe> _recipes = new();
+    private Deployment? _activeDeployment;
+    private Deployment? _pendingDeployment;
+    private Model? _activeModel;
+    private Recipe? _activeRecipe;
+    private List<Deployment> _recentDeployments = new();
+    private Deployment? _lastFailed;
+    private Deployment? _lastWorking;
+    private string _lastWorkingModelName = "";
+    private string _lastWorkingRecipeName = "";
+    private bool _canRollback;
+
+    private bool _swapOpen;
+    private int? _resumeDeploymentId;
+
+    private string? _vramWarning;
+    private string? _vramReleasedMessage;
+    private SupervisorGpuInfo? _gpuInfo;
+
     private DotNetObjectReference<Overview>? _receiver;
-    private List<SourceInfo> _all = new();
-    private MetricsSample? _latest;
-    private int _windowMinutes = 5;
-    private string? _chartKey;
     private bool _hubStarted;
     private bool _jsReady;
-    private bool _loading = true;
-    private bool _disposed;
-    private bool _showGen = true;
-    private bool _showPrompt = false;
-
-    private static readonly TimeSpan GenStatsWindow = TimeSpan.FromDays(30);
-    private GenerationThroughputStats? _genStats;
-    private DateTime _genStatsLastRefresh = DateTime.MinValue;
-
-    private SourceInfo? SelectedSource =>
-        _all.FirstOrDefault(s => s.Id == Selection.CurrentSourceId) ?? _all.FirstOrDefault();
-
-    private MetricsSample? Latest
-    {
-        get { lock (_lock) return _latest; }
-    }
-
-    private int WindowMinutes => _windowMinutes;
-    private bool Loading => _loading;
-    private string KvText => Latest?.KvPct is { } k ? k.ToString("0.#") + "%" : "—";
-    private string PctText(double? v) => v is null ? "—" : (v.Value * 100).ToString("0.#") + "%";
+    private int _windowMinutes = 5;
+    private string? _chartKey;
+    private MetricsSample? _latestSample;
+    private string? _hubJoinedSourceId;
 
     protected override async Task OnInitializedAsync()
     {
         _receiver = DotNetObjectReference.Create(this);
-        Selection.Changed += OnSelectionChanged;
-        // No JS here: this also runs during prerendering, where interop is unavailable.
-        await ReloadSourcesAsync(interactive: false);
+        try
+        {
+            _servers = (await Servers.ListAsync()).ToList();
+            if (_servers.Count > 0)
+                await LoadInstanceScopedDataAsync(_servers[0].Id);
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not load: " + ex.Message;
+        }
+        _loading = false;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_disposed || SelectedSource is null) return;
+        if (_instance is null) return;
         try
         {
             if (!_hubStarted)
@@ -314,312 +264,274 @@
                 _hubStarted = true;
             }
             _jsReady = true;
-            await EnsureSourceAsync();
+            await EnsureChartsAsync();
         }
-        catch (Exception)
+        catch
         {
-            // JS not ready yet (static prerender pass) — retry on the next render.
+            // JS not ready yet (static prerender pass) -- retried on the next render.
         }
+    }
+
+    private async Task LoadInstanceScopedDataAsync(int serverId)
+    {
+        var instances = await Instances.ListByServerAsync(serverId);
+        _instance = instances.FirstOrDefault();
+        if (_instance is null) return;
+
+        _models = (await Models.ListByServerAsync(serverId)).ToList();
+        _recipes = (await Recipes.ListByServerAsync(serverId)).ToList();
+
+        await RefreshDeploymentStateAsync();
+    }
+
+    private async Task RefreshDeploymentStateAsync()
+    {
+        if (_instance is null) return;
+        _activeDeployment = await Deployments.GetActiveAsync(_instance.Id);
+        _pendingDeployment = await Deployments.GetPendingAsync(_instance.Id);
+
+        _activeModel = _activeDeployment is null ? null : _models.FirstOrDefault(m => m.Id == _activeDeployment.ModelId);
+        _activeRecipe = _activeDeployment is null ? null : _recipes.FirstOrDefault(r => r.Id == _activeDeployment.RecipeId);
+
+        var history = (await Deployments.ListByInstanceAsync(_instance.Id)).ToList();
+        _recentDeployments = history.Where(d => d.Id != _activeDeployment?.Id && d.Id != _pendingDeployment?.Id).Take(5).ToList();
+
+        _canRollback = history.Any(d => d.Id != _activeDeployment?.Id && d.Status == "stopped");
+
+        if (_activeDeployment is null && _pendingDeployment is null)
+        {
+            var last = history.FirstOrDefault();
+            _lastFailed = last is { Status: "stopped" or "failed" } && last.FailureReason is not null ? last : null;
+            _lastWorking = history.FirstOrDefault(d => d.Status == "stopped" && d.FailureReason is null)
+                ?? history.FirstOrDefault(d => d.FailureReason is null);
+            if (_lastWorking is not null)
+            {
+                _lastWorkingModelName = NameFor(_lastWorking.ModelId, _models);
+                _lastWorkingRecipeName = NameFor(_lastWorking.RecipeId, _recipes);
+            }
+        }
+        else
+        {
+            _lastFailed = null;
+            _lastWorking = null;
+        }
+
+        await RefreshGpuAsync();
+        StateHasChanged();
+    }
+
+    private async Task RefreshGpuAsync()
+    {
+        if (_instance?.AdminUrl is null) { _gpuInfo = null; return; }
+        var token = TokenProvider.GetToken(_instance.Id);
+        if (token is null) { _gpuInfo = null; return; }
+        try
+        {
+            _gpuInfo = await SupervisorClient.GetGpuAsync(_instance.AdminUrl, token);
+        }
+        catch
+        {
+            _gpuInfo = null;
+        }
+    }
+
+    private static string NameFor(int id, List<Model> models) => models.FirstOrDefault(m => m.Id == id)?.Name ?? $"#{id}";
+    private static string NameFor(int id, List<Recipe> recipes) => recipes.FirstOrDefault(r => r.Id == id)?.Name ?? $"#{id}";
+
+    private string UptimeText()
+    {
+        if (_activeDeployment?.StartedAt is not { } started) return "—";
+        var span = DateTime.UtcNow - started;
+        return span.TotalHours >= 1 ? $"{(int)span.TotalHours}h {span.Minutes}m" : $"{span.Minutes}m {span.Seconds}s";
+    }
+
+    private string VramText() => _gpuInfo is { TotalMb: { } total and > 0, UsedMb: { } used }
+        ? $"{(used * 100.0 / total):0}%"
+        : "n/a";
+
+    private string ReqPerSecText() => _latestSample?.ReqTps is { } v ? v.ToString("0.#") : "—";
+
+    private void OpenCeremony(int? resumeDeploymentId, bool rollback = false)
+    {
+        if (rollback)
+        {
+            _ = RollbackDirectAsync();
+            return;
+        }
+        _resumeDeploymentId = resumeDeploymentId;
+        _swapOpen = true;
+    }
+
+    private async Task RollbackDirectAsync()
+    {
+        try
+        {
+            var result = await Swap.RollbackAsync(_instance!.Id);
+            _resumeDeploymentId = result.DeploymentId;
+            _swapOpen = true;
+        }
+        catch (Exception ex)
+        {
+            _error = "Rollback failed: " + ex.Message;
+        }
+    }
+
+    private async Task RedeployLastWorkingAsync()
+    {
+        if (_lastWorking is null || _instance is null) return;
+        try
+        {
+            var result = await Swap.SwapAsync(_instance.Id, _lastWorking.ModelId, _lastWorking.RecipeId, acknowledgeServedNameChange: true);
+            _resumeDeploymentId = result.DeploymentId;
+            _swapOpen = true;
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not re-deploy: " + ex.Message;
+        }
+    }
+
+    private async Task CloseCeremonyAsync()
+    {
+        _swapOpen = false;
+        _resumeDeploymentId = null;
+        await RefreshDeploymentStateAsync();
+    }
+
+    private async Task StopAsync()
+    {
+        if (_instance is null) return;
+        try
+        {
+            var result = await Swap.StopAsync(_instance.Id);
+            if (result.Vram.Released)
+            {
+                _vramWarning = null;
+                _vramReleasedMessage = $"VRAM released: {result.Vram.UsedMb ?? 0} / {result.Vram.TotalMb ?? 0} MB used ✓";
+            }
+            else
+            {
+                _vramReleasedMessage = null;
+                _vramWarning = $"VRAM may not be fully released: {result.Vram.UsedMb ?? 0} / {result.Vram.TotalMb ?? 0} MB still used.";
+            }
+            await RefreshDeploymentStateAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "Stop failed: " + ex.Message;
+        }
+    }
+
+    private async Task RecheckVramAsync()
+    {
+        await RefreshGpuAsync();
+        if (_gpuInfo is { UsedMb: { } used, TotalMb: { } total })
+        {
+            if (used <= 0)
+            {
+                _vramWarning = null;
+                _vramReleasedMessage = $"VRAM released: {used} / {total} MB used ✓";
+            }
+            else
+            {
+                _vramWarning = $"VRAM may not be fully released: {used} / {total} MB still used.";
+            }
+        }
+        StateHasChanged();
+    }
+
+    private async Task HardResetAsync()
+    {
+        if (_instance?.ContainerName is null)
+        {
+            await Dialogs.AlertAsync("This instance has no container name recorded -- hard reset isn't available yet.");
+            return;
+        }
+        var confirmed = await Dialogs.ConfirmAsync(
+            "This forcibly restarts the instance's container, dropping any in-flight requests. Continue?",
+            title: "Hard reset container?", confirmText: "Hard reset");
+        if (!confirmed) return;
+        // Deliberately not wired to a live Docker host in this phase -- see
+        // PROGRESS.md / testing-reference.md for why (same standing rule P12 hit).
+        await Dialogs.AlertAsync("Hard reset is not wired to a live Docker host in this build.");
     }
 
     [JSInvokable]
     public Task OnSample(string json) => InvokeAsync(async () =>
     {
-        if (_disposed || string.IsNullOrWhiteSpace(json)) return;
-        if (SelectedSource is null) return;
-        MetricsSample? s = null;
+        if (string.IsNullOrWhiteSpace(json) || _instance is null) return;
+        MetricsSample? s;
         try { s = JsonSerializer.Deserialize<MetricsSample>(json, JsonOpts); }
         catch { return; }
-        if (s is null || s.SourceId != SelectedSource.Id) return;
+        if (s is null || s.SourceId != Dashboard.Web.Metrics.InstanceMetricsPollingService.SourceIdFor(_instance.Id)) return;
 
-        lock (_lock) _latest = s;
-        await PushToCharts(s);
-
-        // Peak/low only ever need a running max/min against the live value — cheap
-        // and instant, no need to wait for the periodic DB refresh below for those.
-        // Avg can't be maintained incrementally without also removing samples that
-        // age out of the rolling window, so it's just re-queried periodically instead
-        // (only while samples are actually arriving — nothing changes while idle).
-        if (s.GenTps is > 0)
-        {
-            _genStats = _genStats is null
-                ? new GenerationThroughputStats { Peak = s.GenTps.Value, Avg = s.GenTps.Value, Low = s.GenTps.Value }
-                : _genStats with { Peak = Math.Max(_genStats.Peak, s.GenTps.Value), Low = Math.Min(_genStats.Low, s.GenTps.Value) };
-            await RefreshGenStatsAsync(s.SourceId, force: false);
-        }
-
+        _latestSample = s;
+        await PushToChartsAsync(s);
         StateHasChanged();
     });
-
-    private async Task ResetGenStatsAsync()
-    {
-        var src = SelectedSource;
-        if (src is null) return;
-
-        var ok = await Dialogs.ConfirmAsync(
-            "This permanently deletes all generation history for this source — the Peak/Avg/Low stats above and the History/Logs views for it will be empty until new data comes in. This cannot be undone.",
-            title: "Clear generation stats?",
-            confirmText: "Clear");
-        if (!ok) return;
-
-        try
-        {
-            await History.ClearAsync(src.Id);
-        }
-        catch
-        {
-            return;
-        }
-
-        _genStats = null;
-        await RefreshGenStatsAsync(src.Id, force: true);
-        StateHasChanged();
-    }
-
-    private async Task RefreshGenStatsAsync(string sourceId, bool force)
-    {
-        if (!force && DateTime.UtcNow - _genStatsLastRefresh < TimeSpan.FromSeconds(60))
-            return;
-        _genStatsLastRefresh = DateTime.UtcNow;
-        try
-        {
-            _genStats = await History.GetActiveGenerationStatsAsync(sourceId, GenStatsWindow);
-        }
-        catch
-        {
-            // Best-effort — keep whatever we already had rather than blanking the card.
-        }
-    }
 
     [JSInvokable]
-    public Task OnConfigUpdated() => InvokeAsync(async () =>
+    public Task OnConfigUpdated() => Task.CompletedTask;
+
+    private async Task EnsureChartsAsync()
     {
-        if (_disposed) return;
-        await ReloadSourcesAsync();
-    });
+        if (_instance is null || !_jsReady) return;
+        var sourceId = Dashboard.Web.Metrics.InstanceMetricsPollingService.SourceIdFor(_instance.Id);
 
-    private void OnSelectionChanged(object? sender, EventArgs e) =>
-        _ = InvokeAsync(async () =>
+        if (_hubJoinedSourceId != sourceId)
         {
-            if (_disposed) return;
-            await EnsureSourceAsync();
-            StateHasChanged();
-        });
-
-    private async Task ReloadSourcesAsync(bool interactive = true)
-    {
-        List<SourceInfo> all;
-        try
-        {
-            all = (await Sources.GetAllAsync()).ToList();
-        }
-        catch
-        {
-            return;
+            if (_hubJoinedSourceId is not null)
+                await JS.InvokeVoidAsync("hub_leave", _hubJoinedSourceId);
+            await JS.InvokeVoidAsync("hub_join", sourceId);
+            _hubJoinedSourceId = sourceId;
         }
 
-        var cur = Selection.CurrentSourceId;
-        if (cur is null || !all.Any(s => s.Id == cur))
-        {
-            var def = all.FirstOrDefault(s => s.Active) ?? all.FirstOrDefault();
-            if (def is not null && def.Id != cur)
-                Selection.SetCurrent(def.Id); // raises Changed -> OnSelectionChanged
-        }
-
-        _all = all;
-        _loading = false;
-        if (interactive)
-            await EnsureSourceAsync();
-        StateHasChanged();
-    }
-
-    private async Task EnsureSourceAsync()
-    {
-        var src = SelectedSource;
-        // No JS during static prerendering; OnAfterRenderAsync drives the first run.
-        if (src is null || !_jsReady) return;
-
-        // (Re)join the per-source hub group when the selection changed.
-        if (_hubJoinedId is not null && _hubJoinedId != src.Id)
-            await JS.InvokeVoidAsync("hub_leave", _hubJoinedId);
-        if (_hubJoinedId != src.Id)
-        {
-            await JS.InvokeVoidAsync("hub_join", src.Id);
-            _hubJoinedId = src.Id;
-            if (src.Type != SourceType.Ollama)
-            {
-                _genStats = null;
-                await RefreshGenStatsAsync(src.Id, force: true);
-            }
-        }
-
-        if (src.Type == SourceType.Ollama)
-        {
-            if (_chartKey != OllamaKey(src.Id))
-                await JS.InvokeVoidAsync("chart_dispose_all");
-            _chartKey = OllamaKey(src.Id);
-            return;
-        }
-
-        if (_chartKey == ChartKey(src.Id))
-            return;
-
+        if (_chartKey == sourceId) return;
         await JS.InvokeVoidAsync("chart_dispose_all");
-        _chartKey = ChartKey(src.Id);
+        _chartKey = sourceId;
 
-        await JS.InvokeVoidAsync("chart_create", "ov-throughput", ThroughputSeries(), new { hidden = HiddenThroughputKeys() });
-        await JS.InvokeVoidAsync("chart_create", "ov-kv", KvSeries(), new { yMin = 0.0, yMax = 100.0 });
-        await JS.InvokeVoidAsync("chart_create", "ov-scheduler", SchedulerSeries(), new { });
-        await JS.InvokeVoidAsync("chart_create", "ov-latency", LatencySeries(), new { });
-
-        await SeedChartsAsync();
+        await JS.InvokeVoidAsync("chart_create", "ov2-throughput",
+            new List<Dictionary<string, string>>
+            {
+                new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "#4c8dff" },
+                new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "#31c06b" },
+            }, new { });
+        await JS.InvokeVoidAsync("chart_create", "ov2-kv",
+            new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "#f5a524" } },
+            new { yMin = 0.0, yMax = 100.0 });
     }
 
-    private string? _hubJoinedId;
-
-    private static string ChartKey(string id) => id + ":charts";
-    private static string OllamaKey(string id) => id + ":ollama";
-
-    // WindowMinutes is a count of *points*, not raw seconds: points arrive on the
-    // source's own scrape interval (e.g. every 5s), not once a second, so the cap
-    // must account for that or a "5 min" window silently holds far more than 5
-    // minutes of data (5x too many points at a 5s interval), which is what made the
-    // chart look artificially dense/compressed.
-    private int ChartCap
+    private Task PushToChartsAsync(MetricsSample s)
     {
-        get
-        {
-            var intervalSeconds = Math.Max(1, SelectedSource?.ScrapeIntervalSeconds ?? 5);
-            return Math.Max(10, (WindowMinutes * 60) / intervalSeconds);
-        }
-    }
-
-    private async Task SeedChartsAsync()
-    {
-        var src = SelectedSource;
-        if (src is null || src.Type == SourceType.Ollama) return;
-        var recent = Samples.GetRecent(src.Id, ChartCap);
-        foreach (var s in recent)
-            await PushToCharts(s);
-    }
-
-    private Task PushToCharts(MetricsSample s)
-    {
-        if (SelectedSource is null || SelectedSource.Type == SourceType.Ollama) return Task.CompletedTask;
         var label = s.Ts.ToLocalTime().ToString("HH:mm:ss");
-        var cap = ChartCap;
+        var cap = Math.Max(10, (_windowMinutes * 60) / Math.Max(1, _instance?.PollIntervalMs / 1000 ?? 1));
         var groups = new Dictionary<string, Dictionary<string, double?>>
         {
-            ["ov-throughput"] = new() { ["gen"] = s.GenTps, ["prompt"] = s.PromptTps },
-            ["ov-kv"] = new() { ["kv"] = s.KvPct },
-            ["ov-scheduler"] = new() { ["running"] = (double?)s.Running, ["waiting"] = (double?)s.Waiting },
-            ["ov-latency"] = new() { ["ttft"] = s.TtftAvgSec, ["itl"] = s.ItlAvgSec, ["e2e"] = s.E2eAvgSec },
+            ["ov2-throughput"] = new() { ["gen"] = s.GenTps, ["prompt"] = s.PromptTps },
+            ["ov2-kv"] = new() { ["kv"] = s.KvPct },
         };
         return JS.InvokeVoidAsync("chart_push_all", label, groups, cap).AsTask();
-    }
-
-    private List<string> HiddenThroughputKeys()
-    {
-        var hidden = new List<string>();
-        if (!_showGen) hidden.Add("gen");
-        if (!_showPrompt) hidden.Add("prompt");
-        return hidden;
-    }
-
-    private async Task OnToggleGen(ChangeEventArgs e)
-    {
-        _showGen = e.Value is bool b && b;
-        if (_jsReady)
-            await JS.InvokeVoidAsync("chart_set_visible", "ov-throughput", "gen", _showGen);
-    }
-
-    private async Task OnTogglePrompt(ChangeEventArgs e)
-    {
-        _showPrompt = e.Value is bool b && b;
-        if (_jsReady)
-            await JS.InvokeVoidAsync("chart_set_visible", "ov-throughput", "prompt", _showPrompt);
-    }
-
-    private async Task OnPollIntervalChanged(ChangeEventArgs e)
-    {
-        var src = SelectedSource;
-        if (src is null) return;
-        if (!int.TryParse(e.Value?.ToString(), out var secs) || secs < 1) return;
-        if (secs == src.ScrapeIntervalSeconds) return;
-
-        try
-        {
-            var updated = await Sources.UpdateAsync(src with { ScrapeIntervalSeconds = secs });
-            var idx = _all.FindIndex(s => s.Id == updated.Id);
-            if (idx >= 0) _all[idx] = updated;
-        }
-        catch
-        {
-            // Best-effort; the configUpdated broadcast (from SourceCatalog.RaiseChanged)
-            // will resync this and every other connected island regardless.
-        }
-
-        // ChartCap depends on the scrape interval (window ÷ interval), so a changed
-        // interval changes the point cap too. Without forcing a rebuild here, the
-        // chart keeps whatever points it already buffered at the old cadence and just
-        // appends new ones at the new cadence on top, making the window look like it
-        // holds far more than the labeled amount of time until it's had a full window's
-        // worth of new samples to fully displace the stale ones.
-        _chartKey = null;
-        await EnsureSourceAsync();
-        StateHasChanged();
     }
 
     private async Task OnWindowChanged(ChangeEventArgs e)
     {
         if (int.TryParse(e.Value?.ToString(), out var m) && m is 1 or 5 or 30)
             _windowMinutes = m;
-        _chartKey = null; // force rebuild + reseed at the new window
-        await EnsureSourceAsync();
-        StateHasChanged();
+        _chartKey = null;
+        await EnsureChartsAsync();
     }
 
-    private static List<Dictionary<string, string>> ThroughputSeries() => new()
+    public async ValueTask DisposeAsync()
     {
-        new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "#4c8dff" },
-        new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "#31c06b" },
-    };
-
-    private static List<Dictionary<string, string>> KvSeries() => new()
-    {
-        new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "#f5a524" },
-    };
-
-    private static List<Dictionary<string, string>> SchedulerSeries() => new()
-    {
-        new() { ["key"] = "running", ["label"] = "running", ["color"] = "#4c8dff" },
-        new() { ["key"] = "waiting", ["label"] = "waiting", ["color"] = "#f5a524" },
-    };
-
-    private static List<Dictionary<string, string>> LatencySeries() => new()
-    {
-        new() { ["key"] = "ttft", ["label"] = "ttft", ["color"] = "#4c8dff" },
-        new() { ["key"] = "itl", ["label"] = "itl", ["color"] = "#31c06b" },
-        new() { ["key"] = "e2e", ["label"] = "e2e", ["color"] = "#f5a524" },
-    };
-
-    private static string Fmt(double? v) => v is null ? "—" : v.Value.ToString("0.#");
-    private static string FmtSec(double? v) => v is null ? "—" : v.Value.ToString("0.000");
-
-    private static string FmtBytes(long? b)
-    {
-        if (b is null) return "—";
-        var v = b.Value;
-        if (v >= 1024 * 1024 * 1024) return (v / (double)(1024 * 1024 * 1024)).ToString("0.#") + " GiB";
-        if (v >= 1024 * 1024) return (v / (double)(1024 * 1024)).ToString("0.#") + " MiB";
-        return v + " B";
-    }
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        Selection.Changed -= OnSelectionChanged;
+        try
+        {
+            if (_hubJoinedSourceId is not null)
+                await JS.InvokeVoidAsync("hub_leave", _hubJoinedSourceId);
+        }
+        catch
+        {
+            // Circuit may already be gone.
+        }
         _receiver?.Dispose();
     }
 }
