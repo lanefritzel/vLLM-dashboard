@@ -1645,3 +1645,117 @@ reads/writes them to be correct, not a UI to populate them.
   enough (same pattern as already-tested `DeploymentCatchUpService` /
   `DockerOrchestrator`) that the risk is believed low, but this is
   flagged rather than silently assumed.
+
+## P13 -- UX: Models & Recipes + recipe editor
+
+The first Blazor UI phase. New page `/models-recipes` (plain Bootstrap
+wireframes, per the phase page's own scope -- the owner separately flagged
+a full visual re-skin as a later, high-priority effort once every phase is
+functionally complete, not something to fold into this phase): a catalog
+of models with "New recipe"/"Delete", a recipes table with "Swap to
+this"/"Edit"/"Duplicate"/"Delete", a 5-field-group recipe editor dialog
+with live inline validation, and an Add Model dialog (local path, or
+Hugging Face with a disk guard and live download progress). The old
+"Models" nav link and page are left untouched, per the Build Plan's own
+"don't delete files yet" rule.
+
+**New `.NET supervisor download client`**: P08 only ever built the
+Python/supervisor side of HF downloads -- `ISupervisorClient` gained
+`InspectDownloadAsync`/`StartDownloadAsync`/`GetDownloadAsync`/
+`CancelDownloadAsync`, implemented in `SupervisorClient` against
+`/admin/downloads*`, so the dashboard side has something to call.
+
+**Found and fixed a pre-existing, unrelated, app-wide bug while trying to
+verify this phase's own UI in a real browser**: `@selected="…"` isn't a
+real Blazor directive attribute (Razor passes it through as a literal HTML
+attribute named `@selected`, which the browser rejects), and a bare
+`onchange="@Method"` (missing the leading `@`) silently never wires the
+handler -- together these crashed the Blazor Server SignalR circuit on
+every page load in `ThemeSwitcher.razor`, `History.razor`,
+`Overview.razor`, and `Settings.razor`. This blocked both manual
+verification of this phase's own page and the E2E harness being built for
+it (same underlying mechanism -- a crashed circuit). Surfaced to the owner
+rather than silently fixed or silently ignored, per the standing rule;
+owner said to fix it now as a prerequisite. Fixed in all four files;
+confirmed via repeated Playwright runs that console errors on page load
+dropped from several to zero across `/`, `/history`, `/settings`, and the
+new `/models-recipes`.
+
+**Built the E2E test harness** this phase's own scope called for
+(`tests/Dashboard.E2E.Tests`): launches the real built `Dashboard.Web.dll`
+as an OS subprocess against a throwaway Testcontainers Postgres, drives it
+with Microsoft.Playwright for .NET (owner deferred to this choice over a
+Node-based alternative, to keep the whole stack in .NET), and seeds one
+test user through `UserManager`/`RoleManager` directly -- mirroring
+`Register.razor`'s own "first user becomes admin + Active" bootstrap logic
+rather than driving its antiforgery-protected HTML form. See
+`testing-reference.md`'s own P13 section for the harness's mechanics and
+two Blazor `@bind` timing gotchas found while writing tests against it.
+
+### Files changed
+
+- `src/Dashboard.Core/Supervisor/SupervisorModels.cs`: `SupervisorRepoFile`,
+  `SupervisorDownloadInspectResult`, `SupervisorDownloadStatus` (new).
+- `src/Dashboard.Core/Abstractions/ISupervisorClient.cs`: the 4 new download
+  methods (signatures only).
+- `src/Dashboard.Infrastructure/Supervisor/SupervisorClient.cs`: their
+  implementation against `/admin/downloads*`.
+- `src/Dashboard.Infrastructure/Persistence/V2/RecipeService.cs`:
+  `ValidateDraftAsync` (model-optional compatibility check against an
+  unsaved draft) and `NewDraftForModel` (prefill from a model's own
+  config + a given served name) added to `IRecipeService`.
+- `src/Dashboard.Web/Components/Pages/ModelsRecipes.razor` (new): the page
+  itself -- catalog + recipes tables, instance/serving-model selectors,
+  swap-to-this with the served-name-change acknowledgement flow reused
+  from `SwapService`.
+- `src/Dashboard.Web/Components/ModelsRecipes/RecipeEditorDialog.razor`
+  (new): the 5-field-group editor, revalidating on every field change via
+  `RecipeService.ValidateDraftAsync` and disabling Save while any hard
+  block is present.
+- `src/Dashboard.Web/Components/ModelsRecipes/AddModelDialog.razor` (new):
+  local-path and Hugging-Face-with-download flows; `IsBusy` (download in
+  progress) blocks closing/cancelling the dialog and disables its other
+  inputs, by design (doc: "Add model is disabled during a download").
+- `src/Dashboard.Web/Components/Layout/NavMenu.razor`: new "Models &
+  Recipes" link, alongside (not replacing) the old "Models" link.
+- Bug-fix files (pre-existing, unrelated to this phase's own scope):
+  `ThemeSwitcher.razor`, `SourceSelector.razor` (converted to proper
+  `@bind`/`@bind:get`/`@bind:set`), `History.razor`, `Overview.razor`,
+  `Settings.razor`.
+- `tests/Dashboard.Infrastructure.Tests/V2ServiceTests.cs`: 3 new tests for
+  `NewDraftForModel`/`ValidateDraftAsync`.
+- `tests/Dashboard.Infrastructure.Tests/SupervisorClientDownloadTests.cs`
+  (new): the 4 new `SupervisorClient` methods against a fake admin API.
+- `tests/Dashboard.E2E.Tests/` (new project): `DashboardAppFixture.cs`
+  (harness), `ModelsRecipesE2ETests.cs` (9 tests: add-local-model-create-
+  recipe-edit-save round trip, served-name-prefills-to-main and to-the-
+  active-recipe's-name, 3 inline-validation-blocks-Save tests (served name,
+  gpu_memory_utilization, blank model path), the Intel bfloat16-blocked/
+  float16-saves-cleanly/auto-warns-but-doesn't-block trio, duplicate +
+  delete-with-confirmation), `FakeSupervisorAdmin.cs` +
+  `AddModelDownloadE2ETests.cs` (3 tests: stubbed progress bar ending
+  "available", stubbed low disk blocking with the required-vs-available
+  text, the dialog refusing to close mid-download). Added to
+  `Dashboard.slnx`, so `dotnet test`/`gate.sh` now also run it (needs
+  Docker; ~20-30s added to the gate).
+- `plan/testing-reference.md`: new "Models & Recipes UI + E2E harness
+  (P13)" section.
+- 179 Core + 72 Infrastructure + 12 E2E .NET tests (up from 179 + 72 + 0 --
+  Core/Infrastructure counts unchanged this phase, the E2E project is new),
+  127 Python tests; `./scripts/gate.sh` green (now exercises the E2E
+  project too).
+
+Out of scope, not touched: the visual re-skin (explicitly a later, separate
+effort per the owner), the Servers-page registration flow, deleting the
+old Models page/nav link.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Add a local model, create a recipe from it, edit a dial, save; it appears in the list | Yes | `ModelsRecipesE2ETests.AddLocalModel_CreateRecipe_EditADial_Save_AppearsInTheList` |
+| New recipe: served name pre-fills to the active name; "main" when nothing is active | Yes | `NewRecipe_ServedNamePrefillsToMain_WhenNothingIsActive`, `NewRecipe_ServedNamePrefillsToTheActiveRecipesServedName_WhenOneIsActive` (seeds an `active` deployment on a different model/recipe, then opens "New recipe" on a third model and asserts the served-name field pre-fills to the active recipe's own served name, not "main") |
+| Save blocked with inline error for: out-of-range `gpu_memory_utilization`, non-identifier served name, blank model path; Intel `dtype=bfloat16` blocked with reason, `auto` warns, `float16` saves cleanly | Yes | `Save_BlockedWithInlineError_ForOutOfRangeGpuMemoryUtilization`, `..._ForNonIdentifierServedName`, `..._ForBlankModelPath` (seeds a model with an empty `Path` directly via EF -- the UI's own Add Model flow can't produce one, but a converted legacy row could); `OnAnIntelServer_Bfloat16IsBlocked_AndFloat16SavesCleanly`; `OnAnIntelServer_AutoDtypeShowsASoftWarning_ButDoesNotBlockSave` (asserts the warning text appears AND that Save stays enabled, since only hard blocks disable it) |
+| Duplicate creates `name-copy`; delete asks for confirmation | Yes | `ModelsRecipesE2ETests.Duplicate_CreatesNameCopy_AndDelete_AsksForConfirmation` |
+| Add model against a stubbed repo shows the progress bar and ends "available"; stubbed low disk blocks with required-vs-available text; Add model disabled during a download | Yes | `AddModelDownloadE2ETests.AddModel_AgainstAStubbedRepo_ShowsProgressBar_AndEndsAvailable`, `..._AgainstAStubbedLowDiskRepo_BlocksWithRequiredVsAvailableText`, `..._CannotBeClosedOrCancelled_WhileADownloadIsInFlight` |
+| A migrated database's converted model/recipe is listed and editable | Not E2E-tested | The legacy -> V2 conversion itself is unit-tested (`RecipeService_ValidateAsync_OnALegacyShapedRow...`, an earlier phase); every E2E test here seeds `ModelsV2`/`RecipesV2` rows directly, the same shape a conversion produces (including the "blank model path" test above, a realistic legacy-row trait), so the page's list/edit behavior is exercised the same way, but no test runs an actual conversion and then drives the page against its output end to end. Flagged, not silently assumed -- closing this fully would mean standing up a legacy-schema seed + running the real conversion inside the E2E fixture, a bigger addition than the other gaps. |

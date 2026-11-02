@@ -65,6 +65,42 @@ public sealed record SupervisorSmokeResult
     public double Ms { get; init; }
 }
 
+public sealed record SupervisorRepoFile
+{
+    public required string Path { get; init; }
+    public long Size { get; init; }
+}
+
+/// <summary>P13's "Add model" flow, step 1: <c>POST /admin/downloads/inspect</c> --
+/// the file listing + parsed config.json + the server's own free disk space,
+/// BEFORE anything is downloaded (doc 6: "Required X, Available Y" disk check).</summary>
+public sealed record SupervisorDownloadInspectResult
+{
+    public IReadOnlyList<SupervisorRepoFile> Files { get; init; } = Array.Empty<SupervisorRepoFile>();
+    public Dictionary<string, object?>? Config { get; init; }
+    public long FreeBytes { get; init; }
+}
+
+/// <summary>Polled via <c>GET /admin/downloads/{id}</c> for the progress bar
+/// (doc 6: "40.2% · 105 MB/s · 4m 48s", "file 5 of 14"). "download_failed",
+/// not "failed" -- a failed download is not a failed swap.</summary>
+public sealed record SupervisorDownloadStatus
+{
+    public required string Status { get; init; } // "downloading" | "done" | "download_failed" | "cancelled"
+    public int FilesTotal { get; init; }
+    public int FilesDone { get; init; }
+    public long TotalBytes { get; init; }
+    public long DownloadedBytes { get; init; }
+    public double ProgressPct { get; init; }
+    public double SpeedBps { get; init; }
+    public double? EtaSeconds { get; init; }
+    public string? Error { get; init; }
+    public string? Path { get; init; }
+    public long? SizeBytes { get; init; }
+    public Dictionary<string, object?>? Config { get; init; }
+    public string? LoadFormat { get; init; }
+}
+
 /// <summary>Thrown by <see cref="Dashboard.Core.Abstractions.ISupervisorClient"/>
 /// for any non-2xx response the caller needs to react to (409 "already in
 /// flight"/"not serving", 401, 404, etc.) -- callers branch on

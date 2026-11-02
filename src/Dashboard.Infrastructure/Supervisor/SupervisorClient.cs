@@ -134,4 +134,40 @@ public sealed class SupervisorClient : ISupervisorClient
         using var response = await client.SendAsync(request, ct);
         return await ReadAsync<SupervisorSmokeResult>(response, ct);
     }
+
+    public async Task<SupervisorDownloadInspectResult> InspectDownloadAsync(string adminUrl, string token, string repoId, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/downloads/inspect"), token);
+        request.Content = JsonContent.Create(new { repo_id = repoId });
+        using var response = await client.SendAsync(request, ct);
+        return await ReadAsync<SupervisorDownloadInspectResult>(response, ct);
+    }
+
+    public async Task<string> StartDownloadAsync(
+        string adminUrl, string token, string repoId, string slug, string? filename = null, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/downloads"), token);
+        request.Content = JsonContent.Create(new { repo_id = repoId, slug, filename });
+        using var response = await client.SendAsync(request, ct);
+        var body = await ReadAsync<JsonElement>(response, ct);
+        return body.GetProperty("download_id").GetString()!;
+    }
+
+    public async Task<SupervisorDownloadStatus> GetDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, $"/admin/downloads/{downloadId}"), token);
+        using var response = await client.SendAsync(request, ct);
+        return await ReadAsync<SupervisorDownloadStatus>(response, ct);
+    }
+
+    public async Task CancelDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = NewRequest(HttpMethod.Delete, Url(adminUrl, $"/admin/downloads/{downloadId}"), token);
+        using var response = await client.SendAsync(request, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
 }

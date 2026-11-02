@@ -168,20 +168,20 @@
             <div class="card-title">Live metrics — @(Latest?.ModelName ?? "unknown model")</div>
             <div class="d-flex align-items-center gap-2">
                 <span class="text-muted small">Poll</span>
-                <select class="form-select window-select" onchange="@OnPollIntervalChanged" title="Polling interval — how often the dashboard scrapes this source">
-                    <option value="1" @selected="@((src.ScrapeIntervalSeconds == 1) ? "selected" : null)">1 s</option>
-                    <option value="2" @selected="@((src.ScrapeIntervalSeconds == 2) ? "selected" : null)">2 s</option>
-                    <option value="5" @selected="@((src.ScrapeIntervalSeconds == 5) ? "selected" : null)">5 s</option>
-                    <option value="10" @selected="@((src.ScrapeIntervalSeconds == 10) ? "selected" : null)">10 s</option>
-                    <option value="15" @selected="@((src.ScrapeIntervalSeconds == 15) ? "selected" : null)">15 s</option>
-                    <option value="30" @selected="@((src.ScrapeIntervalSeconds == 30) ? "selected" : null)">30 s</option>
-                    <option value="60" @selected="@((src.ScrapeIntervalSeconds == 60) ? "selected" : null)">60 s</option>
+                <select class="form-select window-select" @onchange="@OnPollIntervalChanged" title="Polling interval — how often the dashboard scrapes this source">
+                    <option value="1" selected="@(src.ScrapeIntervalSeconds == 1)">1 s</option>
+                    <option value="2" selected="@(src.ScrapeIntervalSeconds == 2)">2 s</option>
+                    <option value="5" selected="@(src.ScrapeIntervalSeconds == 5)">5 s</option>
+                    <option value="10" selected="@(src.ScrapeIntervalSeconds == 10)">10 s</option>
+                    <option value="15" selected="@(src.ScrapeIntervalSeconds == 15)">15 s</option>
+                    <option value="30" selected="@(src.ScrapeIntervalSeconds == 30)">30 s</option>
+                    <option value="60" selected="@(src.ScrapeIntervalSeconds == 60)">60 s</option>
                 </select>
                 <span class="text-muted small">Window</span>
-                <select class="form-select window-select" onchange="@OnWindowChanged" title="Chart window">
-                    <option value="1" @selected="@((WindowMinutes == 1) ? "selected" : null)">1 min</option>
-                    <option value="5" @selected="@((WindowMinutes == 5) ? "selected" : null)">5 min</option>
-                    <option value="30" @selected="@((WindowMinutes == 30) ? "selected" : null)">30 min</option>
+                <select class="form-select window-select" @onchange="@OnWindowChanged" title="Chart window">
+                    <option value="1" selected="@(WindowMinutes == 1)">1 min</option>
+                    <option value="5" selected="@(WindowMinutes == 5)">5 min</option>
+                    <option value="30" selected="@(WindowMinutes == 30)">30 min</option>
                 </select>
             </div>
         </div>

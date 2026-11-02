@@ -36,6 +36,22 @@ public interface IRecipeService
     /// the UI. Must be callable on an existing, possibly legacy-shaped row without
     /// throwing (doc 13 gap 12) -- it just reports issues.</summary>
     Task<CompatibilityResult> ValidateAsync(int recipeId, int modelId, CancellationToken ct = default);
+
+    /// <summary>Same non-throwing validation as <see cref="ValidateAsync"/>, but for
+    /// a draft that may not be saved yet (P13's recipe editor: inline validation as
+    /// the operator types, before a Save -- `recipeId` doesn't exist yet so
+    /// <see cref="ValidateAsync"/> can't be used). `modelId` is optional -- the
+    /// model-dependent rules are skipped when it's null (no model picked yet), same
+    /// as a recipe being model-agnostic at save time.</summary>
+    Task<CompatibilityResult> ValidateDraftAsync(Recipe draft, int? modelId, CancellationToken ct = default);
+
+    /// <summary>Builds an UNSAVED draft recipe for the editor's "New recipe" entry
+    /// point (P13) -- max_model_len prefilled from the model's own native context
+    /// length (same source <see cref="CreateFromModelAsync"/> uses), gpu_memory_utilization
+    /// 0.90. Pure/no I/O; the caller supplies <paramref name="servedModelName"/> since
+    /// resolving "the instance's currently-active served name, or main" needs
+    /// instance/deployment context this service doesn't otherwise depend on.</summary>
+    Recipe NewDraftForModel(Model model, string servedModelName);
 }
 
 /// <summary>CRUD for the new-schema <see cref="Recipe"/> table (P09b).</summary>
@@ -184,6 +200,29 @@ public sealed class RecipeService : IRecipeService
         return CompatibilityPass.Check(
             CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(recipe), CoreRecipeMappers.ToCoreServer(server));
     }
+
+    public async Task<CompatibilityResult> ValidateDraftAsync(Recipe draft, int? modelId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var server = await RequireServerAsync(db, draft.ServerId, ct);
+
+        if (modelId is null)
+            return CompatibilityPass.CheckRecipe(CoreRecipeMappers.ToCoreRecipe(draft), CoreRecipeMappers.ToCoreServer(server));
+
+        var model = await db.ModelsV2.FindAsync([modelId.Value], ct)
+            ?? throw new KeyNotFoundException($"No model with id {modelId}.");
+        return CompatibilityPass.Check(
+            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(draft), CoreRecipeMappers.ToCoreServer(server));
+    }
+
+    public Recipe NewDraftForModel(Model model, string servedModelName) => new()
+    {
+        ServerId = model.ServerId,
+        ServedModelName = servedModelName,
+        MaxModelLen = CoreRecipeMappers.ReadNativeContextLength(model.Config) ?? new Recipe().MaxModelLen,
+        GpuMemoryUtilization = 0.90f,
+    };
 
     private static async Task<Server> RequireServerAsync(AppDbContext db, int serverId, CancellationToken ct) =>
         await db.ServersV2.FindAsync([serverId], ct)

@@ -1,0 +1,356 @@
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Downloads
+@using Dashboard.Core.Models
+@using Dashboard.Core.Supervisor
+@using Dashboard.Infrastructure.Persistence.V2
+@inject IModelService Models
+@inject ISupervisorClient SupervisorClient
+@inject ISupervisorTokenProvider TokenProvider
+@inject IHuggingFaceModelLookup HfLookup
+
+<div class="modal-overlay" @onclick="@RequestCancelIfIdle">
+    <div class="modal-dialog-custom" @onclick:stopPropagation="true">
+        <div class="d-flex align-items-center justify-content-between mb-1">
+            <div class="card-title mb-0">Add model</div>
+            <button type="button" class="modal-close-btn" @onclick="@RequestCancelIfIdle" aria-label="Close">✕</button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger py-2">@_error</div>
+        }
+
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Name</label>
+                <input class="form-control" @bind="_name" @bind:event="oninput" disabled="@IsBusy" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Source</label>
+                <select class="form-select" @bind="_source" disabled="@IsBusy">
+                    <option value="huggingface">Hugging Face</option>
+                    <option value="local">Local path</option>
+                </select>
+                @if (_source == "huggingface" && Instance?.AdminUrl is null)
+                {
+                    <div class="form-text text-danger">No supervisor registered on the selected instance — Hugging Face downloads need one. Use a local path instead.</div>
+                }
+            </div>
+        </div>
+
+        @if (_source == "local")
+        {
+            <div class="row g-3 mt-1">
+                <div class="col-md-12">
+                    <label class="form-label">Weights path (on the server's disk)</label>
+                    <input class="form-control" @bind="_localPath" placeholder="/models/hf-cache/my-model" disabled="@IsBusy" />
+                </div>
+                <div class="col-md-12">
+                    <button type="button" class="btn btn-primary btn-sm" disabled="@(!CanSaveLocal || IsBusy)" @onclick="@SaveLocalAsync">Save</button>
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@RequestCancelIfIdle" disabled="@IsBusy">Cancel</button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="row g-3 mt-1">
+                <div class="col-md-8">
+                    <label class="form-label">Hugging Face repo id</label>
+                    <input class="form-control" @bind="_repoId" @bind:event="oninput" placeholder="org/repo-name" disabled="@IsBusy" />
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <button type="button" class="btn btn-outline btn-sm" disabled="@(string.IsNullOrWhiteSpace(_repoId) || IsBusy || Instance?.AdminUrl is null)"
+                            @onclick="@InspectAsync">Inspect</button>
+                </div>
+            </div>
+
+            @if (_inspecting)
+            {
+                <p class="text-muted small mt-2">Inspecting @_repoId…</p>
+            }
+
+            @if (_inspectError is not null)
+            {
+                <div class="alert alert-danger py-2 mt-2">@_inspectError</div>
+            }
+
+            @if (_inspected is not null)
+            {
+                var requiredBytes = _inspected.Files.Sum(f => f.Size);
+                var diskCheck = DiskGuard.Check(requiredBytes, _inspected.FreeBytes);
+
+                <div class="card mt-2" style="border-left: 3px solid var(--green);">
+                    <div class="card-body py-2 small">
+                        <div><strong>Files:</strong> @_inspected.Files.Count</div>
+                        <div><strong>Size:</strong> @FormatBytes(requiredBytes)</div>
+                        @if (_hfLookup is not null)
+                        {
+                            <div><strong>Parameters:</strong> @FormatParamCount(_hfLookup.ParameterCount)</div>
+                            <div><strong>Quantized:</strong> @(_hfLookup.IsQuantized ? $"Yes ({_hfLookup.QuantizationMethod ?? "method unspecified"})" : "No — full precision")</div>
+                            <div><strong>Default context length:</strong> @(_hfLookup.DefaultMaxContextLength?.ToString("N0") ?? "unknown") tokens</div>
+                        }
+                    </div>
+                </div>
+
+                @if (!diskCheck.Ok)
+                {
+                    <div class="alert alert-danger py-2 mt-2">
+                        @diskCheck.Message
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => OnDeleteOldModelsRequested.InvokeAsync())">Delete old models</button>
+                            <button type="button" class="btn btn-outline btn-sm" @onclick="@ResetInspection">Choose another</button>
+                        </div>
+                    </div>
+                }
+                else if (_downloadStatus is null)
+                {
+                    <div class="mt-2">
+                        <button type="button" class="btn btn-primary btn-sm" disabled="@(!CanSaveHf || IsBusy)" @onclick="@StartDownloadAsync">Download</button>
+                        <button type="button" class="btn btn-secondary btn-sm" @onclick="@RequestCancelIfIdle">Cancel</button>
+                    </div>
+                }
+            }
+
+            @if (_downloadStatus is { } status)
+            {
+                @if (status.Status == "downloading")
+                {
+                    <div class="mt-3">
+                        <div class="progress" style="height: 1.25rem;">
+                            <div class="progress-bar" style="width: @(status.ProgressPct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%;"></div>
+                        </div>
+                        <div class="text-muted small mt-1">
+                            @status.ProgressPct.ToString("0.0")% · @FormatBytes((long)status.SpeedBps)/s ·
+                            @(status.EtaSeconds is { } eta ? FormatDuration(eta) : "unknown ETA") ·
+                            file @status.FilesDone of @status.FilesTotal
+                        </div>
+                        <button type="button" class="btn btn-outline btn-sm mt-2" @onclick="@CancelDownloadAsync">Cancel download</button>
+                    </div>
+                }
+                else if (status.Status == "done")
+                {
+                    <div class="alert alert-success py-2 mt-2">✓ available</div>
+                    <button type="button" class="btn btn-primary btn-sm" disabled="@IsBusy" @onclick="@FinishHfDownloadAsync">Add to catalog</button>
+                }
+                else
+                {
+                    <div class="alert alert-danger py-2 mt-2">Download @status.Status: @(status.Error ?? "no details")</div>
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@ResetInspection">Try again</button>
+                }
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public Instance? Instance { get; set; }
+    [Parameter] public EventCallback<Model> OnSaved { get; set; }
+    [Parameter] public EventCallback OnCancelled { get; set; }
+    [Parameter] public EventCallback OnDeleteOldModelsRequested { get; set; }
+
+    private string _name = "";
+    private string _source = "huggingface";
+    private string _localPath = "";
+    private string _repoId = "";
+    private string? _error;
+
+    private bool _inspecting;
+    private string? _inspectError;
+    private SupervisorDownloadInspectResult? _inspected;
+    private HuggingFaceModelInfo? _hfLookup;
+
+    private string? _downloadId;
+    private SupervisorDownloadStatus? _downloadStatus;
+    private CancellationTokenSource? _pollCts;
+
+    private bool CanSaveLocal => !string.IsNullOrWhiteSpace(_name) && !string.IsNullOrWhiteSpace(_localPath);
+    private bool CanSaveHf => !string.IsNullOrWhiteSpace(_name) && _inspected is not null;
+
+    /// <summary>"One download at a time: Add model is disabled while one runs" (doc 6) --
+    /// this dialog being modal already prevents a SECOND one opening; this flag is what
+    /// blocks closing/cancelling out from under an in-flight download.</summary>
+    private bool IsBusy => _downloadStatus?.Status == "downloading";
+
+    private async Task RequestCancelIfIdle()
+    {
+        if (IsBusy) return;
+        _pollCts?.Cancel();
+        await OnCancelled.InvokeAsync();
+    }
+
+    private async Task SaveLocalAsync()
+    {
+        _error = null;
+        try
+        {
+            var model = new Model { ServerId = Instance!.ServerId, Name = _name.Trim(), Path = _localPath.Trim(), SourceType = "local" };
+            var saved = await Models.CreateAsync(model);
+            await OnSaved.InvokeAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            _error = "Save failed: " + ex.Message;
+        }
+    }
+
+    private async Task InspectAsync()
+    {
+        if (Instance?.AdminUrl is null) return;
+        var token = TokenProvider.GetToken(Instance.Id);
+        if (token is null)
+        {
+            _inspectError = "No supervisor token configured for this instance.";
+            return;
+        }
+
+        _inspecting = true;
+        _inspectError = null;
+        _inspected = null;
+        _hfLookup = null;
+        StateHasChanged();
+        try
+        {
+            _inspected = await SupervisorClient.InspectDownloadAsync(Instance.AdminUrl, token, _repoId.Trim());
+            _hfLookup = await HfLookup.LookupAsync(_repoId.Trim());
+        }
+        catch (Exception ex)
+        {
+            _inspectError = "Could not inspect this repo: " + ex.Message;
+        }
+        finally
+        {
+            _inspecting = false;
+        }
+    }
+
+    private void ResetInspection()
+    {
+        _inspected = null;
+        _hfLookup = null;
+        _inspectError = null;
+        _downloadId = null;
+        _downloadStatus = null;
+    }
+
+    private async Task StartDownloadAsync()
+    {
+        if (Instance?.AdminUrl is null) return;
+        var token = TokenProvider.GetToken(Instance.Id);
+        if (token is null) return;
+
+        _error = null;
+        try
+        {
+            _downloadId = await SupervisorClient.StartDownloadAsync(Instance.AdminUrl, token, _repoId.Trim(), _name.Trim());
+            _pollCts = new CancellationTokenSource();
+            _ = PollDownloadAsync(Instance.AdminUrl, token, _downloadId, _pollCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not start the download: " + ex.Message;
+        }
+    }
+
+    private async Task PollDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                _downloadStatus = await SupervisorClient.GetDownloadAsync(adminUrl, token, downloadId, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _error = "Lost contact with the download: " + ex.Message;
+                return;
+            }
+            await InvokeAsync(StateHasChanged);
+            if (_downloadStatus.Status != "downloading")
+                return;
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    private async Task CancelDownloadAsync()
+    {
+        if (Instance?.AdminUrl is null || _downloadId is null) return;
+        var token = TokenProvider.GetToken(Instance.Id);
+        if (token is null) return;
+
+        _pollCts?.Cancel();
+        try
+        {
+            await SupervisorClient.CancelDownloadAsync(Instance.AdminUrl, token, _downloadId);
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not cancel the download: " + ex.Message;
+        }
+        ResetInspection();
+    }
+
+    private async Task FinishHfDownloadAsync()
+    {
+        if (_downloadStatus is not { Status: "done" }) return;
+        _error = null;
+        try
+        {
+            var model = new Model
+            {
+                ServerId = Instance!.ServerId,
+                Name = _name.Trim(),
+                SourceType = "huggingface",
+                RepoId = _repoId.Trim(),
+                Path = _downloadStatus.Path ?? "",
+                SizeBytes = _downloadStatus.SizeBytes,
+                LoadFormat = _downloadStatus.LoadFormat ?? "auto",
+                Config = _downloadStatus.Config is null ? null : System.Text.Json.JsonSerializer.Serialize(_downloadStatus.Config),
+                Status = "available",
+            };
+            var saved = await Models.CreateAsync(model);
+            await OnSaved.InvokeAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            _error = "Save failed: " + ex.Message;
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        double value = bytes;
+        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        return $"{value:0.#} {units[unit]}";
+    }
+
+    private static string FormatDuration(double seconds)
+    {
+        var ts = TimeSpan.FromSeconds(seconds);
+        return ts.TotalHours >= 1 ? $"{(int)ts.TotalHours}h {ts.Minutes}m" : $"{ts.Minutes}m {ts.Seconds}s";
+    }
+
+    private static string FormatParamCount(long? count) => count switch
+    {
+        null => "unknown",
+        >= 1_000_000_000 => $"{count.Value / 1_000_000_000.0:0.#}B",
+        >= 1_000_000 => $"{count.Value / 1_000_000.0:0.#}M",
+        _ => count.Value.ToString("N0"),
+    };
+}

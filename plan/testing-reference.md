@@ -299,6 +299,88 @@ to verify it, point `dockerHost`/`containerName` at a real container you
 control and call `StartContainerAsync`/`HardResetContainerAsync` directly;
 there's no integration test harness for it here.
 
+## Models & Recipes UI + E2E harness (P13)
+
+```bash
+# .NET service-layer additions (draft validation, supervisor download client):
+dotnet test tests/Dashboard.Infrastructure.Tests --filter "FullyQualifiedName~RecipeService_NewDraftForModel|FullyQualifiedName~RecipeService_ValidateDraftAsync"
+dotnet test tests/Dashboard.Infrastructure.Tests --filter FullyQualifiedName~SupervisorClientDownloadTests
+
+# Full E2E suite (real built Dashboard.Web as a subprocess + a throwaway
+# Testcontainers Postgres + a real headless Chromium -- needs Docker):
+dotnet test tests/Dashboard.E2E.Tests
+```
+
+**The E2E harness (`tests/Dashboard.E2E.Tests/DashboardAppFixture.cs`) launches
+the real `Dashboard.Web.dll` as an OS subprocess**, not an in-memory
+`TestServer` -- Playwright needs a real listening socket. `public partial
+class Program;` at the end of `Program.cs` is the standard ASP.NET Core
+testing marker that lets the fixture find the assembly via
+`typeof(Program).Assembly.Location`; no behavior change for the real app.
+`DbInitializerHostedService` awaits EF migrations before Kestrel accepts
+connections, so polling for any HTTP response (even a login redirect) is
+enough synchronization before seeding Identity data. One `IBrowser` and one
+app process are shared by the whole `[Collection("E2E")]`; each test gets
+its own browser context/page via `NewLoggedInPageAsync()`.
+
+**Test isolation gotcha, worth remembering if a new E2E test flakes:**
+`ServerService.ListAsync()` orders by `Label`, and `ModelsRecipes.razor`
+always binds to the first row from that list -- there's no server picker
+in this phase. Because the fixture's Testcontainers Postgres is shared for
+the whole test run (not reset between tests), a server seeded by an
+earlier test can still be "the first one" when a later test's own page
+loads, silently stealing the page away from that test's own data. Every
+seeding helper in this suite (`SeedServerAndInstanceAsync` in both test
+classes) wipes `DeploymentsV2`/`RecipesV2`/`ModelsV2`/`InstancesV2`/
+`ServersV2` (in that order -- `deployments` FKs into both `recipes` and
+`models`, so it must go first or the delete fails with a foreign-key
+violation, not silently) before inserting its own rows -- don't drop that
+wipe or reorder it when adding a new E2E test class against this fixture.
+
+**Two Blazor `@bind` gotchas that cost real debugging time here, since
+they silently produce dead UI rather than an error:**
+- `@bind="_field"` with no `@bind:event` binds on the `change`/blur event,
+  not `input`. Playwright's `Locator.FillAsync` does not fire a blur --
+  follow it with `.PressAsync("Tab")` (or click elsewhere) if the bound
+  field needs to be committed before the next assertion/click, or the test
+  will see a stale value (e.g. a Save button staying disabled because the
+  path field "never changed").
+- Completely unrelated to this phase but found blocking it: `@selected="…"`
+  is not a real Blazor directive -- Razor emits it as a literal HTML
+  attribute named `@selected`, which crashes the whole Blazor Server
+  SignalR circuit on page load (`'setAttribute' … '@selected' is not a
+  valid attribute name`). Same for a bare `onchange="@Method"` (missing the
+  leading `@`) -- it silently never wires the handler at all. Both were
+  found pre-existing in `ThemeSwitcher.razor`, `History.razor`,
+  `Overview.razor`, `Settings.razor` and fixed in this phase; grep for
+  `@selected` and `onchange="@` (without a leading `@onchange`) if a new
+  page's circuit crashes on load for no apparent reason.
+
+**The two supervisor-download DoD bullets (stubbed progress bar, stubbed
+low disk) use a fake admin API** (`FakeSupervisorAdmin.cs`, same
+`WebApplication.CreateBuilder()` + `UseUrls("http://127.0.0.1:0")`
+technique as `SupervisorClientDownloadTests`'s fake admin), not a real
+supervisor -- disk space and download timing can't be controlled
+deterministically against a real HF download. Its `GET
+/admin/downloads/{id}` actually progresses across polls (downloading once,
+then done), unlike the infra-level fake which only ever returns one fixed
+response, so `AddModelDialog`'s progress bar has something real to render
+before the "available" transition. `ConfigSupervisorTokenProvider` reads
+`Supervisor:Token` from configuration for every instance with no
+per-instance lookup, so the fixture sets `Supervisor__Token` once as an env
+var on the launched app rather than needing per-instance setup.
+
+**Not covered by the E2E suite in this phase:** "a migrated database's
+converted model/recipe is listed and editable" has no dedicated E2E test.
+The legacy -> V2 conversion path itself is unit-tested already (see
+`RecipeService_ValidateAsync_OnALegacyShapedRow...` in
+`V2ServiceTests.cs`, from an earlier phase), and every E2E test here seeds
+`ModelsV2`/`RecipesV2` rows the same shape conversion would produce, so the
+page's own list/edit behavior is exercised the same way either way -- but
+no test actually runs the conversion and then drives the page against its
+output end to end. Flagged rather than silently assumed; see the DoD table
+in `PROGRESS.md`.
+
 ## Postgres-over-bridge soak test (P01c)
 
 ```bash

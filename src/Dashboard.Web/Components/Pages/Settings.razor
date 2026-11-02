@@ -184,7 +184,7 @@
                         </td>
                         <td>@s.ScrapeIntervalSeconds s</td>
                         <td>
-                            <input type="checkbox" checked="@s.Active" onchange="@(() => ToggleActiveAsync(s))" title="Enable/disable polling" />
+                            <input type="checkbox" checked="@s.Active" @onchange="@(() => ToggleActiveAsync(s))" title="Enable/disable polling" />
                         </td>
                         <td class="text-end">
                             <button class="btn btn-outline btn-sm" @onclick="@(() => StartEditSourceAsync(s))">Edit</button>

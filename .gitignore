@@ -11,3 +11,6 @@ TestResults/
 .venv/
 __pycache__/
 .pytest_cache/
+
+# Local-only screenshots taken while verifying UI changes -- never committed.
+plan/screenshots/

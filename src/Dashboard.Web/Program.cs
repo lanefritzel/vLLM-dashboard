@@ -248,3 +248,9 @@ app.Map("/proxy/{slug}/{**path}", async (HttpContext context, string slug, strin
 });
 
 app.Run();
+
+/// <summary>Standard ASP.NET Core testing marker -- lets the P13 E2E harness
+/// locate this project's own built assembly (<c>typeof(Program).Assembly.Location</c>)
+/// to launch it as a real process, rather than hard-coding a relative bin path.
+/// No behavior change.</summary>
+public partial class Program;

@@ -4,10 +4,10 @@
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
 <span class="d-inline-flex align-items-center gap-1">
-    <select id="theme-switcher" class="theme-switcher" onchange="@OnThemeChanged" title="Theme" aria-label="Theme">
-        <option value="dark" @selected="@Selected("dark")">Dark</option>
-        <option value="light" @selected="@Selected("light")">Light</option>
-        <option value="system" @selected="@Selected("system")">System</option>
+    <select id="theme-switcher" class="theme-switcher" @onchange="@OnThemeChanged" title="Theme" aria-label="Theme">
+        <option value="dark" selected="@(Current == "dark")">Dark</option>
+        <option value="light" selected="@(Current == "light")">Light</option>
+        <option value="system" selected="@(Current == "system")">System</option>
     </select>
     @if (_saveError)
     {
@@ -66,6 +66,4 @@
             _saveError = true;
         }
     }
-
-    private string? Selected(string mode) => Current == mode ? "selected" : null;
 }

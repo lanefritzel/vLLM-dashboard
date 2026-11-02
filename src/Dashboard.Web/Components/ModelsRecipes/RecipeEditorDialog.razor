@@ -1,0 +1,305 @@
+@using Dashboard.Infrastructure.Persistence.V2
+@inject IRecipeService Recipes
+
+<div class="modal-overlay" @onclick="@RequestCancel">
+    <div class="modal-dialog-custom" @onclick:stopPropagation="true">
+        <div class="d-flex align-items-center justify-content-between mb-1">
+            <div class="card-title mb-0">@(IsNew ? "New recipe" : "Edit recipe") — @Model.Name</div>
+            <button type="button" class="modal-close-btn" @onclick="@RequestCancel" aria-label="Close">✕</button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger py-2">@_error</div>
+        }
+
+        @if (_hardBlocks.Count > 0)
+        {
+            <div class="alert alert-danger py-2">
+                <ul class="mb-0">
+                    @foreach (var issue in _hardBlocks)
+                    {
+                        <li>@issue</li>
+                    }
+                </ul>
+            </div>
+        }
+        @if (_softWarnings.Count > 0)
+        {
+            <div class="alert alert-warning py-2">
+                <ul class="mb-0">
+                    @foreach (var issue in _softWarnings)
+                    {
+                        <li>@issue</li>
+                    }
+                </ul>
+            </div>
+        }
+
+        <form @onsubmit="@SaveAsync" @onsubmit:preventDefault="true" class="row g-3">
+            <div class="col-md-12"><div class="card-title mb-0">Identity</div></div>
+            <div class="col-md-4">
+                <label class="form-label">Name</label>
+                <input class="form-control" @bind="_name" @bind:event="oninput" @bind:after="@RevalidateAsync" />
+            </div>
+            <div class="col-md-8">
+                <label class="form-label">Description</label>
+                <input class="form-control" @bind="_description" />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Served model name</label>
+                <input class="form-control" @bind="_servedModelName" @bind:event="oninput" @bind:after="@RevalidateAsync" />
+                <div class="form-text">
+                    Pre-filled from the instance's currently-active served name (or "main" when nothing is
+                    active). A different value here changes what API clients request this model by once swapped in —
+                    you'll be asked to confirm that at swap time.
+                </div>
+            </div>
+
+            <div class="col-md-12"><div class="card-title mb-0">Sizing &amp; memory</div></div>
+            <div class="col-md-4">
+                <label class="form-label">Max model length</label>
+                <input class="form-control" type="number" min="1" @bind="_maxModelLen" @bind:after="@RevalidateAsync" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">GPU memory utilization</label>
+                <input class="form-control" type="number" min="0" max="1" step="0.05" @bind="_gpuMemoryUtilization" @bind:after="@RevalidateAsync" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">KV cache dtype</label>
+                <select class="form-select" @bind="_kvCacheDtype" @bind:after="@RevalidateAsync">
+                    <option value="auto">auto</option>
+                    <option value="fp8_e4m3">fp8_e4m3</option>
+                    <option value="float16">float16</option>
+                    <option value="bfloat16">bfloat16</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Data type (--dtype)</label>
+                <select class="form-select" @bind="_dtype" @bind:after="@RevalidateAsync">
+                    <option value="auto">auto</option>
+                    <option value="float16">float16</option>
+                    <option value="bfloat16">bfloat16</option>
+                </select>
+                <div class="form-text">On the Intel stack, bfloat16 is blocked and auto warns — the reason shows above if so.</div>
+            </div>
+
+            <div class="col-md-12"><div class="card-title mb-0">Performance</div></div>
+            <div class="col-md-3">
+                <label class="form-label"><input type="checkbox" class="form-check-input" @bind="_enforceEager" /> Enforce eager</label>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Max batched tokens</label>
+                <input class="form-control" type="number" min="1" @bind="_maxNumBatchedTokens" @bind:after="@RevalidateAsync" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Block size</label>
+                <input class="form-control" type="number" min="1" @bind="_blockSize" @bind:after="@RevalidateAsync" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label"><input type="checkbox" class="form-check-input" @bind="_speculativeDecoding" /> Speculative decoding</label>
+                @if (_speculativeDecoding)
+                {
+                    <input class="form-control form-control-sm mt-1" type="number" min="1" @bind="_speculativeTokens" placeholder="token count" />
+                }
+            </div>
+
+            <div class="col-md-12"><div class="card-title mb-0">Tools &amp; reasoning</div></div>
+            <div class="col-md-3">
+                <label class="form-label"><input type="checkbox" class="form-check-input" @bind="_enableAutoToolChoice" /> Auto tool choice</label>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Tool call parser</label>
+                <input class="form-control" @bind="_toolCallParser" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Reasoning parser</label>
+                <input class="form-control" @bind="_reasoningParser" />
+            </div>
+
+            <div class="col-md-12">
+                <details>
+                    <summary style="cursor:pointer" class="card-title d-inline">Advanced</summary>
+                    <div class="row g-2 mt-2">
+                        <div class="col-md-6">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <label class="form-label mb-1">Extra args</label>
+                                <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _extraArgs.Add(("", "")))">+ Row</button>
+                            </div>
+                            @foreach (var (row, i) in _extraArgs.Select((r, i) => (r, i)))
+                            {
+                                <div class="d-flex gap-1 mb-1">
+                                    <input class="form-control form-control-sm" placeholder="key (no --)" value="@row.Key"
+                                           @oninput="@(e => _extraArgs[i] = ((string)e.Value!, row.Value))" />
+                                    <input class="form-control form-control-sm" placeholder="value (blank = flag)" value="@row.Value"
+                                           @oninput="@(e => _extraArgs[i] = (row.Key, (string)e.Value!))" />
+                                    <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _extraArgs.RemoveAt(i))">✕</button>
+                                </div>
+                            }
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <label class="form-label mb-1">Environment vars</label>
+                                <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _extraEnv.Add(("", "")))">+ Row</button>
+                            </div>
+                            @foreach (var (row, i) in _extraEnv.Select((r, i) => (r, i)))
+                            {
+                                <div class="d-flex gap-1 mb-1">
+                                    <input class="form-control form-control-sm" placeholder="key" value="@row.Key"
+                                           @oninput="@(e => _extraEnv[i] = ((string)e.Value!, row.Value))" />
+                                    <input class="form-control form-control-sm" placeholder="value" value="@row.Value"
+                                           @oninput="@(e => _extraEnv[i] = (row.Key, (string)e.Value!))" />
+                                    <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _extraEnv.RemoveAt(i))">✕</button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <div class="col-md-12">
+                <button type="submit" class="btn btn-primary btn-sm" disabled="@(_busy || _hardBlocks.Count > 0)">@(_busy ? "Saving…" : "Save")</button>
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="@RequestCancel">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Recipe Model { get; set; } = null!;
+    [Parameter] public bool IsNew { get; set; }
+
+    /// <summary>The model picked for validation context (model-dependent rules) --
+    /// null skips those, same as a recipe being model-agnostic at save time.</summary>
+    [Parameter] public int? ModelIdForValidation { get; set; }
+
+    [Parameter] public EventCallback<Recipe> OnSaved { get; set; }
+    [Parameter] public EventCallback OnCancelled { get; set; }
+
+    private string _name = "";
+    private string? _description;
+    private string _servedModelName = "main";
+    private int _maxModelLen;
+    private float _gpuMemoryUtilization;
+    private string _kvCacheDtype = "auto";
+    private string _dtype = "auto";
+    private bool _enforceEager;
+    private int _maxNumBatchedTokens;
+    private int _blockSize;
+    private bool _speculativeDecoding;
+    private int? _speculativeTokens;
+    private bool _enableAutoToolChoice;
+    private string? _toolCallParser;
+    private string? _reasoningParser;
+    private List<(string Key, string Value)> _extraArgs = new();
+    private List<(string Key, string Value)> _extraEnv = new();
+
+    private bool _busy;
+    private string? _error;
+    private List<string> _hardBlocks = new();
+    private List<string> _softWarnings = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _name = Model.Name;
+        _description = Model.Description;
+        _servedModelName = Model.ServedModelName;
+        _maxModelLen = Model.MaxModelLen;
+        _gpuMemoryUtilization = Model.GpuMemoryUtilization;
+        _kvCacheDtype = Model.KvCacheDtype;
+        _dtype = Model.Dtype;
+        _enforceEager = Model.EnforceEager;
+        _maxNumBatchedTokens = Model.MaxNumBatchedTokens;
+        _blockSize = Model.BlockSize;
+        _speculativeDecoding = Model.SpeculativeDecoding;
+        _speculativeTokens = Model.SpeculativeTokens;
+        _enableAutoToolChoice = Model.EnableAutoToolChoice;
+        _toolCallParser = Model.ToolCallParser;
+        _reasoningParser = Model.ReasoningParser;
+        _extraArgs = ParseRows(Model.ExtraArgs);
+        _extraEnv = ParseRows(Model.ExtraEnv);
+
+        await RevalidateAsync();
+    }
+
+    private static List<(string Key, string Value)> ParseRows(string json)
+    {
+        try
+        {
+            var raw = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string?>>>(json) ?? new();
+            return raw
+                .Where(d => d.ContainsKey("key"))
+                .Select(d => (d.GetValueOrDefault("key") ?? "", d.GetValueOrDefault("value") ?? ""))
+                .ToList();
+        }
+        catch
+        {
+            return new();
+        }
+    }
+
+    private static string SerializeRows(List<(string Key, string Value)> rows) =>
+        System.Text.Json.JsonSerializer.Serialize(
+            rows.Where(r => !string.IsNullOrWhiteSpace(r.Key)).Select(r => new { key = r.Key, value = r.Value }));
+
+    private Recipe BuildDraft() => new()
+    {
+        Id = Model.Id,
+        ServerId = Model.ServerId,
+        Name = _name,
+        Description = _description,
+        ServedModelName = _servedModelName,
+        MaxModelLen = _maxModelLen,
+        GpuMemoryUtilization = _gpuMemoryUtilization,
+        KvCacheDtype = _kvCacheDtype,
+        Dtype = _dtype,
+        EnforceEager = _enforceEager,
+        MaxNumBatchedTokens = _maxNumBatchedTokens,
+        BlockSize = _blockSize,
+        SpeculativeDecoding = _speculativeDecoding,
+        SpeculativeTokens = _speculativeTokens,
+        EnableAutoToolChoice = _enableAutoToolChoice,
+        ToolCallParser = _toolCallParser,
+        ReasoningParser = _reasoningParser,
+        ExtraArgs = SerializeRows(_extraArgs),
+        ExtraEnv = SerializeRows(_extraEnv),
+    };
+
+    private async Task RevalidateAsync()
+    {
+        try
+        {
+            var result = await Recipes.ValidateDraftAsync(BuildDraft(), ModelIdForValidation);
+            _hardBlocks = result.HardBlocks.Select(i => i.Message).ToList();
+            _softWarnings = result.SoftWarnings.Select(i => i.Message).ToList();
+        }
+        catch
+        {
+            // Validation itself failing (e.g. transient DB issue) shouldn't block
+            // typing -- Save's own throw is still the hard backstop.
+        }
+    }
+
+    private async Task RequestCancel() => await OnCancelled.InvokeAsync();
+
+    private async Task SaveAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var draft = BuildDraft();
+            var saved = IsNew ? await Recipes.CreateAsync(draft) : await Recipes.UpdateAsync(draft);
+            await OnSaved.InvokeAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            _error = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

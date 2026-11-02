@@ -1,0 +1,347 @@
+@page "/models-recipes"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Supervisor
+@using Dashboard.Infrastructure.Persistence.V2
+@using Dashboard.Web.Components.ModelsRecipes
+@using Dashboard.Web.Components.Shared
+@inject IServerService Servers
+@inject IInstanceService Instances
+@inject IModelService Models
+@inject IRecipeService Recipes
+@inject IDeploymentService Deployments
+@inject ISwapService Swap
+@inject IDialogService Dialogs
+
+<PageTitle>Models &amp; Recipes — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Models &amp; Recipes</h1>
+
+@if (_loading)
+{
+    <p class="text-muted">Loading…</p>
+}
+else if (_selectedInstance is null)
+{
+    <div class="card"><div class="card-body">
+        <p class="text-muted mb-0">No instance configured yet. Register one on the Servers page.</p>
+    </div></div>
+}
+else
+{
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger py-2">@_error</div>
+    }
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                @if (_instances.Count > 1)
+                {
+                    <div class="col-md-4">
+                        <label class="form-label">Instance</label>
+                        <select class="form-select" @bind="_selectedInstanceId" @bind:after="OnInstanceChangedAsync">
+                            @foreach (var inst in _instances)
+                            {
+                                <option value="@inst.Id">@inst.Label</option>
+                            }
+                        </select>
+                    </div>
+                }
+                <div class="col-md-5">
+                    <label class="form-label">Serving model</label>
+                    <select class="form-select" @bind="_servingModelId">
+                        @foreach (var m in _models)
+                        {
+                            <option value="@m.Id">@m.Name</option>
+                        }
+                    </select>
+                    <div class="form-text">"Swap to this" in the recipes table below deploys this model with that recipe.</div>
+                </div>
+                <div class="col-md-3 text-end">
+                    <button class="btn btn-primary btn-sm" @onclick="@(() => _addModelOpen = true)">+ Add model</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="card-title mb-3">Catalog</div>
+            <table class="table table-sm">
+                <thead><tr><th>Name</th><th>Source</th><th>Size</th><th>Quant</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var m in _models)
+                    {
+                        <tr>
+                            <td>@m.Name</td>
+                            <td>@(m.SourceType == "huggingface" ? "Hugging Face" : "Local path")</td>
+                            <td>@(m.SizeBytes is { } sz ? FormatBytes(sz) : "—")</td>
+                            <td>@(m.Quantization ?? "—")</td>
+                            <td>@m.Status</td>
+                            <td class="text-end">
+                                <button class="btn btn-outline btn-sm" @onclick="@(() => NewRecipeFromModelAsync(m))">New recipe</button>
+                                <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteModelAsync(m))">Delete</button>
+                            </td>
+                        </tr>
+                    }
+                    @if (_models.Count == 0)
+                    {
+                        <tr><td colspan="6" class="text-muted">No models registered on this server yet.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="card-title mb-3">Recipes</div>
+            <table class="table table-sm">
+                <thead><tr><th>Recipe</th><th>Served as</th><th>Max len</th><th>GPU mem</th><th></th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var r in _recipes)
+                    {
+                        var isActive = _activeDeployment is not null && _activeDeployment.RecipeId == r.Id && _activeDeployment.ModelId == _servingModelId;
+                        <tr>
+                            <td>@r.Name @(isActive ? "" : "")@if (isActive) { <span class="chip chip-active">active</span> }</td>
+                            <td>@r.ServedModelName</td>
+                            <td>@r.MaxModelLen.ToString("N0")</td>
+                            <td>@r.GpuMemoryUtilization.ToString("0.##")</td>
+                            <td class="text-end">
+                                <button class="btn btn-primary btn-sm" disabled="@(_swapBusy || isActive)" @onclick="@(() => SwapToThisAsync(r))">Swap to this</button>
+                                <button class="btn btn-outline btn-sm" @onclick="@(() => EditRecipeAsync(r))">Edit</button>
+                                <button class="btn btn-outline btn-sm" @onclick="@(() => DuplicateRecipeAsync(r))">Duplicate</button>
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteRecipeAsync(r))">Delete</button>
+                            </td>
+                        </tr>
+                    }
+                    @if (_recipes.Count == 0)
+                    {
+                        <tr><td colspan="6" class="text-muted">No recipes yet — use "New recipe" on a catalog entry above.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_addModelOpen)
+{
+    <AddModelDialog Instance="@_selectedInstance"
+                     OnCancelled="@(() => _addModelOpen = false)"
+                     OnDeleteOldModelsRequested="@(() => _addModelOpen = false)"
+                     OnSaved="@OnModelSavedAsync" />
+}
+
+@if (_editingRecipe is not null)
+{
+    <RecipeEditorDialog Model="@_editingRecipe" IsNew="@_editingIsNew" ModelIdForValidation="@_servingModelId"
+                         OnCancelled="@(() => _editingRecipe = null)"
+                         OnSaved="@OnRecipeSavedAsync" />
+}
+
+@code {
+    private bool _loading = true;
+    private string? _error;
+
+    private List<Server> _servers = new();
+    private int _selectedServerId;
+
+    private List<Instance> _instances = new();
+    private int _selectedInstanceId;
+    private Instance? _selectedInstance;
+
+    private List<Model> _models = new();
+    private List<Recipe> _recipes = new();
+    private Deployment? _activeDeployment;
+    private int _servingModelId;
+
+    private bool _addModelOpen;
+    private Recipe? _editingRecipe;
+    private bool _editingIsNew;
+    private bool _swapBusy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _servers = (await Servers.ListAsync()).ToList();
+            if (_servers.Count > 0)
+            {
+                _selectedServerId = _servers[0].Id;
+                await LoadServerScopedDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not load: " + ex.Message;
+        }
+        _loading = false;
+    }
+
+    private async Task LoadServerScopedDataAsync()
+    {
+        _instances = (await Instances.ListByServerAsync(_selectedServerId)).ToList();
+        _selectedInstance = _instances.FirstOrDefault();
+        _selectedInstanceId = _selectedInstance?.Id ?? 0;
+
+        _models = (await Models.ListByServerAsync(_selectedServerId)).ToList();
+        _recipes = (await Recipes.ListByServerAsync(_selectedServerId)).ToList();
+
+        await RefreshActiveDeploymentAsync();
+    }
+
+    private async Task RefreshActiveDeploymentAsync()
+    {
+        _activeDeployment = _selectedInstance is null ? null : await Deployments.GetActiveAsync(_selectedInstance.Id);
+        _servingModelId = _activeDeployment?.ModelId ?? _models.FirstOrDefault()?.Id ?? 0;
+    }
+
+    private async Task OnInstanceChangedAsync()
+    {
+        _selectedInstance = _instances.FirstOrDefault(i => i.Id == _selectedInstanceId);
+        await RefreshActiveDeploymentAsync();
+    }
+
+    private string CurrentActiveServedName()
+    {
+        var activeRecipe = _activeDeployment is null ? null : _recipes.FirstOrDefault(r => r.Id == _activeDeployment.RecipeId);
+        return activeRecipe?.ServedModelName ?? "main";
+    }
+
+    private void NewRecipeFromModelAsync(Model model)
+    {
+        _editingRecipe = Recipes.NewDraftForModel(model, CurrentActiveServedName());
+        _editingRecipe.Name = NextAvailableRecipeName(model.Name);
+        _editingIsNew = true;
+    }
+
+    private string NextAvailableRecipeName(string baseName)
+    {
+        var existing = _recipes.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+        var candidate = $"{baseName}-recipe";
+        var suffix = 2;
+        while (existing.Contains(candidate))
+        {
+            candidate = $"{baseName}-recipe-{suffix}";
+            suffix++;
+        }
+        return candidate;
+    }
+
+    private void EditRecipeAsync(Recipe recipe)
+    {
+        _editingRecipe = recipe;
+        _editingIsNew = false;
+    }
+
+    private async Task OnRecipeSavedAsync(Recipe saved)
+    {
+        _editingRecipe = null;
+        _recipes = (await Recipes.ListByServerAsync(_selectedServerId)).ToList();
+    }
+
+    private async Task DuplicateRecipeAsync(Recipe recipe)
+    {
+        try
+        {
+            await Recipes.DuplicateAsync(recipe.Id);
+            _recipes = (await Recipes.ListByServerAsync(_selectedServerId)).ToList();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not duplicate: " + ex.Message);
+        }
+    }
+
+    private async Task DeleteRecipeAsync(Recipe recipe)
+    {
+        var confirmed = await Dialogs.ConfirmAsync($"Delete recipe \"{recipe.Name}\"? This cannot be undone.", confirmText: "Delete");
+        if (!confirmed) return;
+        try
+        {
+            await Recipes.DeleteAsync(recipe.Id);
+            _recipes = (await Recipes.ListByServerAsync(_selectedServerId)).ToList();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not delete: " + ex.Message);
+        }
+    }
+
+    private async Task DeleteModelAsync(Model model)
+    {
+        var confirmed = await Dialogs.ConfirmAsync($"Delete model \"{model.Name}\"? This cannot be undone.", confirmText: "Delete");
+        if (!confirmed) return;
+        try
+        {
+            await Models.DeleteAsync(model.Id);
+            _models = (await Models.ListByServerAsync(_selectedServerId)).ToList();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not delete (it may still be referenced by a recipe/deployment): " + ex.Message);
+        }
+    }
+
+    private async Task OnModelSavedAsync(Model saved)
+    {
+        _addModelOpen = false;
+        _models = (await Models.ListByServerAsync(_selectedServerId)).ToList();
+    }
+
+    private async Task SwapToThisAsync(Recipe recipe)
+    {
+        if (_selectedInstance is null || _swapBusy) return;
+        _swapBusy = true;
+        _error = null;
+        try
+        {
+            await Swap.SwapAsync(_selectedInstance.Id, _servingModelId, recipe.Id);
+        }
+        catch (ServedNameChangeRequiresAcknowledgementException ex)
+        {
+            var confirmed = await Dialogs.ConfirmAsync(
+                $"This swap changes the served model name from \"{ex.OldServedModelName}\" to \"{ex.NewServedModelName}\" — clients requesting the old name will break. Continue?",
+                confirmText: "Swap anyway");
+            if (confirmed)
+            {
+                try
+                {
+                    await Swap.SwapAsync(_selectedInstance.Id, _servingModelId, recipe.Id, acknowledgeServedNameChange: true);
+                }
+                catch (Exception ex2)
+                {
+                    _error = "Swap failed: " + ex2.Message;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = "Swap failed: " + ex.Message;
+        }
+        finally
+        {
+            _swapBusy = false;
+            await RefreshActiveDeploymentAsync();
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        double value = bytes;
+        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        return $"{value:0.#} {units[unit]}";
+    }
+}

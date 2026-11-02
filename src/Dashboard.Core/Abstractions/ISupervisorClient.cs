@@ -30,4 +30,20 @@ public interface ISupervisorClient
     Task<SupervisorGpuInfo> GetGpuAsync(string adminUrl, string token, CancellationToken ct = default);
 
     Task<SupervisorSmokeResult> SmokeTestAsync(string adminUrl, string token, CancellationToken ct = default);
+
+    /// <summary>P13's Add-model flow, step 1 -- lists the repo's files + parsed
+    /// config.json + the server's own free disk space, before anything is
+    /// downloaded.</summary>
+    Task<SupervisorDownloadInspectResult> InspectDownloadAsync(string adminUrl, string token, string repoId, CancellationToken ct = default);
+
+    /// <summary>Starts a download into <c>&lt;models_dir&gt;/hf-cache/&lt;slug&gt;</c>.
+    /// Throws <see cref="SupervisorApiException"/> with StatusCode 409 if one is
+    /// already in flight on this instance's supervisor (one download at a time, doc 6).</summary>
+    Task<string> StartDownloadAsync(string adminUrl, string token, string repoId, string slug, string? filename = null, CancellationToken ct = default);
+
+    Task<SupervisorDownloadStatus> GetDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct = default);
+
+    /// <summary>Cancels an in-flight download, or cleans up (removes the partial
+    /// directory of) an already-finished failed/cancelled one.</summary>
+    Task CancelDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct = default);
 }

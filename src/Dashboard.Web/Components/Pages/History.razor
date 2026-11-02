@@ -11,11 +11,11 @@
 <h1 class="page-title">History <span class="text-muted fs-5">/ @(SelectedSource?.Label ?? "no source selected")</span></h1>
 
 <div class="d-flex align-items-center gap-2 mb-3">
-    <select class="form-select window-select" onchange="@OnWindowChanged" aria-label="History window">
-        <option value="1" @selected="@((WindowHours == 1) ? "selected" : null)">Last 1 hour</option>
-        <option value="24" @selected="@((WindowHours == 24) ? "selected" : null)">Last 24 hours</option>
-        <option value="72" @selected="@((WindowHours == 72) ? "selected" : null)">Last 3 days</option>
-        <option value="168" @selected="@((WindowHours == 168) ? "selected" : null)">Last 7 days</option>
+    <select class="form-select window-select" @onchange="@OnWindowChanged" aria-label="History window">
+        <option value="1" selected="@(WindowHours == 1)">Last 1 hour</option>
+        <option value="24" selected="@(WindowHours == 24)">Last 24 hours</option>
+        <option value="72" selected="@(WindowHours == 72)">Last 3 days</option>
+        <option value="168" selected="@(WindowHours == 168)">Last 7 days</option>
     </select>
     <span class="text-muted small" id="hist-range">@(RangeText)</span>
     @if (_loading)

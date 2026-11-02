@@ -12,8 +12,7 @@
    before — this component is the only thing that changed. *@
 <div class="d-flex align-items-center gap-2">
     <select class="source-selector"
-            value="@_selectedServerKey"
-            @onchange="@OnServerChanged"
+            @bind="_selectedServerKey" @bind:after="@OnServerChangedAsync"
             title="Select which physical server"
             aria-label="Physical server"
             disabled="@(Loading || _groups.Count == 0)">
@@ -39,8 +38,7 @@
     </select>
 
     <select class="source-selector"
-            value="@Selection.CurrentSourceId"
-            @onchange="@OnInstanceChanged"
+            @bind:get="Selection.CurrentSourceId" @bind:set="@OnInstanceChangedAsync"
             title="Select which vLLM instance to monitor — also drives Quick Test, hot-swap, Live Traffic, and Logs"
             aria-label="vLLM instance"
             disabled="@(Loading || CurrentGroupInstances.Count == 0)">
@@ -156,9 +154,8 @@
         try { await InvokeAsync(StateHasChanged); } catch { }
     }
 
-    private Task OnServerChanged(ChangeEventArgs e)
+    private Task OnServerChangedAsync()
     {
-        _selectedServerKey = e.Value?.ToString() ?? "";
         // Switching servers auto-picks a default instance on it rather than leaving
         // the instance dropdown pointing at whatever was selected before.
         var def = CurrentGroupInstances.FirstOrDefault(s => s.Active) ?? CurrentGroupInstances.FirstOrDefault();
@@ -166,11 +163,7 @@
         return Task.CompletedTask;
     }
 
-    private Task OnInstanceChanged(ChangeEventArgs e)
-    {
-        Selection.SetCurrent(e.Value?.ToString());
-        return Task.CompletedTask;
-    }
+    private void OnInstanceChangedAsync(string? value) => Selection.SetCurrent(value);
 
     public void Dispose()
     {

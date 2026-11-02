@@ -366,6 +366,62 @@ public class V2ServiceTests(PostgresFixture postgres)
         Assert.Equal(new Dashboard.Core.Recipes.Recipe().MaxModelLen, recipe.MaxModelLen);
     }
 
+    // --- P13's "New recipe" entry point: an unsaved draft + live validation ---
+
+    [Fact]
+    public async Task RecipeService_NewDraftForModel_PrefillsFromModelConfigAndGivenServedName()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
+
+        var model = await modelService.CreateAsync(new Model
+        {
+            ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen",
+            Config = """{"max_position_embeddings": 32768}""",
+        });
+
+        var draft = recipeService.NewDraftForModel(model, "custom-served-name");
+
+        Assert.Equal(0, draft.Id); // unsaved
+        Assert.Equal(server.Id, draft.ServerId);
+        Assert.Equal("custom-served-name", draft.ServedModelName);
+        Assert.Equal(32768, draft.MaxModelLen);
+        Assert.Equal(0.90f, draft.GpuMemoryUtilization);
+    }
+
+    [Fact]
+    public async Task RecipeService_ValidateDraftAsync_WithNoModelId_SkipsModelDependentRules()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory, gpuName: "Intel (12 GB)");
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
+
+        var draft = new Recipe { ServerId = server.Id, Name = "draft", ServedModelName = "main", Dtype = "bfloat16" };
+
+        var result = await recipeService.ValidateDraftAsync(draft, modelId: null);
+
+        // The Intel dtype=bfloat16 rule is model-independent -- still fires.
+        Assert.Contains(result.HardBlocks, i => i.Code == "dtype_bfloat16_blocked_on_intel");
+        // But nothing model-dependent (e.g. path-under-hf-cache) can fire with no model.
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_hf_cache");
+    }
+
+    [Fact]
+    public async Task RecipeService_ValidateDraftAsync_OnAnUnsavedDraft_NeverThrowsEvenThoughItHasNoId()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
+
+        var draft = new Recipe { Id = 0, ServerId = server.Id, Name = "draft", GpuMemoryUtilization = 5f };
+
+        var result = await recipeService.ValidateDraftAsync(draft, modelId: null);
+
+        Assert.Contains(result.HardBlocks, i => i.Message.Contains("gpu_memory_utilization"));
+    }
+
     // --- validating an existing legacy/converted-shaped row ---
 
     [Fact]
