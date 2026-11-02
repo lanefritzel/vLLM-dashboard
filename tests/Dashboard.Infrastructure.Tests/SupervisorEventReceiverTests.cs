@@ -27,6 +27,7 @@ public class SupervisorEventReceiverTests(PostgresFixture postgres)
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
         services.AddHttpClient("supervisor");
         services.AddSignalR();
+        services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
         services.AddSingleton<IDeploymentService, DeploymentService>();
         services.AddSingleton<IInstanceService, InstanceService>();
         services.AddSingleton<ISupervisorClient, SupervisorClient>();

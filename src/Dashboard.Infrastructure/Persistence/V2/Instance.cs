@@ -16,6 +16,23 @@ public class Instance
     /// registered (doc 13) — that instance shows "needs supervisor registration".</summary>
     public string? AdminUrl { get; set; }
 
+    /// <summary>The vLLM-facing host (container name/IP), independent of
+    /// <see cref="AdminUrl"/> (P12): "needs supervisor registration" is a
+    /// reconcile banner, not a traffic outage, so the proxy must still be
+    /// able to forward requests to an instance with no supervisor
+    /// registered yet. <c>ModelProxyService.BuildInferenceBaseUrl</c>
+    /// prefers this field and only falls back to deriving a host from
+    /// <see cref="AdminUrl"/> when it's null, so an already-registered
+    /// instance doesn't need it set twice.</summary>
+    public string? Host { get; set; }
+
+    /// <summary>The Docker container name running this instance's supervisor
+    /// (P12) -- addressed against <see cref="Server.DockerHost"/> for the
+    /// minimal Docker client's Start/Hard-reset actions when the supervisor
+    /// itself is unreachable. Null until set (e.g. at supervisor registration,
+    /// P15b) -- those actions simply aren't offered without it.</summary>
+    public string? ContainerName { get; set; }
+
     public int Port { get; set; } = 9999;
     public int PollIntervalMs { get; set; } = 1000;
     public bool IsActive { get; set; } = true;

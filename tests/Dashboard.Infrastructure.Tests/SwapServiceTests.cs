@@ -57,6 +57,7 @@ public class SwapServiceTests : IAsyncDisposable
         services.AddHttpClient("supervisor");
         services.AddSignalR(); // for IHubContext<DeploymentHub> -- no real clients connect in these tests
         services.AddSingleton<ISupervisorTokenProvider, FixedTokenProvider>();
+        services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
         services.AddSingleton<IServerService, ServerService>();
         services.AddSingleton<IInstanceService, InstanceService>();
         services.AddSingleton<IModelService, ModelService>();

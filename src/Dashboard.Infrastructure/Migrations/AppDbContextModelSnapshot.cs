@@ -709,10 +709,16 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<string>("AdminUrl")
                         .HasColumnType("text");
 
+                    b.Property<string>("ContainerName")
+                        .HasColumnType("text");
+
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
                         .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Host")
+                        .HasColumnType("text");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");

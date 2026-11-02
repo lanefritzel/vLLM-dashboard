@@ -133,6 +133,11 @@ builder.Services.AddSingleton<IModelCatalog, ModelCatalog>();
 builder.Services.AddSingleton<ILaunchSpecStore, LaunchSpecStore>();
 builder.Services.AddSingleton<IMetricsHistory, MetricsHistory>();
 
+// Read-only write guard (P12) -- registered before the V2 services below
+// since they all depend on it.
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IReadOnlyGuard, Dashboard.Infrastructure.Persistence.V2.ReadOnlyGuard>();
+builder.Services.AddHostedService<Dashboard.Infrastructure.Persistence.V2.DatabaseHealthMonitorService>();
+
 // New-schema (V2) service layer (P09b) -- same singleton + per-operation-scope
 // pattern as the legacy catalogs above.
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IServerService, Dashboard.Infrastructure.Persistence.V2.ServerService>();
@@ -150,6 +155,12 @@ builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISwapService, Dashboar
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IDeploymentEventApplier, Dashboard.Infrastructure.Persistence.V2.DeploymentEventApplier>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiver>();
 builder.Services.AddHostedService<Dashboard.Infrastructure.Persistence.V2.DeploymentCatchUpService>();
+
+// Boot reconcile + degradation (P12).
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.BootReconciler>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IBootReconciler>(sp => sp.GetRequiredService<Dashboard.Infrastructure.Persistence.V2.BootReconciler>());
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IReconcileActions>(sp => sp.GetRequiredService<Dashboard.Infrastructure.Persistence.V2.BootReconciler>());
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IMinimalDockerClient, Dashboard.Infrastructure.Docker.MinimalDockerClient>();
 
 // Hosted services. Order matters: hosted services start in registration order,
 // so the DB initializer (migrations + seed) must start before the metrics

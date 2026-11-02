@@ -1,3 +1,4 @@
+using Dashboard.Core.Abstractions;
 using Dashboard.Infrastructure.Identity;
 using Dashboard.Infrastructure.Persistence.V2;
 using Dashboard.Infrastructure.Proxy;
@@ -68,6 +69,7 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
                     services.AddSignalR();
                     services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
                     services.AddHttpClient("proxy", c => c.Timeout = Timeout.InfiniteTimeSpan);
+                    services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
                     services.AddSingleton<IInstanceService, InstanceService>();
                     services.AddSingleton<IModelService, ModelService>();
                     services.AddSingleton<IDeploymentService, DeploymentService>();
@@ -250,5 +252,74 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         var (scopeFactory, client, _) = await StartDashboardHostAsync();
         var response = await client.GetAsync("/proxy/nope/v1/models");
         Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    /// <summary>P12: "needs supervisor registration" is a reconcile banner, not
+    /// a traffic outage -- an instance with NO admin_url at all (never had a
+    /// supervisor registered) must still forward using its own <see cref="Instance.Host"/>.</summary>
+    [Fact]
+    public async Task NoAdminUrlButHostSet_StillForwardsNormally()
+    {
+        var sseChunks = new[] { "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n", "data: [DONE]\n\n" };
+        var upstream = await StartFakeUpstreamAsync(sseChunks, TimeSpan.Zero);
+        var (scopeFactory, client, _) = await StartDashboardHostAsync();
+        var upstreamUri = new Uri(upstream);
+
+        using (var scope = scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var server = new Server { Label = "primary", ModelsDir = "/models" };
+            db.ServersV2.Add(server);
+            await db.SaveChangesAsync();
+
+            var instance = new Instance
+            {
+                ServerId = server.Id, Label = "main", ProxySlug = "main",
+                AdminUrl = null, Host = upstreamUri.Host, Port = upstreamUri.Port,
+            };
+            var modelA = new Model { ServerId = server.Id, Name = "model-a", Path = "/models/hf-cache/model-a" };
+            db.InstancesV2.Add(instance);
+            db.ModelsV2.Add(modelA);
+            await db.SaveChangesAsync();
+
+            var recipe = new Recipe { ServerId = server.Id, Name = "default", ServedModelName = "main" };
+            db.RecipesV2.Add(recipe);
+            await db.SaveChangesAsync();
+
+            db.DeploymentsV2.Add(new Deployment
+            {
+                InstanceId = instance.Id, ModelId = modelA.Id, RecipeId = recipe.Id,
+                ArgsSnapshot = "[]", Status = "active", StartedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var response = await client.PostAsync("/proxy/main/v1/chat/completions",
+            new StringContent("""{"model":"model-a","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("OK", body);
+    }
+
+    /// <summary>Neither Host nor AdminUrl set -- genuinely nothing to forward
+    /// to, distinct from "needs supervisor registration" (which is still a
+    /// servable instance once Host is set).</summary>
+    [Fact]
+    public async Task NoHostAndNoAdminUrl_Returns502()
+    {
+        var (scopeFactory, client, _) = await StartDashboardHostAsync();
+        using (var scope = scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var server = new Server { Label = "primary", ModelsDir = "/models" };
+            db.ServersV2.Add(server);
+            await db.SaveChangesAsync();
+            db.InstancesV2.Add(new Instance { ServerId = server.Id, Label = "main", ProxySlug = "main", AdminUrl = null, Host = null });
+            await db.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/proxy/main/v1/models");
+        Assert.Equal(System.Net.HttpStatusCode.BadGateway, response.StatusCode);
     }
 }

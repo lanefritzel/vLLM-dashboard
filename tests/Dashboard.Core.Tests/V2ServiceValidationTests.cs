@@ -16,7 +16,7 @@ public class V2ServiceValidationTests
     [Fact]
     public async Task ServerService_CreateWithBlankLabel_Rejected()
     {
-        var service = new ServerService(UnusedScopeFactory);
+        var service = new ServerService(UnusedScopeFactory, new ReadOnlyGuard());
         var server = new Server { Label = "", ModelsDir = "/models" };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(server));
@@ -25,7 +25,7 @@ public class V2ServiceValidationTests
     [Fact]
     public async Task ServerService_CreateWithBlankModelsDir_Rejected()
     {
-        var service = new ServerService(UnusedScopeFactory);
+        var service = new ServerService(UnusedScopeFactory, new ReadOnlyGuard());
         var server = new Server { Label = "primary", ModelsDir = "" };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(server));
@@ -36,7 +36,7 @@ public class V2ServiceValidationTests
     {
         // The literal first qwen incident: an empty --model crash-looped the
         // container. A model with no weights location can never be deployed.
-        var service = new ModelService(UnusedScopeFactory);
+        var service = new ModelService(UnusedScopeFactory, new ReadOnlyGuard());
         var model = new Model { ServerId = 1, Name = "qwen", Path = "" };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(model));
@@ -45,7 +45,7 @@ public class V2ServiceValidationTests
     [Fact]
     public async Task ModelService_CreateWithBlankName_Rejected()
     {
-        var service = new ModelService(UnusedScopeFactory);
+        var service = new ModelService(UnusedScopeFactory, new ReadOnlyGuard());
         var model = new Model { ServerId = 1, Name = "", Path = "/models/hf-cache/qwen" };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(model));
@@ -54,7 +54,7 @@ public class V2ServiceValidationTests
     [Fact]
     public async Task InstanceService_CreateWithBlankLabel_Rejected()
     {
-        var service = new InstanceService(UnusedScopeFactory);
+        var service = new InstanceService(UnusedScopeFactory, new ReadOnlyGuard());
         var instance = new Instance { ServerId = 1, Label = "", ProxySlug = "main" };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(instance));
@@ -68,7 +68,7 @@ public class V2ServiceValidationTests
     [InlineData("trailing-hyphen-")]
     public async Task InstanceService_CreateWithNonUrlSafeSlug_Rejected(string slug)
     {
-        var service = new InstanceService(UnusedScopeFactory);
+        var service = new InstanceService(UnusedScopeFactory, new ReadOnlyGuard());
         var instance = new Instance { ServerId = 1, Label = "main vLLM", ProxySlug = slug };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(instance));
@@ -81,10 +81,83 @@ public class V2ServiceValidationTests
         // null scope factory, which is the expected failure past this point;
         // asserting it's NOT an ArgumentException proves validation itself let
         // a well-formed slug through.
-        var service = new InstanceService(UnusedScopeFactory);
+        var service = new InstanceService(UnusedScopeFactory, new ReadOnlyGuard());
         var instance = new Instance { ServerId = 1, Label = "main vLLM", ProxySlug = "main-vllm-2" };
 
         var ex = await Record.ExceptionAsync(() => service.CreateAsync(instance));
         Assert.IsNotType<ArgumentException>(ex);
+    }
+}
+
+/// <summary>P12's write-guard: every Create/Update/Delete/Transition on the
+/// V2 services must refuse before ever touching the DB when the guard says
+/// read-only -- proven here with the same null scope factory trick as above
+/// (if the guard didn't short-circuit first, these would throw a null-ref
+/// from the scope factory instead of <see cref="ReadOnlyModeException"/>).</summary>
+public class ReadOnlyGuardTests
+{
+    private static IServiceScopeFactory UnusedScopeFactory => null!;
+
+    [Fact]
+    public void ReadOnlyGuard_StartsWritable()
+    {
+        var guard = new ReadOnlyGuard();
+        Assert.False(guard.IsReadOnly);
+        guard.EnsureWritable(); // does not throw
+    }
+
+    [Fact]
+    public void ReadOnlyGuard_EnsureWritable_ThrowsWhenReadOnly()
+    {
+        var guard = new ReadOnlyGuard();
+        guard.SetReadOnly(true);
+        Assert.Throws<Dashboard.Core.Abstractions.ReadOnlyModeException>(guard.EnsureWritable);
+    }
+
+    [Fact]
+    public void ReadOnlyGuard_SetReadOnly_RaisesChangedOnlyOnTransition()
+    {
+        var guard = new ReadOnlyGuard();
+        var raiseCount = 0;
+        guard.Changed += (_, _) => raiseCount++;
+
+        guard.SetReadOnly(true);
+        guard.SetReadOnly(true); // no-op, same state
+        guard.SetReadOnly(false);
+
+        Assert.Equal(2, raiseCount);
+    }
+
+    [Fact]
+    public async Task ServerService_CreateAsync_RefusesWhenReadOnly()
+    {
+        var guard = new ReadOnlyGuard();
+        guard.SetReadOnly(true);
+        var service = new ServerService(UnusedScopeFactory, guard);
+
+        await Assert.ThrowsAsync<Dashboard.Core.Abstractions.ReadOnlyModeException>(
+            () => service.CreateAsync(new Server { Label = "primary", ModelsDir = "/models" }));
+    }
+
+    [Fact]
+    public async Task InstanceService_CreateAsync_RefusesWhenReadOnly()
+    {
+        var guard = new ReadOnlyGuard();
+        guard.SetReadOnly(true);
+        var service = new InstanceService(UnusedScopeFactory, guard);
+
+        await Assert.ThrowsAsync<Dashboard.Core.Abstractions.ReadOnlyModeException>(
+            () => service.CreateAsync(new Instance { ServerId = 1, Label = "main", ProxySlug = "main" }));
+    }
+
+    [Fact]
+    public async Task ModelService_CreateAsync_RefusesWhenReadOnly()
+    {
+        var guard = new ReadOnlyGuard();
+        guard.SetReadOnly(true);
+        var service = new ModelService(UnusedScopeFactory, guard);
+
+        await Assert.ThrowsAsync<Dashboard.Core.Abstractions.ReadOnlyModeException>(
+            () => service.CreateAsync(new Model { ServerId = 1, Name = "qwen", Path = "/models/qwen" }));
     }
 }

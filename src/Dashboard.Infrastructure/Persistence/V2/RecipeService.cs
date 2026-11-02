@@ -1,3 +1,4 @@
+using Dashboard.Core.Abstractions;
 using Dashboard.Core.Recipes;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -41,8 +42,13 @@ public interface IRecipeService
 public sealed class RecipeService : IRecipeService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IReadOnlyGuard _readOnlyGuard;
 
-    public RecipeService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+    public RecipeService(IServiceScopeFactory scopeFactory, IReadOnlyGuard readOnlyGuard)
+    {
+        _scopeFactory = scopeFactory;
+        _readOnlyGuard = readOnlyGuard;
+    }
 
     private static void ValidateNameForSave(Recipe recipe)
     {
@@ -80,6 +86,7 @@ public sealed class RecipeService : IRecipeService
 
     public async Task<Recipe> CreateAsync(Recipe recipe, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         ValidateNameForSave(recipe);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -100,6 +107,7 @@ public sealed class RecipeService : IRecipeService
 
     public async Task<Recipe> UpdateAsync(Recipe recipe, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         ValidateNameForSave(recipe);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -120,6 +128,7 @@ public sealed class RecipeService : IRecipeService
 
     public async Task DeleteAsync(int id, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var recipe = await db.RecipesV2.FindAsync([id], ct);
@@ -131,6 +140,7 @@ public sealed class RecipeService : IRecipeService
 
     public async Task<Recipe> DuplicateAsync(int recipeId, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var source = await db.RecipesV2.FindAsync([recipeId], ct)

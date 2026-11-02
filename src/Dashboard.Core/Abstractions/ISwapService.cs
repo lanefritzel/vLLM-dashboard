@@ -33,4 +33,15 @@ public interface ISwapService
     /// <summary>Stop + start the current argv, no config change -- same
     /// tracked pipeline as a swap.</summary>
     Task<SwapResult> RestartAsync(int instanceId, CancellationToken ct = default);
+
+    /// <summary>P12's "Fix" reconcile action: forces a redeploy of the
+    /// instance's current DB-recorded active deployment's own args_snapshot,
+    /// bypassing <see cref="SwapAsync"/>'s "already active" short-circuit --
+    /// which, by definition, would wrongly no-op here, since the whole point
+    /// of "Fix" is that the DB's own bookkeeping disagrees with what the
+    /// supervisor is actually running even though the DB thinks this exact
+    /// (model, recipe) is already active. Also skips the served-name
+    /// acknowledgement gate -- this is an admin correction, not a live
+    /// user-initiated model change.</summary>
+    Task<SwapResult> ForceRedeployAsync(int instanceId, CancellationToken ct = default);
 }

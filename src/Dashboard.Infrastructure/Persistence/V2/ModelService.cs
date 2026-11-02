@@ -1,3 +1,4 @@
+using Dashboard.Core.Abstractions;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,8 +24,13 @@ public interface IModelService
 public sealed class ModelService : IModelService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IReadOnlyGuard _readOnlyGuard;
 
-    public ModelService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+    public ModelService(IServiceScopeFactory scopeFactory, IReadOnlyGuard readOnlyGuard)
+    {
+        _scopeFactory = scopeFactory;
+        _readOnlyGuard = readOnlyGuard;
+    }
 
     private static void ValidateForSave(Model model)
     {
@@ -50,6 +56,7 @@ public sealed class ModelService : IModelService
 
     public async Task<Model> CreateAsync(Model model, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         ValidateForSave(model);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -60,6 +67,7 @@ public sealed class ModelService : IModelService
 
     public async Task<Model> UpdateAsync(Model model, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         ValidateForSave(model);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -70,6 +78,7 @@ public sealed class ModelService : IModelService
 
     public async Task DeleteAsync(int id, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var model = await db.ModelsV2.FindAsync([id], ct);

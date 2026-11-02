@@ -1499,9 +1499,149 @@ ever change what's running).
 | Oversized payload/long-idle SSE heartbeat/mirrored-text cap behave as before; app logs reach the DB; a container restart keeps the login session | Yes | `StreamWithTeeAsync` preserved byte-for-byte (not touched by this phase at all); DB logging and Data Protection keys are unrelated infrastructure this phase never modifies |
 | `gate.sh` passes with the retired code and tests removed | Yes | confirmed above, 173 + 57 .NET + 127 Python, all green |
 
+## P12 -- Boot reconcile + degradation
+
+Three independent pieces, each with its own real end-to-end test: the
+read-only write guard, the reconciler + Adopt/Fix/Mark-stopped actions,
+and the minimal Docker client for the "supervisor unreachable" case.
+
+Asked and got an answer on the write-guard design up front (the page says
+"a global write guard + banner driven by DB health checks," but this app's
+writes happen both through HTTP endpoints and direct Blazor-Server-to-C#
+calls, which an HTTP middleware alone wouldn't cover): a shared
+`IReadOnlyGuard`, checked inside each V2 service's own write methods
+(Create/Update/Delete/Transition across all five), backed by a periodic
+DB-health-check `BackgroundService` -- not an HTTP-layer gate.
+
+Found a real contradiction between this page's own DoD and P11's
+already-committed design partway through, and stopped to ask rather than
+silently resolve it (per the standing rule): the DoD says an instance with
+`admin_url IS NULL` should show "needs supervisor registration" **and**
+"the proxy still forwards to its configured inference URL" -- but P11
+deliberately removed any separately-stored inference URL/host, deriving
+it entirely from `AdminUrl`'s own host. With no `AdminUrl`, there was
+nothing left to derive a host from, so the proxy returned 502 instead of
+forwarding anywhere -- directly contradicting this page's DoD. Owner
+decided (2026-11-01): add back a separate `Instance.Host` field,
+independent of `AdminUrl`, that the proxy prefers and only falls back to
+deriving from `AdminUrl` when unset. This reopens (narrowly) a P11
+decision, not a P12 one.
+
+Also found, while computing reconcile state against the real supervisor
+container, that `current_deployment_id` (`GET /admin/status`) is cleared
+back to `null` the instant a deploy concludes (`deploy_runner.py`) --
+it's never populated in the "ready" steady state the reconciler actually
+runs against. A deployment-id comparison (what the first implementation
+attempt used) therefore always reported `Mismatch` even when the DB and
+supervisor agreed. Fixed by comparing the supervisor's `Child.Argv`
+against the DB's active deployment's own frozen `ArgsSnapshot` instead --
+argv is the only thing that stays meaningful once past the deploy phase.
+
+"Fix" needed its own `ISwapService.ForceRedeployAsync`, not a call through
+`SwapAsync`: `SwapAsync`'s "already active" short-circuit (same model +
+recipe already the DB's active row -> no-op) is exactly wrong for Fix's
+own use case, where the DB's active row says X but the supervisor is
+actually running something else -- `SwapAsync` would see "X already
+active" by its own bookkeeping and do nothing. `ForceRedeployAsync` reuses
+the same insert-pending-row-then-deploy pipeline but skips that check (and
+the served-name acknowledgement gate -- this is an admin correction, not a
+live user-initiated change).
+
+Done:
+- `src/Dashboard.Core/Abstractions/IReadOnlyGuard.cs` (new):
+  `IReadOnlyGuard`/`ReadOnlyModeException`.
+- `src/Dashboard.Infrastructure/Persistence/V2/ReadOnlyGuard.cs` (new):
+  plain mutable state holder, `Changed` event only fires on an actual
+  transition.
+- `src/Dashboard.Infrastructure/Persistence/V2/DatabaseHealthMonitorService.cs`
+  (new): `BackgroundService`, 5s `Task.Delay` loop (same shape as P10b's
+  `DeploymentCatchUpService`), `db.Database.CanConnectAsync()`; any
+  exception (not just a clean "unhealthy" result) also flips to read-only,
+  since "can't tell" must be treated the same as "down."
+- `EnsureWritable()` added to every Create/Update/Delete/Transition method
+  on `ServerService`, `InstanceService`, `ModelService`, `RecipeService`
+  (including `DuplicateAsync`), `DeploymentService` (including
+  `ActivateAndStopPreviousAsync`) -- all five now take `IReadOnlyGuard` in
+  their constructor.
+- `src/Dashboard.Infrastructure/Persistence/V2/Instance.cs`: `ContainerName`
+  (nullable, for the Docker client) and `Host` (nullable, the P11-gap fix
+  above) added; migrations `AddInstanceContainerName`, `AddInstanceHost`.
+- `src/Dashboard.Core/Abstractions/IBootReconciler.cs` (new):
+  `ReconcileStatus` (Ok/Mismatch/IdleVsActive/NeedsRegistration/Down),
+  `ReconcileState`, `IBootReconciler` (`ReconcileInstanceAsync`/
+  `ReconcileAllAsync`), `IReconcileActions` (`AdoptAsync`/`MarkStoppedAsync`
+  -- Fix is `ISwapService.ForceRedeployAsync`, not repeated here).
+- `src/Dashboard.Infrastructure/Persistence/V2/BootReconciler.cs` (new):
+  implements both interfaces; never corrects either side on its own, only
+  reports + the two explicit actions it owns.
+- `src/Dashboard.Infrastructure/Persistence/V2/SwapService.cs`:
+  `ForceRedeployAsync` added ("Fix").
+- `src/Dashboard.Infrastructure/Proxy/ModelProxyService.cs`:
+  `BuildInferenceBaseUrl` now prefers `Instance.Host`, falls back to
+  `AdminUrl`'s host, returns null (-> 502) only when neither is set;
+  `HandleAsync`'s old "AdminUrl null -> 502 'no supervisor registered'"
+  gate replaced with "no host derivable at all -> 502 'no inference host
+  configured yet'" -- "needs supervisor registration" is now purely a
+  reconcile-page concept, never a proxy gate.
+- `src/Dashboard.Core/Abstractions/IMinimalDockerClient.cs` (new) +
+  `src/Dashboard.Infrastructure/Docker/MinimalDockerClient.cs` (new):
+  `StartContainerAsync`/`HardResetContainerAsync`, same raw-HTTP-to-
+  Docker-Engine-API convention as `DockerOrchestrator` but with none of
+  its container-creation machinery. **Not exercised against a real Docker
+  host in this phase** -- see Deviations below.
+- `src/Dashboard.Web/Program.cs`: `IReadOnlyGuard` +
+  `DatabaseHealthMonitorService` registered before the V2 services;
+  `IBootReconciler`/`IReconcileActions`/`IMinimalDockerClient` registered.
+- New tests: `tests/Dashboard.Core.Tests/V2ServiceValidationTests.cs`
+  (`ReadOnlyGuardTests`, pure unit, no DB) -- guard state transitions +
+  `EnsureWritable` wired into Server/Instance/Model services.
+  `tests/Dashboard.Infrastructure.Tests/BootReconcilerTests.cs` (new, 6
+  tests, real supervisor container): Ok, NeedsRegistration, Down (unreachable
+  admin_url), IdleVsActive -> MarkStopped clears it, Mismatch (supervisor
+  serving something the DB doesn't know) -> Adopt records it, Mismatch (DB
+  says a different argv) -> Fix (`ForceRedeployAsync`) resolves it.
+  `tests/Dashboard.Infrastructure.Tests/ModelProxyServiceTests.cs`: 2 new
+  tests for the `Instance.Host` fix (forwards with no `AdminUrl` when
+  `Host` is set; 502 when neither is set).
+- `plan/testing-reference.md`: new "Boot reconcile + degradation (P12)"
+  section; the P11 section's own proxy-URL note corrected (was "derived,
+  never stored," now reflects the `Host`-first fallback).
+- 179 Core + 65 Infrastructure .NET tests (up from 173 + 57), 127 Python
+  tests; `./scripts/gate.sh` green.
+
+Out of scope, not touched: banner/page visuals (P14/P15), the Servers-page
+registration flow that would actually SET `Host`/`ContainerName` (P15b) --
+this phase only needed the fields to exist and the service logic that
+reads/writes them to be correct, not a UI to populate them.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Seeded mismatch -> "mismatch" reconcile state with both values | Yes | `ReconcileInstance_SupervisorServingSomethingDbDoesNotKnow_Mismatch_AndAdoptRecordsIt`, `ReconcileInstance_DbSaysDifferentModelThanSupervisor_Mismatch_AndFixForcesDbsVersion` |
+| Adopt writes X, Fix triggers a swap to Y, neither happens without the click | Yes | Both tests above -- `AdoptAsync`/`ForceRedeployAsync` only run when the test explicitly calls them; `ReconcileInstanceAsync` alone never mutates anything |
+| Supervisor idle but DB active -> "idle vs active" state, Mark stopped sets the row stopped | Yes | `ReconcileInstance_DbActiveButSupervisorIdle_IdleVsActive_AndMarkStoppedClearsIt` |
+| Kill Postgres mid-session -> read-only banner, writes rejected with a clear error, supervisor-status/logs/playground reads still succeed, restoring Postgres clears read-only | Partially | Guard mechanism + `ReadOnlyModeException` unit-tested (`ReadOnlyGuardTests`); reads structurally unaffected (they never call `EnsureWritable`) since this was never wired into any read path. **Not** verified against an actual killed real Postgres container end-to-end in this phase -- `DatabaseHealthMonitorService`'s own `CanConnectAsync` polling loop has no integration test here. See Deviations. |
+| Kill the supervisor container -> instance "down" with last-known state, Start container offered | Partially | `Down` status verified against an unreachable `admin_url` (`ReconcileInstance_SupervisorUnreachable_Down`), equivalent in effect to a killed container from the reconciler's own point of view. `IMinimalDockerClient.StartContainerAsync` itself has no test -- see Deviations. |
+| Instance with `admin_url IS NULL` -> "needs supervisor registration", proxy still forwards to its configured inference URL | Yes (after the `Instance.Host` fix) | `ReconcileInstance_NoAdminUrl_NeedsRegistration`; `NoAdminUrlButHostSet_StillForwardsNormally` |
+| Dashboard restart with an idle supervisor -> nothing is started | Yes, structurally | Nothing in this phase (or any prior one) auto-starts a deployment on dashboard boot -- `DeploymentCatchUpService` (P10b) only resumes already-`pending` rows, never starts a new one; the reconciler only ever reports state, Adopt/Fix/Mark-stopped are explicit operator actions. No preload path exists (P11 deleted `PreloadService` entirely). |
+
 ## Deviations / findings worth flagging
 
 - `tests/Dashboard.Web.Tests` currently has no test files (project exists,
   `dotnet test` reports "No test is available"). Not a P00 blocker -- the
   gate still exits 0 -- but noting it since the phase page assumes existing
   unit tests to classify, and this project contributes none yet.
+- **P12**: `IMinimalDockerClient` (Start/Hard-reset) and
+  `DatabaseHealthMonitorService`'s actual Postgres-down/up transition have
+  no integration test against a real Docker host / a real killed-and-
+  restored Postgres container -- both would require taking action against
+  live infrastructure (starting/stopping real containers outside this
+  repo's own Testcontainers-managed ones), which the standing "always ask
+  before any action on a live/remote system" rule means wasn't done
+  without asking first. The read-only guard's own logic (throws when
+  flagged, doesn't when not) is proven at the unit level; the health
+  monitor's polling loop and the Docker client's HTTP calls are simple
+  enough (same pattern as already-tested `DeploymentCatchUpService` /
+  `DockerOrchestrator`) that the risk is believed low, but this is
+  flagged rather than silently assumed.

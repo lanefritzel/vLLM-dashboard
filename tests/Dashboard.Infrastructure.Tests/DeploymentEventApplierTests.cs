@@ -27,6 +27,7 @@ public class DeploymentEventApplierTests(PostgresFixture postgres)
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
         services.AddHttpClient("supervisor");
         services.AddSignalR();
+        services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
         services.AddSingleton<IDeploymentService, DeploymentService>();
         services.AddSingleton<ISupervisorClient, SupervisorClient>();
         services.AddSingleton<IDeploymentEventApplier, DeploymentEventApplier>();

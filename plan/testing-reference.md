@@ -214,9 +214,10 @@ dotnet test tests/Dashboard.Infrastructure.Tests --filter FullyQualifiedName~Das
 dotnet test tests/Dashboard.Core.Tests --filter FullyQualifiedName~ModelProxyServiceTests   # pure-helper unit tests, unaffected by this phase
 ```
 
-The inference base URL is derived, never stored: same host as the
-instance's own `AdminUrl`, instance's own `Port`. If a manual proxy check
-against a real container doesn't reach the model, check `Instance.Port`
+The inference base URL prefers `Instance.Host` (added P12, see below); when
+that's null it falls back to deriving from the instance's own `AdminUrl`
+host, still using the instance's own `Port` either way. If a manual proxy
+check against a real container doesn't reach the model, check `Instance.Port`
 matches whatever `--port` the active deployment's own argv actually used
 (P10a's `ArgBuilder` sets it from the SAME `Instance.Port` field, so they
 should always agree -- a mismatch means something edited one without the
@@ -224,8 +225,79 @@ other, not a proxy bug).
 
 `/proxy/<slug>/...` resolves purely by `Instance.ProxySlug` now (P11) --
 `IInstanceService.GetBySlugAsync`. A 404 at this route almost always means
-either the slug doesn't match any instance, or (502) the instance's own
-`AdminUrl` isn't set yet ("no supervisor registered").
+the slug doesn't match any instance; a 502 means NEITHER `Host` nor
+`AdminUrl` is set (genuinely nothing to forward to -- an instance that's
+only missing `AdminUrl` but has `Host` set still forwards fine, see P12).
+
+## Boot reconcile + degradation (P12)
+
+```bash
+# Reconciler + Adopt/Fix/Mark-stopped against a real supervisor container:
+dotnet test tests/Dashboard.Infrastructure.Tests --filter FullyQualifiedName~BootReconcilerTests
+
+# Read-only write guard -- pure unit tests, no DB/container needed:
+dotnet test tests/Dashboard.Core.Tests --filter FullyQualifiedName~ReadOnlyGuardTests
+
+# Host-field proxy forwarding (admin_url null but still servable):
+dotnet test tests/Dashboard.Infrastructure.Tests --filter "FullyQualifiedName~ModelProxyServiceTests.NoAdminUrlButHostSet|FullyQualifiedName~ModelProxyServiceTests.NoHostAndNoAdminUrl"
+```
+
+**Reconcile status is computed by comparing ARGV, not a deployment id.**
+The supervisor's own `current_deployment_id` (`GET /admin/status`) is
+cleared back to `null` the instant a deploy concludes (`deploy_runner.py`'s
+`_current_deployment_id = None` right after `_record(..., "ready"/"failed"/
+"crashed", ...)`) -- it's only ever populated WHILE a deploy is actively in
+flight, never in the "ready" steady state this reconciler actually runs
+against. So `BootReconciler.ReconcileInstanceAsync` compares the
+supervisor's `status.Child.Argv` against the DB's active deployment's own
+`ArgsSnapshot` (deserialized) for equality -- that's the only real signal
+for "what's running" once past the deploy phase. If you're hand-testing
+reconcile against a real container and see `Mismatch` when you expect `Ok`,
+diff the two argvs first, not deployment ids.
+
+**`ISwapService.ForceRedeployAsync`** is "Fix" -- deliberately bypasses
+`SwapAsync`'s "already active" short-circuit (which would otherwise wrongly
+no-op: the whole point of Fix is the DB's own active row disagreeing with
+what the supervisor is actually running, even though by the DB's own
+bookkeeping that exact (model, recipe) is already "active"). It redeploys
+the DB's current active row's own frozen `ArgsSnapshot`, not a freshly
+rebuilt argv from the live recipe/model.
+
+**The read-only write guard (`IReadOnlyGuard`)** is checked first thing in
+every Create/Update/Delete/Transition method on `ServerService`,
+`InstanceService`, `ModelService`, `RecipeService`, `DeploymentService`
+(including `DeploymentService.ActivateAndStopPreviousAsync`) --
+`EnsureWritable()` throws `ReadOnlyModeException` before any DB call when
+read-only. `DatabaseHealthMonitorService` (a 5s-interval `BackgroundService`,
+same `Task.Delay` loop shape as `DeploymentCatchUpService`) is the ONLY
+thing that ever calls `IReadOnlyGuard.SetReadOnly` -- it tries
+`db.Database.CanConnectAsync()` each tick and flips the guard on
+failure/success. To hand-test against a real Postgres: kill the container,
+wait ~5s, try any write (e.g. `POST` through a V2 service) -- expect the
+typed exception; `docker start` it again, wait ~5s, the next write
+succeeds again. Reads never go through the guard at all -- supervisor
+status/logs/playground reads are structurally unaffected since they don't
+call these write methods.
+
+**`Instance.Host`** (new column, migration `AddInstanceHost`) is what makes
+"needs supervisor registration" a reconcile-page banner rather than a
+traffic outage: the proxy (`ModelProxyService.BuildInferenceBaseUrl`)
+prefers it and only falls back to deriving a host from `AdminUrl` when
+`Host` is null, so an instance can serve inference traffic with no
+supervisor registered at all, as long as `Host` is set. Both null -> 502
+("no inference host configured yet"), not "needs supervisor registration"
+(that status is purely a reconcile concept, computed by `BootReconciler`,
+and never gates the proxy itself).
+
+**`IMinimalDockerClient`** (Start/Hard-reset by `Instance.ContainerName`
+against `Server.DockerHost`, same raw-HTTP-to-Docker-Engine-API convention
+as `DockerOrchestrator`, `v1.43/containers/{name}/start|stop`) has NO
+automated test against a real Docker host in this phase -- per the
+standing "always ask before any action on a live/remote system" rule, this
+wasn't exercised against this machine's actual Docker socket. If you need
+to verify it, point `dockerHost`/`containerName` at a real container you
+control and call `StartContainerAsync`/`HardResetContainerAsync` directly;
+there's no integration test harness for it here.
 
 ## Postgres-over-bridge soak test (P01c)
 

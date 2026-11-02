@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Dashboard.Core.Abstractions;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,8 +34,13 @@ public sealed class InstanceService : IInstanceService
     private static readonly Regex SlugPattern = new(@"^[a-z0-9]+(-[a-z0-9]+)*$", RegexOptions.Compiled);
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IReadOnlyGuard _readOnlyGuard;
 
-    public InstanceService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+    public InstanceService(IServiceScopeFactory scopeFactory, IReadOnlyGuard readOnlyGuard)
+    {
+        _scopeFactory = scopeFactory;
+        _readOnlyGuard = readOnlyGuard;
+    }
 
     private static void ValidateForSave(Instance instance)
     {
@@ -70,6 +76,7 @@ public sealed class InstanceService : IInstanceService
 
     public async Task<Instance> CreateAsync(Instance instance, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         ValidateForSave(instance);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -87,6 +94,7 @@ public sealed class InstanceService : IInstanceService
 
     public async Task<(Instance Instance, bool SlugChanged)> UpdateAsync(Instance instance, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         ValidateForSave(instance);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -111,6 +119,7 @@ public sealed class InstanceService : IInstanceService
 
     public async Task DeleteAsync(int id, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var instance = await db.InstancesV2.FindAsync([id], ct);

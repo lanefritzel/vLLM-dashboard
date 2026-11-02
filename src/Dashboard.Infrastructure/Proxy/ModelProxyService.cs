@@ -77,9 +77,15 @@ public sealed class ModelProxyService : IModelProxyService
             await WriteErrorAsync(context, StatusCodes.Status404NotFound, "Unknown instance.");
             return;
         }
-        if (string.IsNullOrWhiteSpace(instance.AdminUrl))
+        var inferenceBaseUrl = BuildInferenceBaseUrl(instance);
+        if (inferenceBaseUrl is null)
         {
-            await WriteErrorAsync(context, StatusCodes.Status502BadGateway, "This instance has no supervisor registered yet.");
+            // Not "needs supervisor registration" -- that's a reconcile-page
+            // banner (P12), not a traffic error. This is "there is
+            // genuinely no host to forward to at all" (neither Host nor
+            // AdminUrl set yet) -- an instance that's missing BOTH has
+            // never been pointed at anything.
+            await WriteErrorAsync(context, StatusCodes.Status502BadGateway, "This instance has no inference host configured yet.");
             return;
         }
 
@@ -108,7 +114,7 @@ public sealed class ModelProxyService : IModelProxyService
             }
         }
 
-        await ForwardAsync(context, instance, path, requestBody, requestedModelName, ct);
+        await ForwardAsync(context, inferenceBaseUrl, instance, path, requestBody, requestedModelName, ct);
     }
 
     private readonly record struct ProxyError(int StatusCode, string Message);
@@ -201,22 +207,29 @@ public sealed class ModelProxyService : IModelProxyService
         return null;
     }
 
-    /// <summary>The instance's inference base URL -- same host as its supervisor's own
-    /// admin API (AdminUrl), since the supervisor and vLLM always run in the same
-    /// container (doc 5), just a different port (the instance's own Port, the vLLM
-    /// --port the recipe/ArgBuilder launches it with). There's no separate stored
-    /// "inference URL" field on Instance -- deliberately derived, so the two can never
-    /// drift apart the way two independently-edited fields could.</summary>
-    private static string BuildInferenceBaseUrl(Instance instance)
+    /// <summary>The instance's inference base URL. Prefers <see cref="Instance.Host"/>
+    /// (P12: the proxy must still forward when no supervisor is registered -- "needs
+    /// supervisor registration" is a reconcile banner, not a traffic outage), falling
+    /// back to the host portion of <see cref="Instance.AdminUrl"/> when Host isn't set
+    /// (the supervisor and vLLM always run in the same container, doc 5, so an
+    /// already-registered instance doesn't need Host set too). Either way, always the
+    /// instance's own Port, never whatever port AdminUrl itself uses. Returns null when
+    /// there's no host to derive from either way -- the caller's job to 502.</summary>
+    private static string? BuildInferenceBaseUrl(Instance instance)
     {
-        var adminUri = new Uri(instance.AdminUrl!);
+        if (!string.IsNullOrWhiteSpace(instance.Host))
+            return $"http://{instance.Host}:{instance.Port}";
+        if (string.IsNullOrWhiteSpace(instance.AdminUrl))
+            return null;
+        var adminUri = new Uri(instance.AdminUrl);
         return $"{adminUri.Scheme}://{adminUri.Host}:{instance.Port}";
     }
 
     private async Task ForwardAsync(
-        HttpContext context, Instance instance, string path, string bufferedBody, string? requestedModelName, CancellationToken ct)
+        HttpContext context, string inferenceBaseUrl, Instance instance, string path, string bufferedBody,
+        string? requestedModelName, CancellationToken ct)
     {
-        var targetUrl = BuildInferenceBaseUrl(instance).TrimEnd('/') + "/" + path.TrimStart('/') + context.Request.QueryString;
+        var targetUrl = inferenceBaseUrl.TrimEnd('/') + "/" + path.TrimStart('/') + context.Request.QueryString;
         var sourceId = instance.Id.ToString();
         var requestId = Guid.NewGuid().ToString("n");
         var sw = Stopwatch.StartNew();

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dashboard.Core.Abstractions;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,8 +50,13 @@ public interface IDeploymentService
 public sealed class DeploymentService : IDeploymentService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IReadOnlyGuard _readOnlyGuard;
 
-    public DeploymentService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+    public DeploymentService(IServiceScopeFactory scopeFactory, IReadOnlyGuard readOnlyGuard)
+    {
+        _scopeFactory = scopeFactory;
+        _readOnlyGuard = readOnlyGuard;
+    }
 
     public async Task<IReadOnlyList<Deployment>> ListByInstanceAsync(int instanceId, CancellationToken ct = default)
     {
@@ -92,6 +98,7 @@ public sealed class DeploymentService : IDeploymentService
 
     public async Task<Deployment> CreateAsync(Deployment deployment, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         if (string.IsNullOrWhiteSpace(deployment.ArgsSnapshot) || deployment.ArgsSnapshot == "null")
             throw new ArgumentException("A deployment must have an args_snapshot.");
         // Freeze it as given -- re-serializing through JsonDocument would be a
@@ -119,6 +126,7 @@ public sealed class DeploymentService : IDeploymentService
         int? exitCode = null, string? logTail = null, DateTime? startedAt = null, DateTime? stoppedAt = null,
         CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var deployment = await db.DeploymentsV2.FindAsync([id], ct)
@@ -146,6 +154,7 @@ public sealed class DeploymentService : IDeploymentService
 
     public async Task<Deployment> ActivateAndStopPreviousAsync(int deploymentId, string previousStopReason, CancellationToken ct = default)
     {
+        _readOnlyGuard.EnsureWritable();
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await using var transaction = await db.Database.BeginTransactionAsync(ct);

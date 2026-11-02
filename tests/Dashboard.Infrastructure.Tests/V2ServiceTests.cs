@@ -40,7 +40,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     public async Task ServerService_CrudRoundTrips()
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
-        var service = new ServerService(scopeFactory);
+        var service = new ServerService(scopeFactory, new ReadOnlyGuard());
 
         var created = await service.CreateAsync(new Server { Label = "primary", ModelsDir = "/models" });
         Assert.True(created.Id > 0);
@@ -61,7 +61,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var service = new InstanceService(scopeFactory);
+        var service = new InstanceService(scopeFactory, new ReadOnlyGuard());
 
         var created = await service.CreateAsync(new Instance { ServerId = server.Id, Label = "main vLLM", ProxySlug = "main" });
         Assert.True(created.Id > 0);
@@ -86,7 +86,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var service = new ModelService(scopeFactory);
+        var service = new ModelService(scopeFactory, new ReadOnlyGuard());
 
         var created = await service.CreateAsync(new Model { ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen" });
         Assert.True(created.Id > 0);
@@ -107,7 +107,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090"); // non-Intel -- no dtype rule in the way
-        var service = new RecipeService(scopeFactory);
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var created = await service.CreateAsync(new Recipe { ServerId = server.Id, Name = "default", ServedModelName = "main" });
         Assert.True(created.Id > 0);
@@ -128,10 +128,10 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var instanceService = new InstanceService(scopeFactory);
-        var modelService = new ModelService(scopeFactory);
-        var recipeService = new RecipeService(scopeFactory);
-        var deploymentService = new DeploymentService(scopeFactory);
+        var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
         var instance = await instanceService.CreateAsync(new Instance { ServerId = server.Id, Label = "main", ProxySlug = "main" });
         var model = await modelService.CreateAsync(new Model { ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen" });
@@ -158,10 +158,10 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var instanceService = new InstanceService(scopeFactory);
-        var modelService = new ModelService(scopeFactory);
-        var recipeService = new RecipeService(scopeFactory);
-        var deploymentService = new DeploymentService(scopeFactory);
+        var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
         var instance = await instanceService.CreateAsync(new Instance { ServerId = server.Id, Label = "main", ProxySlug = "main" });
         var model = await modelService.CreateAsync(new Model { ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen" });
@@ -194,10 +194,10 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var instanceService = new InstanceService(scopeFactory);
-        var modelService = new ModelService(scopeFactory);
-        var recipeService = new RecipeService(scopeFactory);
-        var deploymentService = new DeploymentService(scopeFactory);
+        var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
         var instance = await instanceService.CreateAsync(new Instance { ServerId = server.Id, Label = "main", ProxySlug = "main" });
         var model = await modelService.CreateAsync(new Model { ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen" });
@@ -217,10 +217,10 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var instanceService = new InstanceService(scopeFactory);
-        var modelService = new ModelService(scopeFactory);
-        var recipeService = new RecipeService(scopeFactory);
-        var deploymentService = new DeploymentService(scopeFactory);
+        var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
         var instance = await instanceService.CreateAsync(new Instance { ServerId = server.Id, Label = "main", ProxySlug = "main" });
         var model = await modelService.CreateAsync(new Model { ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen" });
@@ -250,7 +250,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var service = new RecipeService(scopeFactory);
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         await service.CreateAsync(new Recipe { ServerId = server.Id, Name = "default", ServedModelName = "main" });
 
@@ -264,7 +264,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var service = new InstanceService(scopeFactory);
+        var service = new InstanceService(scopeFactory, new ReadOnlyGuard());
 
         await service.CreateAsync(new Instance { ServerId = server.Id, Label = "main", ProxySlug = "main" });
 
@@ -280,7 +280,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "Intel Arc A770");
-        var service = new RecipeService(scopeFactory);
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(
             new Recipe { ServerId = server.Id, Name = "bad", ServedModelName = "main", Dtype = "bfloat16" }));
@@ -291,7 +291,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "Intel Arc A770");
-        var service = new RecipeService(scopeFactory);
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var created = await service.CreateAsync(
             new Recipe { ServerId = server.Id, Name = "good", ServedModelName = "main", Dtype = "float16" });
@@ -305,7 +305,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var service = new RecipeService(scopeFactory);
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var original = await service.CreateAsync(new Recipe
         {
@@ -327,8 +327,8 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var modelService = new ModelService(scopeFactory);
-        var recipeService = new RecipeService(scopeFactory);
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var model = await modelService.CreateAsync(new Model
         {
@@ -353,8 +353,8 @@ public class V2ServiceTests(PostgresFixture postgres)
         // HF repo file, a different layer entirely, before anything is stored).
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var modelService = new ModelService(scopeFactory);
-        var recipeService = new RecipeService(scopeFactory);
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var model = await modelService.CreateAsync(new Model
         {
@@ -381,7 +381,7 @@ public class V2ServiceTests(PostgresFixture postgres)
         var model = await db.ModelsV2.FirstAsync(m => m.ServerId == server.Id);
         var recipe = await db.RecipesV2.FirstAsync(r => r.ServerId == server.Id);
 
-        var service = new RecipeService(scopeFactory);
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var result = await service.ValidateAsync(recipe.Id, model.Id);
 

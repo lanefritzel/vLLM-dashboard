@@ -193,6 +193,30 @@ public sealed class SwapService : ISwapService
         return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct, restart: true);
     }
 
+    public async Task<SwapResult> ForceRedeployAsync(int instanceId, CancellationToken ct = default)
+    {
+        var instance = await RequireInstanceAsync(instanceId, ct);
+        var token = RequireToken(instanceId);
+        var active = await _deployments.GetActiveAsync(instanceId, ct)
+            ?? throw new InvalidOperationException("Nothing to fix on this instance -- no active deployment recorded.");
+
+        var argv = JsonSerializer.Deserialize<List<string>>(active.ArgsSnapshot)
+            ?? throw new InvalidOperationException($"Deployment {active.Id}'s args_snapshot could not be read.");
+
+        // Unlike SwapAsync, this never short-circuits on "same (model,
+        // recipe) already active" -- that's exactly the condition "Fix" is
+        // called to resolve (the DB's own row says so, but the supervisor
+        // disagrees), and the stopped-vs-active bookkeeping below reflects
+        // the DB's own (wrong) row being replaced, not a real swap.
+        var deployment = await _deployments.CreateAsync(new Deployment
+        {
+            InstanceId = instanceId, ModelId = active.ModelId, RecipeId = active.RecipeId,
+            ArgsSnapshot = active.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
+        }, ct);
+
+        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct);
+    }
+
     /// <summary>Step 4 shared by Swap/Rollback/Restart: ask the supervisor,
     /// and return "pending" immediately -- the event applier (push, falling
     /// back to catch-up) resolves the actual outcome asynchronously (P10b).</summary>

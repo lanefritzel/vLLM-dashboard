@@ -44,6 +44,7 @@ public class DeploymentHubTests(PostgresFixture postgres) : IAsyncDisposable
                     services.AddSignalR();
                     services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
                     services.AddHttpClient("supervisor");
+                    services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
                     services.AddSingleton<IDeploymentService, DeploymentService>();
                     services.AddSingleton<ISupervisorClient, SupervisorClient>();
                     services.AddSingleton<IDeploymentEventApplier, DeploymentEventApplier>();
