@@ -1,0 +1,145 @@
+@page "/instances"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Core.Abstractions
+@using Dashboard.Infrastructure.Persistence.V2
+@using Microsoft.JSInterop
+@inject IServerService Servers
+@inject IInstanceService InstancesSvc
+@inject IDeploymentService Deployments
+@inject IRecipeService Recipes
+@inject IBootReconciler Reconciler
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>Instances — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Instances</h1>
+
+@if (_loading)
+{
+    <p class="text-muted">Loading…</p>
+}
+else if (_rows.Count == 0)
+{
+    <div class="card"><div class="card-body">
+        <p class="text-muted mb-0">No instances configured yet. Register one on the Servers page.</p>
+    </div></div>
+}
+else
+{
+    <div class="card">
+        <div class="card-body">
+            <table class="table table-sm">
+                <thead><tr><th>Label</th><th>Proxy URL</th><th>Port</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var row in _rows)
+                    {
+                        <tr>
+                            <td>@row.Instance.Label</td>
+                            <td>
+                                <code class="small">@row.ProxyUrl</code>
+                                <button class="btn btn-outline btn-sm ms-1" @onclick="@(() => CopyAsync(row.ProxyUrl))">Copy</button>
+                            </td>
+                            <td>@row.Instance.Port</td>
+                            <td>@StatusText(row)</td>
+                            <td class="text-end">
+                                <button class="btn btn-outline btn-sm" @onclick="@(() => CopySnippetAsync(row))">Copy client snippet</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @if (_copied is not null)
+    {
+        <div class="text-muted small mt-2">Copied: <code>@_copied</code></div>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private List<Row> _rows = new();
+    private string? _copied;
+
+    private sealed class Row
+    {
+        public required Instance Instance { get; init; }
+        public required string ProxyUrl { get; init; }
+        public ReconcileState? Reconcile { get; set; }
+        public string? ActiveServedName { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var baseAuthority = new Uri(Nav.BaseUri).GetLeftPart(UriPartial.Authority);
+            var servers = (await Servers.ListAsync()).ToList();
+            foreach (var server in servers)
+            {
+                var instances = await InstancesSvc.ListByServerAsync(server.Id);
+                foreach (var instance in instances)
+                {
+                    var row = new Row
+                    {
+                        Instance = instance,
+                        ProxyUrl = $"{baseAuthority}/proxy/{instance.ProxySlug}/v1",
+                    };
+
+                    try { row.Reconcile = await Reconciler.ReconcileInstanceAsync(instance.Id); }
+                    catch { /* best-effort status */ }
+
+                    try
+                    {
+                        var active = await Deployments.GetActiveAsync(instance.Id);
+                        if (active is not null)
+                        {
+                            var recipe = await Recipes.GetAsync(active.RecipeId);
+                            row.ActiveServedName = recipe?.ServedModelName;
+                        }
+                    }
+                    catch { /* best-effort */ }
+
+                    _rows.Add(row);
+                }
+            }
+        }
+        catch
+        {
+            // _rows stays whatever it got to -- the "no instances" branch covers empty.
+        }
+        _loading = false;
+    }
+
+    private static string StatusText(Row row)
+    {
+        if (row.Instance.AdminUrl is null)
+            return "needs supervisor registration";
+        return row.Reconcile?.Status switch
+        {
+            ReconcileStatus.Ok => "OK",
+            ReconcileStatus.Down => "unreachable",
+            ReconcileStatus.NeedsRegistration => "needs supervisor registration",
+            ReconcileStatus.Mismatch => "mismatch",
+            ReconcileStatus.IdleVsActive => "idle",
+            null => "unknown",
+            _ => row.Reconcile.Status.ToString(),
+        };
+    }
+
+    private async Task CopyAsync(string text)
+    {
+        try { await JS.InvokeVoidAsync("copy_to_clipboard", text); } catch { /* best-effort */ }
+        _copied = text;
+    }
+
+    private async Task CopySnippetAsync(Row row)
+    {
+        var model = row.ActiveServedName ?? "<no model active>";
+        var snippet = $"base_url = \"{row.ProxyUrl}\"\nmodel = \"{model}\"\n\n# curl example:\ncurl {row.ProxyUrl}/chat/completions -H \"Content-Type: application/json\" -d '{{\"model\": \"{model}\", \"messages\": [{{\"role\": \"user\", \"content\": \"hello\"}}]}}'";
+        await CopyAsync(snippet);
+    }
+}

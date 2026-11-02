@@ -150,4 +150,22 @@
   window.deploymenthub_stop = function () {
     if (deploymentConn) { try { deploymentConn.stop(); } catch (e) {} deploymentConn = null; }
   };
+
+  // P15a: Instances page "[Copy]"/"[Copy client snippet]".
+  window.copy_to_clipboard = function (text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(function () {});
+    }
+    // Fallback for non-secure contexts where the Clipboard API is unavailable.
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    return Promise.resolve();
+  };
 })();

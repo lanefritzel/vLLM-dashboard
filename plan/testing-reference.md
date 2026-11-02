@@ -794,3 +794,49 @@ active first, then a second swap into a recipe with
 flag passed straight through as a CLI arg, not a dashboard-side special
 case -- same mechanism `fake-crash` uses) to hold phase 2 open long enough
 to assert against.
+
+## Playground, Live Traffic, Instances (P15a)
+
+```bash
+# Real-inference E2E (streaming completion, live traffic card, clipboard):
+dotnet test tests/Dashboard.E2E.Tests --filter FullyQualifiedName~PlaygroundLiveTrafficE2ETests
+
+# Whole E2E suite (now 25 tests, ~5 min serialized):
+dotnet test tests/Dashboard.E2E.Tests
+```
+
+**A real proxy bug was found and fixed while building this phase's own E2E
+coverage, not a test artifact**: `ModelProxyService.CheckModelActiveAsync`
+compared the request's `"model"` field against the dashboard's internal
+catalog `Model.Name` -- but the only value a real vLLM backend (or this
+phase's own Instances-page client snippet) ever uses is the active recipe's
+`ServedModelName`. Fixed to compare against `IRecipeService.ListByServerAsync`
+rows' own `ServedModelName`. If you're adding a test that sends a `"model"`
+field through `/proxy/<slug>/...`, it must be a recipe's `ServedModelName`
+("main", by this suite's own convention), never a `Model.Name` like
+"fake-model" -- the latter now reliably 404s ("not registered"), which is
+exactly the bug this looked like when first hit (a 40s Playwright timeout
+waiting for response text that was never going to arrive, since the proxy
+rejected the request before ever forwarding it). `/v1/models`' own listing
+(by catalog name, deliberately including inactive models for discoverability)
+is unrelated and untouched -- don't conflate the two when debugging a
+"model not found"-shaped failure here.
+
+**Driving a real streamed completion through the real proxy needs the fake
+vLLM's own inference port reachable from the test process** -- every earlier
+phase's real-supervisor tests only ever hit the admin API (a fixed, already-
+mapped port), never the child's own serving port. Two things make this work:
+- `tests/fake-vllm/fake_vllm.py` binds `127.0.0.1` by default, which a
+  host-mapped Docker port can't reach. A recipe's own
+  `ExtraArgs = [{"key":"host","value":"0.0.0.0"}]` overrides this (same
+  passthrough `fake-crash`/`fake-slow-start` already use) -- deliberately a
+  test-side recipe setting, not a change to `ArgBuilder`'s own defaults.
+- `SupervisorImageFixture.StartContainerAsync(inferencePort: ...)` maps that
+  port with host == container (both must be the literal `Instance.Port`
+  value, since that's both what `ArgBuilder` tells the child to bind to
+  AND what the dashboard, running on the host, connects to externally).
+  Pick a **fresh ephemeral port per test** (`GetFreeTcpPort()`, same
+  `TcpListener`-on-port-0 trick `DashboardAppFixture` uses) -- a single
+  fixed constant shared across tests in this file collided ("port already
+  allocated") when a previous test's container hadn't released it yet by
+  the time the next one started.

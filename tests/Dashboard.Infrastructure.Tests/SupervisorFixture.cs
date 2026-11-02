@@ -39,8 +39,18 @@ public sealed class SupervisorImageFixture : IAsyncLifetime
     /// <summary><paramref name="extraEnv"/> (P14) lets a caller select e.g.
     /// <c>GPU_BACKEND=fake</c> + <c>GPU_BACKEND_FAKE_PATH</c> to control what
     /// <c>/admin/gpu</c> reports -- used by the Stop/VRAM-release E2E tests,
-    /// which need to simulate VRAM staying held after Stop without a real GPU.</summary>
-    public async Task<IContainer> StartContainerAsync(IReadOnlyDictionary<string, string>? extraEnv = null)
+    /// which need to simulate VRAM staying held after Stop without a real GPU.
+    /// <paramref name="inferencePort"/> (P15a) additionally maps the fake
+    /// vLLM child's own port out of the container -- host and container port
+    /// must be the SAME number (the dashboard, running on the host, connects
+    /// using this literal number, while deploy_runner.py's "--port" flag,
+    /// built from this same Instance.Port value, tells the child what to bind
+    /// to inside the container). Deliberately caller-chosen, not a fixed
+    /// constant: a fixed port collided ("already allocated") when a previous
+    /// test's container hadn't fully released it by the time the next one
+    /// started -- pick a fresh ephemeral port per test instead (see
+    /// DashboardAppFixture.GetFreeTcpPort for the same pattern).</summary>
+    public async Task<IContainer> StartContainerAsync(IReadOnlyDictionary<string, string>? extraEnv = null, int? inferencePort = null)
     {
         var builder = new ContainerBuilder(_image!)
             .WithPortBinding(AdminPort, true)
@@ -48,6 +58,8 @@ public sealed class SupervisorImageFixture : IAsyncLifetime
             .WithEnvironment("ADMIN_PORT", AdminPort.ToString())
             .WithEnvironment("AUTO_START", "off")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(AdminPort).ForPath("/admin/health")));
+        if (inferencePort is { } port)
+            builder = builder.WithPortBinding(port, port);
         if (extraEnv is not null)
         {
             foreach (var (key, value) in extraEnv)

@@ -25,6 +25,7 @@ public sealed class ModelProxyService : IModelProxyService
 {
     private readonly IInstanceService _instances;
     private readonly IModelService _models;
+    private readonly IRecipeService _recipes;
     private readonly IDeploymentService _deployments;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IHubContext<TrafficHub> _traffic;
@@ -52,6 +53,7 @@ public sealed class ModelProxyService : IModelProxyService
     public ModelProxyService(
         IInstanceService instances,
         IModelService models,
+        IRecipeService recipes,
         IDeploymentService deployments,
         IHttpClientFactory httpFactory,
         IHubContext<TrafficHub> traffic,
@@ -60,6 +62,7 @@ public sealed class ModelProxyService : IModelProxyService
     {
         _instances = instances;
         _models = models;
+        _recipes = recipes;
         _deployments = deployments;
         _httpFactory = httpFactory;
         _traffic = traffic;
@@ -120,23 +123,28 @@ public sealed class ModelProxyService : IModelProxyService
     private readonly record struct ProxyError(int StatusCode, string Message);
 
     /// <summary>Returns null when the requested model is already the active one --
-    /// never swaps, never calls the supervisor or Docker. A model that isn't even
-    /// registered on this instance's server gets 404; one that's registered but not
-    /// the active deployment gets the helpful "swap it in the dashboard" 400 (doc 3,
-    /// P11's own new error case) instead of being silently forwarded against the
-    /// wrong backend.</summary>
+    /// never swaps, never calls the supervisor or Docker. Compares against each
+    /// RECIPE's own served_model_name, not the dashboard's internal catalog
+    /// Model.Name (P15a fix): a real vLLM backend only ever answers to its own
+    /// --served-model-name once deployed, so that's the only value a real client
+    /// can legitimately send as "model" -- the Instances page's own client
+    /// snippet (P15a) tells clients exactly that. A name that isn't any recipe's
+    /// served name on this server at all gets 404; one that is, but belongs to a
+    /// recipe that isn't the active deployment, gets the helpful "swap it in the
+    /// dashboard" 400 (doc 3, P11's own error case) instead of being silently
+    /// forwarded against the wrong backend.</summary>
     private async Task<ProxyError?> CheckModelActiveAsync(Instance instance, string requestedModelName, CancellationToken ct)
     {
         var active = await _deployments.GetActiveAsync(instance.Id, ct);
         if (active is not null)
         {
-            var activeModel = await _models.GetAsync(active.ModelId, ct);
-            if (activeModel is not null && string.Equals(activeModel.Name, requestedModelName, StringComparison.Ordinal))
+            var activeRecipe = await _recipes.GetAsync(active.RecipeId, ct);
+            if (activeRecipe is not null && string.Equals(activeRecipe.ServedModelName, requestedModelName, StringComparison.Ordinal))
                 return null; // already serving the right model — nothing to do
         }
 
-        var registered = (await _models.ListByServerAsync(instance.ServerId, ct))
-            .Any(m => string.Equals(m.Name, requestedModelName, StringComparison.Ordinal));
+        var registered = (await _recipes.ListByServerAsync(instance.ServerId, ct))
+            .Any(r => string.Equals(r.ServedModelName, requestedModelName, StringComparison.Ordinal));
         if (!registered)
             return new ProxyError(StatusCodes.Status404NotFound, $"Model '{requestedModelName}' is not registered.");
 
@@ -481,8 +489,9 @@ public sealed class ModelProxyService : IModelProxyService
     /// <c>content</c>, or a legacy completions <c>text</c> field, in that order. Pure/no
     /// I/O — returns null for anything else (tool calls, malformed JSON, reasoning-only
     /// deltas), since the live traffic view only wants the actual answer, not the
-    /// envelope around it.</summary>
-    internal static string? TryExtractDeltaText(string json)
+    /// envelope around it. Public (not internal): P15a's Playground page, in
+    /// Dashboard.Web, reuses this exact parsing rather than duplicating it.</summary>
+    public static string? TryExtractDeltaText(string json)
     {
         try
         {
@@ -516,7 +525,7 @@ public sealed class ModelProxyService : IModelProxyService
     /// shapes as <see cref="TryExtractDeltaText"/> — vLLM's reasoning parsers emit it
     /// under <c>reasoning</c> or <c>reasoning_content</c> (naming varies by parser),
     /// on either a streaming delta or a non-streaming message. Pure/no I/O.</summary>
-    internal static string? TryExtractReasoningText(string json)
+    public static string? TryExtractReasoningText(string json)
     {
         try
         {

@@ -1936,3 +1936,107 @@ phase 2 open long enough to assert against.
 | Stop -> "VRAM released" line; fake GPU backend holding VRAM -> warning + [Re-check] | Yes | `Stop_AfterASuccessfulSwap_ShowsVramReleased`, `Stop_WithTheFakeGpuBackendHoldingVram_ShowsAWarningAndRecheck` (the latter caught the idle-branch rendering bug above) |
 | Rollback replays the previous snapshot; Deployments lists the new row, expanding shows the argv that ran; [Redeploy this] works | Yes | `Rollback_ReplaysThePreviousSnapshot_AndDeploymentsPageShowsItsArgv`, `RedeployThis_FromTheDeploymentsPage_StartsANewDeployment` |
 | Idle hero offers both buttons and neither dead-ends | Yes | `IdleHero_OffersBothButtons_AndNeitherDeadEnds` (opens and backs out of the picker, then builds real "last working" history and completes a redeploy through it) |
+
+## P15a -- UX: Playground, Live Traffic, Instances
+
+Three pages, but the first real work was discovering (owner-confirmed before
+building anything) that two of the three "needs: P11" pages were never
+actually wired to the V2 schema P11 built: Live Traffic joined its SignalR
+group by the legacy `Source` id while the P11 proxy broadcasts by
+`Instance.Id` (so it was watching the wrong channel for any real V2
+traffic), and Playground ("QuickTest") and the old "Sources" list were both
+still entirely `ISourceCatalog`-based, same situation Overview was in before
+P14. All three rebuilt as V2 pages, same pattern as P14's Overview: the old
+pages survive at `/legacy-traffic` and `/quick-test` (relabeled "Legacy..."
+in the nav), untouched.
+
+**`InstancesList`/Playground/Live Traffic reuse `ModelProxyService`'s own
+SSE parsing** (`TryExtractDeltaText`/`TryExtractReasoningText`, made
+`public`, same reasoning as P14's `BuildInferenceBaseUrl`) and
+`BuildInferenceBaseUrl`, rather than re-deriving either. Live Traffic's
+rewrite otherwise mirrors the legacy page closely (same card/event-handling
+shape), just re-pointed at `Instance.Id` and restructured per the doc (system
+prompt collapsed, user prompt as headline, model/status/text filters).
+
+**Found and fixed a real pre-existing proxy bug while building real E2E
+coverage, not a test bug**: `ModelProxyService.CheckModelActiveAsync` (P11)
+and its model-routing gate compared a request's `"model"` field against the
+dashboard's own internal catalog `Model.Name` -- but a real vLLM backend only
+ever answers to its own `--served-model-name` once deployed, and this
+phase's own Instances-page client snippet correctly tells real clients to
+send the active recipe's `ServedModelName`. A real client following that
+snippet would have been rejected by the dashboard's own gate before ever
+reaching the backend. Owner confirmed the gate was the bug (not the
+snippet); fixed `CheckModelActiveAsync` to compare against each recipe's own
+`ServedModelName` instead, and updated the existing (now-passing)
+`ModelProxyServiceTests` to request by served name, matching the corrected,
+actually-correct semantics. `/v1/models`' own full-registry listing (by
+catalog name, deliberately including non-active models for discoverability,
+P11's own explicit design) was left untouched -- a separate, correctly
+already-working concern.
+
+**Real E2E coverage needed the fake vLLM's own inference port reachable from
+outside the container for the first time** (every prior phase's tests only
+ever hit the supervisor's admin API) -- two real infra things came out of
+building that:
+- `tests/fake-vllm/fake_vllm.py` binds `127.0.0.1` by default, unreachable
+  through a host-mapped Docker port. Fixed with a `{"key":"host","value":
+  "0.0.0.0"}` recipe extra-arg (the same passthrough mechanism `fake-crash`/
+  `fake-slow-start` already use) in the test's own seed data, not by
+  changing `ArgBuilder`'s own defaults -- binding 0.0.0.0 by default would
+  be a real behavior change, not a test concern.
+- `SupervisorImageFixture.StartContainerAsync` gained an optional
+  `inferencePort` parameter. First tried a single fixed port shared across
+  tests (like the fake-GPU test's own fixed path) -- that collided
+  ("already allocated") when a previous test's container hadn't fully
+  released the port yet. Fixed by having each test pick its own fresh
+  ephemeral port (same `TcpListener`-on-port-0 trick `DashboardAppFixture`
+  already uses) instead of a shared constant.
+
+### Files changed
+
+- `src/Dashboard.Infrastructure/Proxy/ModelProxyService.cs`:
+  `CheckModelActiveAsync` fixed (see above); `TryExtractDeltaText`/
+  `TryExtractReasoningText` made `public`; constructor now takes
+  `IRecipeService`.
+- `src/Dashboard.Web/Components/Pages/LiveTraffic.razor` (rewritten for V2);
+  old content moved to `LegacyLiveTraffic.razor` (`/legacy-traffic`).
+- `src/Dashboard.Web/Components/Pages/Playground.razor` (new, `/playground`):
+  streams a real completion through the real proxy, sending the active
+  recipe's `ServedModelName` (not a placeholder) as `"model"`; TTFT/total/
+  tok-s timing; raw request/response toggle; `[Run smoke test]`.
+- `src/Dashboard.Web/Components/Pages/Instances.razor` (new, `/instances`):
+  label/proxy-URL/port/status table, `[Copy]`, `[Copy client snippet]`
+  (uses the active served name), status reuses `IBootReconciler` (P12).
+- `src/Dashboard.Web/wwwroot/js/hub.js`: `copy_to_clipboard` added
+  (Clipboard API with an `execCommand` fallback for non-secure contexts).
+- `src/Dashboard.Web/Components/Layout/NavMenu.razor`: Playground, Instances
+  links added; QuickTest/Live Traffic's old nav entries relabeled "Legacy...".
+- `tests/Dashboard.Infrastructure.Tests/ModelProxyServiceTests.cs`: updated
+  to request by served name (`"main"`/`"model-b-served"`) instead of
+  catalog name, matching the fix; a second, inactive recipe added to the
+  shared seed helper so the "registered but not active" case still has a
+  real served name to request.
+- `tests/Dashboard.Infrastructure.Tests/SupervisorFixture.cs`:
+  `StartContainerAsync` gained `inferencePort` (optional, backward
+  compatible).
+- `tests/Dashboard.E2E.Tests/PlaygroundLiveTrafficE2ETests.cs` (new, 4
+  tests): Playground streaming + timing + raw toggle; Live Traffic showing
+  a real card + the text filter narrowing it; the Instances page's copy
+  button and client snippet (via `context.GrantPermissionsAsync` for
+  clipboard access); the "needs supervisor registration" notice.
+- 179 Core + 72 Infrastructure (unchanged counts; `ModelProxyServiceTests`
+  stayed at 8, request bodies only) + 25 E2E .NET tests (up from 21), 127
+  Python tests; `./scripts/gate.sh` green.
+
+Out of scope, not touched: Server/registration forms (P15b), deleting the
+old Sources-based pages.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Playground streams a completion from the fake vLLM and shows TTFT/total/tok-s; raw request/response toggles; [Run smoke test] returns pass | Yes | `PlaygroundLiveTrafficE2ETests.Playground_StreamsARealCompletion_AndShowsTimingAndRawToggle` covers streaming/timing/raw toggle; `[Run smoke test]` wired to `ISupervisorClient.SmokeTestAsync` (same call P14's result-phase button already uses) but not separately E2E-asserted in this phase |
+| Live Traffic shows a proxied request with the system prompt collapsed and the user prompt as headline; the model/ok-error/text filters narrow the list | Yes | `LiveTraffic_ShowsARealCard_AndTheTextFilterNarrowsIt` (real card + text filter); model/status filters implemented identically (client-side `FilteredCards()`) but not separately exercised by name in this test |
+| Instances: copy button puts the exact proxy URL on the clipboard; the snippet's `model` equals the active served name; an unregistered instance shows the registration notice | Yes | `Instances_CopyButtonPutsTheProxyUrlOnTheClipboard_AndSnippetHasTheActiveServedName`, `Instances_ShowsNeedsSupervisorRegistration_WhenAdminUrlIsNull` |
+| Nothing on these pages references Ollama | Yes | None of the three new pages (`Playground.razor`, `LiveTraffic.razor`, `Instances.razor`) reference `SourceType.Ollama` or any Ollama-specific code path -- all built directly against V2 `Instance`/`Model`/`Recipe`, which have no Ollama concept at all |

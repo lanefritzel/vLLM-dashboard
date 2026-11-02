@@ -72,6 +72,7 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
                     services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
                     services.AddSingleton<IInstanceService, InstanceService>();
                     services.AddSingleton<IModelService, ModelService>();
+                    services.AddSingleton<IRecipeService, RecipeService>();
                     services.AddSingleton<IDeploymentService, DeploymentService>();
                     services.AddSingleton<IInFlightTrafficTracker, InFlightTrafficTracker>();
                     services.AddSingleton<IModelProxyService, ModelProxyService>();
@@ -132,7 +133,11 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         await db.SaveChangesAsync();
 
         var recipe = new Recipe { ServerId = server.Id, Name = "default", ServedModelName = "main" };
-        db.RecipesV2.Add(recipe);
+        // Registered (its own recipe exists) but not deployed/active -- lets
+        // RegisteredButNotActiveModel_ReturnsHelpfulError request a served name
+        // that's real but not currently forwardable.
+        var inactiveRecipe = new Recipe { ServerId = server.Id, Name = "model-b-recipe", ServedModelName = "model-b-served" };
+        db.RecipesV2.AddRange(recipe, inactiveRecipe);
         await db.SaveChangesAsync();
 
         db.DeploymentsV2.Add(new Deployment
@@ -176,7 +181,7 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         await connection.StartAsync();
 
         var requestTask = client.PostAsync("/proxy/main/v1/chat/completions",
-            new StringContent("""{"model":"model-a","messages":[{"role":"user","content":"hi"}],"stream":true}""",
+            new StringContent("""{"model":"main","messages":[{"role":"user","content":"hi"}],"stream":true}""",
                 System.Text.Encoding.UTF8, "application/json"));
 
         // Join mid-stream (the upstream is still pausing between chunks) --
@@ -208,11 +213,11 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         await SeedAsync(scopeFactory, upstream);
 
         var response = await client.PostAsync("/proxy/main/v1/chat/completions",
-            new StringContent("""{"model":"model-b","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
+            new StringContent("""{"model":"model-b-served","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
 
         Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("model-b", body);
+        Assert.Contains("model-b-served", body);
         Assert.Contains("registered but not active", body);
         Assert.Contains("swap it in the dashboard", body);
     }
@@ -239,7 +244,7 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         await SeedAsync(scopeFactory, upstream);
 
         var response = await client.PostAsync("/proxy/main/v1/chat/completions",
-            new StringContent("""{"model":"model-a","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
+            new StringContent("""{"model":"main","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
 
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
@@ -295,7 +300,7 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         }
 
         var response = await client.PostAsync("/proxy/main/v1/chat/completions",
-            new StringContent("""{"model":"model-a","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
+            new StringContent("""{"model":"main","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
 
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
