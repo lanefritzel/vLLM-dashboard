@@ -2040,3 +2040,121 @@ old Sources-based pages.
 | Live Traffic shows a proxied request with the system prompt collapsed and the user prompt as headline; the model/ok-error/text filters narrow the list | Yes | `LiveTraffic_ShowsARealCard_AndTheTextFilterNarrowsIt` (real card + text filter); model/status filters implemented identically (client-side `FilteredCards()`) but not separately exercised by name in this test |
 | Instances: copy button puts the exact proxy URL on the clipboard; the snippet's `model` equals the active served name; an unregistered instance shows the registration notice | Yes | `Instances_CopyButtonPutsTheProxyUrlOnTheClipboard_AndSnippetHasTheActiveServedName`, `Instances_ShowsNeedsSupervisorRegistration_WhenAdminUrlIsNull` |
 | Nothing on these pages references Ollama | Yes | None of the three new pages (`Playground.razor`, `LiveTraffic.razor`, `Instances.razor`) reference `SourceType.Ollama` or any Ollama-specific code path -- all built directly against V2 `Instance`/`Model`/`Recipe`, which have no Ollama concept at all |
+
+## P15b -- Server page, supervisor registration, wizard retirement, onboarding
+
+Two open decisions the phase page itself flagged were settled with the
+owner before building: the registration flow (Servers page: URL + token +
+[Test connection], the doc's own proposal) and token storage (an encrypted
+`instances.admin_token_enc` column via ASP.NET Data Protection, replacing
+the single config-wide token `ConfigSupervisorTokenProvider` used since
+P09b, over an env-var-per-instance alternative).
+
+**`ISupervisorTokenProvider.GetToken` became `GetTokenAsync`** -- decrypting
+a per-instance token is now a DB read, which a synchronous signature would
+have forced a blocking call at every one of its 9 callers (`SwapService`,
+`BootReconciler`, `DeploymentCatchUpService`, `SupervisorEventReceiver`,
+`SwapCeremonyDialog`, `AddModelDialog`, `Overview`, `Playground`). All 9
+were already inside `async Task` methods, so this was a mechanical
+`await`-everywhere change, not a redesign.
+
+**Deleted the four legacy setup wizards** (`FullSetupWizard`,
+`ServerSetupWizard`, `ModelSetupWizard`, `PhysicalServerSetupWizard`) and
+every reference to them in `Settings.razor`/`Models.razor` (delegated to a
+fork given while the Servers page itself was being built in parallel --
+its own report: buttons repointed to the direct-add entry points the
+wizards' own "Switch to Advanced" already jumped to, so no functionality
+was lost, just the guided/wizard framing around it). Also deleted
+`tests/e2e-playwright/` (an old, not-run-in-CI ad-hoc Python Playwright
+harness, owner-confirmed) -- all four of its scripts tested the
+now-deleted wizards and were permanently broken by this phase; it was
+already fully superseded by the real `Dashboard.E2E.Tests` C# suite built
+across P13-P15b.
+
+**Found and fixed a real .NET bug while building/testing the boot-restore
+toggle, not a test artifact**: `JsonContent.Create(value)` with no explicit
+`JsonSerializerOptions` turns out to default to `JsonSerializerOptions.Web`
+(camelCase) in this runtime, not the policy-free default its own docs
+suggest -- confirmed with an isolated repro outside the app entirely. This
+silently mangled the supervisor's all-caps `AUTO_START` field into
+`autO_START` (a 422 from the supervisor's own pydantic model), which the
+supervisor's own test image faithfully rejected end to end. Every other
+`JsonContent.Create` call in `SupervisorClient.cs` happens to already use
+snake_case/lowercase field names, so the exact same latent mangling was
+invisible until this field -- the only all-caps one this client has ever
+sent. Fixed by passing explicit no-naming-policy options to that one call;
+see `testing-reference.md` for why the others weren't touched.
+
+**The onboarding checklist's "empty vs. migrated database" distinction**
+checks the OLD schema's own `Sources` table, not just "any V2 rows yet":
+a database that was ever converted from the legacy schema (P01b's own
+conversion always runs against that table) must skip the checklist even if
+its converted instance has no deployment yet, per the doc's explicit "an
+upgraded DB with converted rows skips it." Since this app never hard-deletes
+a deployment row once created, checking `DeploymentsV2.Any()` live is
+already "never reappears" -- no separate persisted dismiss-flag needed.
+
+A real UX gap turned up during manual verification (not the DoD, but worth
+fixing while there): the Servers page's "Models directory" field had only
+a placeholder ("/models"), no actual default value, so a user could easily
+submit the form with that field genuinely blank and hit a save-time
+validation error. Given an actual default value instead.
+
+### Files changed
+
+- `src/Dashboard.Core/Abstractions/ISupervisorTokenProvider.cs`: `GetToken`
+  -> `GetTokenAsync`.
+- `src/Dashboard.Infrastructure/Persistence/V2/InstanceTokenProvider.cs`
+  (new, replaces the deleted `ConfigSupervisorTokenProvider.cs`): decrypts
+  `Instance.AdminTokenEnc` with Data Protection; returns null (never
+  throws) on a missing/undecryptable token, same contract as before.
+- `src/Dashboard.Infrastructure/Persistence/V2/Instance.cs`:
+  `AdminTokenEnc` column added; migration `AddInstanceAdminTokenEnc`.
+- `src/Dashboard.Core/Abstractions/ISupervisorClient.cs` /
+  `SupervisorClient.cs`: `GetAutoStartAsync`/`SetAutoStartAsync` added
+  (`GET`/`PUT /admin/settings`); the `JsonContent.Create` naming-policy fix
+  (above) lives in the latter.
+- `src/Dashboard.Infrastructure/Persistence/V2/OnboardingService.cs` (new)
+  + `IOnboardingService`/`OnboardingStatus` (`Dashboard.Core.Abstractions`).
+- `src/Dashboard.Web/Components/Pages/Servers.razor` (new, `/servers`):
+  server + instance CRUD, [Test connection], per-instance boot-restore
+  toggle (shows "checking…" rather than a guessed default while its own
+  `GetAutoStartAsync` call is in flight -- a real UX bug this phase's own
+  E2E test caught, not just a test-timing fix), token field write-only.
+- `src/Dashboard.Web/Components/Pages/Overview.razor`: onboarding checklist
+  card added (shown/hidden via `IOnboardingService`, refreshed after a
+  swap so step 4 ticks off live).
+- `src/Dashboard.Web/Components/Pages/Help.razor`: fully rewritten for the
+  supervisor-based world (no more hot-swap/Docker-TCP-port/wizard content).
+- `src/Dashboard.Web/Components/Layout/NavMenu.razor`: "Servers" added;
+  the old "Server"/"Models" links relabeled "Legacy Server"/"Legacy Models".
+- `src/Dashboard.Web/Components/Wizards/` (deleted, all 4 files) and their
+  references in `Settings.razor`/`Models.razor` (see above).
+- `tests/e2e-playwright/` (deleted, whole directory, owner-confirmed).
+- `tests/Dashboard.E2E.Tests/DashboardAppFixture.cs`: launches the app with
+  a per-fixture `DATAPROTECTION_KEYS_DIR` and exposes
+  `EncryptTokenForApp(token)` so a test can seed a working
+  `AdminTokenEnc` the same way the Servers page itself would produce one.
+- `tests/Dashboard.E2E.Tests/ServersPageE2ETests.cs` (new, 5 tests):
+  Test-connection wrong/right token + save-enables-swapping; the
+  boot-restore toggle persisting across a reload; the proxy-slug-change
+  warning; the onboarding checklist's fresh-vs-migrated distinction; the
+  token never appearing in the page source after saving.
+- Various `ISupervisorTokenProvider.GetToken(...)`-calling test fakes
+  (`BootReconcilerTests`, `SwapServiceTests`, `SupervisorEventReceiverTests`)
+  updated to the async signature.
+- 179 Core + 72 Infrastructure + 30 E2E .NET tests (up from 179 + 72 + 25),
+  127 Python tests; `./scripts/gate.sh` green.
+
+Out of scope, not touched: Docker orchestration (gone, per the doc), Ollama.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Register a supervisor via URL + token: wrong token -> clear error; right token -> connection summary; saving enables swapping | Yes | `TestConnection_WrongToken_ShowsClearError_RightToken_ShowsSummary_AndSavingEnablesSwap` |
+| Toggle boot-restore -> the supervisor setting changes and reads back after reload | Yes | `BootRestoreToggle_ChangesTheSupervisorSetting_AndReadsBackAfterReload` (caught the real `JsonContent` bug above) |
+| No wizard component or route remains (build has no references); every setup action the wizards offered is reachable from a page | Yes | `grep -rl Wizard` across `src/` turns up only stale comments, no component/route references; `dotnet build` succeeds. Server/instance registration -> Servers page; model creation -> Models & Recipes (P13) |
+| Fresh install (empty DB): the 4-step card shows and completing the steps makes it disappear for good; on a migrated DB it never shows | Yes | `Onboarding_ShowsOnAFreshDatabase_ButNeverOnAMigratedOne`; the live-swap-driven P14 E2E tests already exercise the "disappears after a real deployment" half incidentally (`OnDeploymentSettled` refreshes it), not re-asserted by name here |
+| Editing a proxy slug shows the "changes client URLs" warning | Yes | `EditingAProxySlug_ShowsTheChangesClientUrlsWarning` |
+| The token is not visible in the page source or logs after saving | Yes | `TheToken_IsNotVisibleInThePageSource_AfterSaving` (page source + the stored `AdminTokenEnc` column both checked). App-log-output specifically not checked -- the E2E harness drains the launched process's stdout/stderr rather than capturing it, so there is no log file to assert against in this phase; the token is never passed to any `ILogger` call in `Servers.razor`'s own code, which is the actual guarantee. |

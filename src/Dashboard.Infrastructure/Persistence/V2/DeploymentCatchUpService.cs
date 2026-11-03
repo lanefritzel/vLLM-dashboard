@@ -70,7 +70,7 @@ public sealed class DeploymentCatchUpService : BackgroundService
             var instance = await _instances.GetAsync(deployment.InstanceId, ct);
             if (instance?.AdminUrl is null)
                 continue;
-            var token = _tokenProvider.GetToken(instance.Id);
+            var token = await _tokenProvider.GetTokenAsync(instance.Id, ct);
             if (token is null)
                 continue;
 

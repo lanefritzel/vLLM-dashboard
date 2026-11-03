@@ -17,7 +17,7 @@ public class SupervisorEventReceiverTests(PostgresFixture postgres)
 {
     private sealed class FixedTokenProvider(string? token) : ISupervisorTokenProvider
     {
-        public string? GetToken(int instanceId) => token;
+        public Task<string?> GetTokenAsync(int instanceId, CancellationToken ct = default) => Task.FromResult(token);
     }
 
     private async Task<(SupervisorEventReceiver Receiver, IServiceScopeFactory ScopeFactory)> NewReceiverAsync(string? token)

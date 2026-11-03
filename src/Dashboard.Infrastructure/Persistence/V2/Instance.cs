@@ -33,6 +33,14 @@ public class Instance
     /// P15b) -- those actions simply aren't offered without it.</summary>
     public string? ContainerName { get; set; }
 
+    /// <summary>This instance's own supervisor token, encrypted at rest with
+    /// ASP.NET Data Protection (P15b -- replaces the single config-wide token
+    /// <c>ConfigSupervisorTokenProvider</c> used before). Null until
+    /// registered; never logged or round-tripped to the page in plaintext --
+    /// see <c>InstanceTokenProvider</c>/the Servers page for the only two
+    /// places that ever decrypt or set it.</summary>
+    public string? AdminTokenEnc { get; set; }
+
     public int Port { get; set; } = 9999;
     public int PollIntervalMs { get; set; } = 1000;
     public bool IsActive { get; set; } = true;

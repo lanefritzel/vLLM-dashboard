@@ -127,6 +127,38 @@ public sealed class SupervisorClient : ISupervisorClient
         return await ReadAsync<SupervisorGpuInfo>(response, ct);
     }
 
+    public async Task<string> GetAutoStartAsync(string adminUrl, string token, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, "/admin/settings"), token);
+        using var response = await client.SendAsync(request, ct);
+        var body = await ReadAsync<JsonElement>(response, ct);
+        return body.GetProperty("AUTO_START").GetString()!;
+    }
+
+    /// <summary>JsonContent.Create(value) with no explicit options turns out to
+    /// default to JsonSerializerOptions.Web in this runtime (confirmed via an
+    /// isolated repro) -- i.e. camelCase -- not the policy-free
+    /// JsonSerializerOptions.Default its own docs would suggest. That silently
+    /// mangles an ALL-CAPS field name ("AUTO_START" arrived at the supervisor
+    /// as "autO_START", a 422); every other JsonContent.Create call in this
+    /// file happens to already use snake_case/lowercase field names, so this
+    /// was invisible until the supervisor's own SettingsRequest model (the
+    /// only all-caps field this client ever sends) exposed it. Pass this
+    /// explicitly to every outgoing JsonContent.Create to guarantee property
+    /// names reach the wire byte-for-byte as declared.</summary>
+    private static readonly JsonSerializerOptions NoNamingPolicy = new();
+
+    public async Task<string> SetAutoStartAsync(string adminUrl, string token, string autoStart, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = NewRequest(HttpMethod.Put, Url(adminUrl, "/admin/settings"), token);
+        request.Content = JsonContent.Create(new { AUTO_START = autoStart }, options: NoNamingPolicy);
+        using var response = await client.SendAsync(request, ct);
+        var body = await ReadAsync<JsonElement>(response, ct);
+        return body.GetProperty("AUTO_START").GetString()!;
+    }
+
     public async Task<SupervisorSmokeResult> SmokeTestAsync(string adminUrl, string token, CancellationToken ct = default)
     {
         using var client = NewClient();

@@ -840,3 +840,58 @@ mapped port), never the child's own serving port. Two things make this work:
   fixed constant shared across tests in this file collided ("port already
   allocated") when a previous test's container hadn't released it yet by
   the time the next one started.
+
+## Servers page, token storage, onboarding (P15b)
+
+```bash
+# Real supervisor: registration, boot-restore toggle, slug-change warning,
+# onboarding fresh-vs-migrated, token-not-in-page-source.
+dotnet test tests/Dashboard.E2E.Tests --filter FullyQualifiedName~ServersPageE2ETests
+
+# Whole E2E suite (now 30 tests, ~8 min serialized):
+dotnet test tests/Dashboard.E2E.Tests
+```
+
+**A real `JsonContent.Create` bug, not a test artifact, cost most of this
+phase's own debugging time**: `JsonContent.Create(value)` with NO explicit
+`JsonSerializerOptions` defaults to `JsonSerializerOptions.Web` (camelCase)
+in this runtime -- confirmed with a from-scratch console repro outside the
+app (`JsonContent.Create(new { AUTO_START = "off" })` serializes to
+`{"autO_START":"off"}`, not `{"AUTO_START":"off"}`). `SupervisorClient.cs`
+has several other `JsonContent.Create(new { snake_case_field = ... })`
+calls that were NEVER affected, purely because camelCase is a no-op on an
+already-lowercase name -- don't take their correctness as evidence this
+mangling isn't real; it only shows up on a field whose first letters are
+uppercase, which is exactly what the supervisor's own `AUTO_START` setting
+is. If you add a new outgoing field to this client that isn't already
+lowercase/snake_case, pass an explicit policy-free `JsonSerializerOptions`
+to `JsonContent.Create` (see `SetAutoStartAsync`'s own `NoNamingPolicy`
+field for the pattern) rather than trusting the no-options overload -- its
+actual behavior does not match what its own documentation implies.
+
+**`ISupervisorTokenProvider` is async now** (`GetTokenAsync`, not
+`GetToken`) -- a test's own fake implementing this interface
+(`BootReconcilerTests`, `SwapServiceTests`, `SupervisorEventReceiverTests`)
+needs `Task<string?> GetTokenAsync(int instanceId, CancellationToken ct = default) => Task.FromResult(...)`,
+not a synchronous method; the compiler will catch a stale fake immediately
+(`CS0535`), so this isn't a silent-failure risk going forward.
+
+**E2E tests that need a real, working per-instance token must encrypt it
+through `DashboardAppFixture.EncryptTokenForApp(token)`**, not seed
+`Instance.AdminTokenEnc` with an arbitrary string -- the launched app
+decrypts it with ASP.NET Data Protection keyed to a specific directory
+(`DATAPROTECTION_KEYS_DIR`, set per-fixture) and purpose string
+(`InstanceTokenProvider.Purpose`); anything else fails to decrypt and the
+app treats the instance as having no token at all (not an exception, a
+silent `null` -- see `InstanceTokenProvider`'s own doc comment for why).
+For a REAL supervisor container, that token must still be
+`SupervisorImageFixture.Token` ("test-token") even though it's now stored
+encrypted -- the container itself still checks the literal value.
+
+**The onboarding checklist test seeds a legacy `Source` row directly**
+(`Dashboard.Infrastructure.Persistence.Source`, the pre-V2 table) to
+simulate a migrated database, rather than running the real P01b conversion
+end to end -- `OnboardingService` only cares whether that table has ever
+had a row, not what's in it. If a future phase needs to test the full
+conversion -> onboarding-skipped path specifically, that's still an open
+gap (same shape as P13's own unclosed "migrated database" DoD gap).

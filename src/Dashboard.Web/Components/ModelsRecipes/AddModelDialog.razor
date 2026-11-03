@@ -196,7 +196,7 @@
     private async Task InspectAsync()
     {
         if (Instance?.AdminUrl is null) return;
-        var token = TokenProvider.GetToken(Instance.Id);
+        var token = await TokenProvider.GetTokenAsync(Instance.Id);
         if (token is null)
         {
             _inspectError = "No supervisor token configured for this instance.";
@@ -235,7 +235,7 @@
     private async Task StartDownloadAsync()
     {
         if (Instance?.AdminUrl is null) return;
-        var token = TokenProvider.GetToken(Instance.Id);
+        var token = await TokenProvider.GetTokenAsync(Instance.Id);
         if (token is null) return;
 
         _error = null;
@@ -285,7 +285,7 @@
     private async Task CancelDownloadAsync()
     {
         if (Instance?.AdminUrl is null || _downloadId is null) return;
-        var token = TokenProvider.GetToken(Instance.Id);
+        var token = await TokenProvider.GetTokenAsync(Instance.Id);
         if (token is null) return;
 
         _pollCts?.Cancel();

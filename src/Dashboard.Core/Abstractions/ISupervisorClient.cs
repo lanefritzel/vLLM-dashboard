@@ -29,6 +29,12 @@ public interface ISupervisorClient
 
     Task<SupervisorGpuInfo> GetGpuAsync(string adminUrl, string token, CancellationToken ct = default);
 
+    /// <summary>P15b's "Restore last known good model on boot" toggle. Value is
+    /// "last_good" or "off".</summary>
+    Task<string> GetAutoStartAsync(string adminUrl, string token, CancellationToken ct = default);
+
+    Task<string> SetAutoStartAsync(string adminUrl, string token, string autoStart, CancellationToken ct = default);
+
     Task<SupervisorSmokeResult> SmokeTestAsync(string adminUrl, string token, CancellationToken ct = default);
 
     /// <summary>P13's Add-model flow, step 1 -- lists the repo's files + parsed

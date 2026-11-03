@@ -35,7 +35,7 @@
                     set once here instead of re-entering them per instance.
                 </p>
             </div>
-            <button class="btn btn-primary btn-sm" @onclick="@(() => _serverWizardOpen = true)">+ Add physical server</button>
+            <button class="btn btn-primary btn-sm" @onclick="@StartNewPhysicalServer">+ Add physical server</button>
         </div>
 
         <table class="table table-sm">
@@ -70,14 +70,6 @@
         </table>
     </div>
 </div>
-
-@if (_serverWizardOpen)
-{
-    <Dashboard.Web.Components.Wizards.PhysicalServerSetupWizard
-        OnCancelled="@(() => _serverWizardOpen = false)"
-        OnSaved="@OnServerWizardSavedAsync"
-        OnSwitchToAdvanced="@OnServerWizardSwitchToAdvancedAsync" />
-}
 
 @if (_editingServer is not null)
 {
@@ -152,13 +144,7 @@
         <div class="d-flex align-items-center justify-content-between mb-3">
             <div class="card-title">Sources</div>
             <div class="text-end">
-                <div>
-                    <button class="btn btn-outline btn-sm me-2" @onclick="@(() => _fullWizardOpen = true)">Full Setup Wizard</button>
-                    <button class="btn btn-primary btn-sm" @onclick="@(() => _wizardOpen = true)">+ Add source</button>
-                </div>
-                <div class="mt-1">
-                    <button type="button" class="btn btn-link btn-sm text-muted p-0" @onclick="@StartNewSource">Not vLLM? Add an Ollama/other source directly</button>
-                </div>
+                <button class="btn btn-primary btn-sm" @onclick="@StartNewSource">+ Add source</button>
             </div>
         </div>
 
@@ -200,23 +186,6 @@
         </table>
     </div>
 </div>
-
-@if (_wizardOpen)
-{
-    <Dashboard.Web.Components.Wizards.ServerSetupWizard
-        OnCancelled="@(() => _wizardOpen = false)"
-        OnSaved="@OnWizardSavedAsync"
-        OnSwitchToAdvanced="@OnSwitchToAdvancedSourceAsync" />
-}
-
-@if (_fullWizardOpen)
-{
-    <Dashboard.Web.Components.Wizards.FullSetupWizard
-        OnCancelled="@(() => _fullWizardOpen = false)"
-        OnSaved="@OnFullWizardSavedAsync"
-        OnSwitchToAdvancedSource="@OnSwitchToAdvancedSourceAsync"
-        OnSwitchToAdvancedModel="@OnFullWizardSwitchToAdvancedModelAsync" />
-}
 
 @if (_editing is not null)
 {
@@ -468,10 +437,8 @@
     [Inject] private ILaunchSpecStore LaunchSpecs { get; set; } = default!;
     [Inject] private IPhysicalServerCatalog Servers { get; set; } = default!;
     [Inject] private IDockerOrchestrator Docker { get; set; } = default!;
-    [Inject] private Dashboard.Web.Components.SourceSelection Selection { get; set; } = default!;
 
     private List<PhysicalServerInfo> _physicalServers = new();
-    private bool _serverWizardOpen;
     private PhysicalServerInfo? _editingServer;
     private bool _isCreatingServer;
     private bool _serverBusy;
@@ -489,8 +456,6 @@
     private LaunchSpec? _launch;
     private bool _isCreating;
     private bool _busy;
-    private bool _wizardOpen;
-    private bool _fullWizardOpen;
     private string? _error;
     private string? _message;
 
@@ -677,20 +642,6 @@
         _editingServer = null;
     }
 
-    private async Task OnServerWizardSavedAsync(PhysicalServerInfo saved)
-    {
-        _serverWizardOpen = false;
-        _message = "Created " + saved.Label;
-        await ReloadServersAsync();
-    }
-
-    private async Task OnServerWizardSwitchToAdvancedAsync(PhysicalServerInfo saved)
-    {
-        _serverWizardOpen = false;
-        await ReloadServersAsync();
-        StartEditPhysicalServer(saved);
-    }
-
     private async Task TestServerConnectionAsync()
     {
         _serverTesting = true;
@@ -767,42 +718,6 @@
         {
             _error = "Delete failed: " + ex.Message;
         }
-    }
-
-    private async Task OnWizardSavedAsync(SourceInfo saved)
-    {
-        _wizardOpen = false;
-        _message = "Created " + saved.Label;
-        await ReloadSourcesAsync();
-    }
-
-    private void OnFullWizardSavedAsync(ModelInfo saved)
-    {
-        _fullWizardOpen = false;
-        Selection.SetCurrent(saved.SourceId);
-        Nav.NavigateTo("/models");
-    }
-
-    /// <summary>Used by both the standalone Server wizard and the Full wizard's Server
-    /// phase — the wizard has already persisted the (possibly incomplete) source, so
-    /// this just closes the wizard and opens the same Edit modal the row's own "Edit"
-    /// button uses, loaded fresh from what was just saved.</summary>
-    private async Task OnSwitchToAdvancedSourceAsync(SourceInfo saved)
-    {
-        _wizardOpen = false;
-        _fullWizardOpen = false;
-        await ReloadSourcesAsync();
-        await StartEditSourceAsync(saved);
-    }
-
-    /// <summary>The Full wizard's Model phase already saved the model — the advanced
-    /// Model form lives on the Models page, not here, so this selects the new source
-    /// and navigates there with a query param Models.razor uses to auto-open Edit.</summary>
-    private void OnFullWizardSwitchToAdvancedModelAsync(ModelInfo saved)
-    {
-        _fullWizardOpen = false;
-        Selection.SetCurrent(saved.SourceId);
-        Nav.NavigateTo($"/models?edit={saved.Id}");
     }
 
     private SourceType ParsedType => SourceTypeExtensions.FromStorage(_fType);

@@ -19,10 +19,46 @@
 @inject ISupervisorTokenProvider TokenProvider
 @inject IJSRuntime JS
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
+@inject IOnboardingService Onboarding
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
 
 <h1 class="page-title">Overview</h1>
+
+@if (_onboarding is { ShouldShow: true })
+{
+    <div class="card mb-3" style="border-left: 3px solid var(--blue, #4c8dff);">
+        <div class="card-body">
+            <div class="card-title mb-2">Get started</div>
+            <ol class="onboarding-checklist mb-0">
+                <li class="@(_onboarding.HasServerAndInstance ? "text-muted" : "")">
+                    @(_onboarding.HasServerAndInstance ? "✓" : "①") Register a server and instance
+                    @if (!_onboarding.HasServerAndInstance)
+                    {
+                        <a href="servers">— go to Servers</a>
+                    }
+                </li>
+                <li class="@(_onboarding.HasModel ? "text-muted" : "")">
+                    @(_onboarding.HasModel ? "✓" : "②") Add or download a model
+                    @if (_onboarding.HasServerAndInstance && !_onboarding.HasModel)
+                    {
+                        <a href="models-recipes">— go to Models &amp; Recipes</a>
+                    }
+                </li>
+                <li class="@(_onboarding.HasRecipe ? "text-muted" : "")">
+                    @(_onboarding.HasRecipe ? "✓" : "③") Create a recipe from it
+                    @if (_onboarding.HasModel && !_onboarding.HasRecipe)
+                    {
+                        <a href="models-recipes">— go to Models &amp; Recipes</a>
+                    }
+                </li>
+                <li class="@(_onboarding.HasDeployment ? "text-muted" : "")">
+                    @(_onboarding.HasDeployment ? "✓" : "④") Do your first swap
+                </li>
+            </ol>
+        </div>
+    </div>
+}
 
 @if (_loading)
 {
@@ -205,6 +241,7 @@ else
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
     private bool _loading = true;
+    private OnboardingStatus? _onboarding;
     private string? _error;
 
     private List<Server> _servers = new();
@@ -242,6 +279,7 @@ else
         _receiver = DotNetObjectReference.Create(this);
         try
         {
+            _onboarding = await Onboarding.GetStatusAsync();
             _servers = (await Servers.ListAsync()).ToList();
             if (_servers.Count > 0)
                 await LoadInstanceScopedDataAsync(_servers[0].Id);
@@ -287,6 +325,8 @@ else
     private async Task RefreshDeploymentStateAsync()
     {
         if (_instance is null) return;
+        if (_onboarding is { ShouldShow: true, HasDeployment: false })
+            _onboarding = await Onboarding.GetStatusAsync(); // re-check after a swap -- step 4 may have just completed
         _activeDeployment = await Deployments.GetActiveAsync(_instance.Id);
         _pendingDeployment = await Deployments.GetPendingAsync(_instance.Id);
 
@@ -323,7 +363,7 @@ else
     private async Task RefreshGpuAsync()
     {
         if (_instance?.AdminUrl is null) { _gpuInfo = null; return; }
-        var token = TokenProvider.GetToken(_instance.Id);
+        var token = await TokenProvider.GetTokenAsync(_instance.Id);
         if (token is null) { _gpuInfo = null; return; }
         try
         {

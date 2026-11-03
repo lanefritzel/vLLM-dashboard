@@ -61,7 +61,7 @@ public sealed class BootReconciler : IBootReconciler, IReconcileActions
             };
         }
 
-        var token = _tokenProvider.GetToken(instanceId);
+        var token = await _tokenProvider.GetTokenAsync(instanceId, ct);
         var dbActive = await _deployments.GetActiveAsync(instanceId, ct);
 
         SupervisorStatus status;

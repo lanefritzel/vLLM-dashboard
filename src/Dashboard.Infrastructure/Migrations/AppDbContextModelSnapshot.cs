@@ -706,6 +706,9 @@ namespace Dashboard.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("AdminTokenEnc")
+                        .HasColumnType("text");
+
                     b.Property<string>("AdminUrl")
                         .HasColumnType("text");
 

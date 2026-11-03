@@ -58,6 +58,9 @@ public class PlaygroundLiveTrafficE2ETests : IAsyncDisposable
         {
             ServerId = server.Id, Label = "primary", ProxySlug = $"slug-{Guid.NewGuid():N}",
             AdminUrl = adminUrl, Host = "127.0.0.1", Port = inferencePort,
+            // Must be the REAL supervisor's own token (P15b: tokens are now
+            // per-instance, encrypted -- the real container still checks it).
+            AdminTokenEnc = _fixture.EncryptTokenForApp(SupervisorImageFixture.Token),
         };
         db.InstancesV2.Add(instance);
 
@@ -198,8 +201,19 @@ public class PlaygroundLiveTrafficE2ETests : IAsyncDisposable
         var clipboard = await page.EvaluateAsync<string>("navigator.clipboard.readText()");
         Assert.Equal(expectedUrl, clipboard);
 
-        await page.ClickAsync("button:has-text('Copy client snippet')");
-        var snippetClipboard = await page.EvaluateAsync<string>("navigator.clipboard.readText()");
+        // Instances.razor resolves each row's ActiveServedName once at page load
+        // from the DB's active-deployment flag, which can commit slightly after
+        // the swap dialog's own success broadcast fires (known broadcast-before-
+        // DB-activate race, left as-is in P14's DeploymentEventApplier) -- poll by
+        // reloading until the just-completed swap's active recipe has landed.
+        string snippetClipboard = "";
+        await WaitUntilAsync(async () =>
+        {
+            await page.ReloadAsync(new PageReloadOptions { WaitUntil = WaitUntilState.NetworkIdle });
+            await page.ClickAsync("button:has-text('Copy client snippet')");
+            snippetClipboard = await page.EvaluateAsync<string>("navigator.clipboard.readText()");
+            return snippetClipboard.Contains($"model = \"{recipe.ServedModelName}\"");
+        }, TimeSpan.FromSeconds(10));
         Assert.Contains($"model = \"{recipe.ServedModelName}\"", snippetClipboard);
     }
 

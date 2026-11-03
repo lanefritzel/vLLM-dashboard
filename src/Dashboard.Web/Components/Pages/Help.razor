@@ -7,7 +7,7 @@
 
 <ul class="mb-4">
     <li><a href="#getting-started">Getting started</a></li>
-    <li><a href="#docker-port">Opening the Docker TCP port (for hot-swap)</a></li>
+    <li><a href="#how-it-works">How it works</a></li>
     <li><a href="#walkthrough">Walkthrough example</a></li>
     <li><a href="#troubleshooting">Troubleshooting</a></li>
 </ul>
@@ -16,105 +16,89 @@
     <div class="card-body">
         <div class="card-title">Getting started</div>
         <p>
-            There are two ways to configure a server (a Docker host running a model) and a model on it:
+            The dashboard doesn't start or stop containers itself — each machine runs its own
+            <strong>supervisor</strong> (a small service alongside vLLM, started by your own compose file),
+            and the dashboard talks to it over HTTP. Setting one up is three steps:
         </p>
-        <ul>
+        <ol>
             <li>
-                <strong>Setup wizards</strong> — step-by-step, with live checks (e.g. testing the Docker
-                connection) and plain-language guidance. Find them on the <a href="settings">Settings</a>
-                page ("Full Setup Wizard" or "Server Setup Wizard") and the <a href="models">Models</a>
-                page ("Model Setup Wizard"). Use the "Full Setup Wizard" for a brand-new setup — it walks
-                you through the server first, then the model, skipping the server step if you already have
-                one.
+                <strong><a href="servers">Servers</a></strong> — register the machine (label, GPU info,
+                models directory) and an instance on it (proxy slug, vLLM port, the supervisor's own URL and
+                its shared token). Use <strong>[Test connection]</strong> before saving — it calls the
+                supervisor directly and shows its GPU and current model, or a clear error if the URL or
+                token is wrong.
             </li>
             <li>
-                <strong>Advanced / "+ Add source" and "+ Add model"</strong> — the same underlying settings,
-                shown as a single form with every field visible at once. Use this once you're comfortable
-                with what each field does, or to change one setting on an existing server/model without
-                going through the wizard.
+                <strong><a href="models-recipes">Models &amp; Recipes</a></strong> — add a model (a local
+                path, or download one from Hugging Face through the supervisor) and create a recipe for it
+                (context length, GPU memory utilization, dtype, and the rest of vLLM's own launch flags).
             </li>
-        </ul>
+            <li>
+                <strong><a href="">Overview</a></strong> — pick a recipe and swap it in. The swap ceremony
+                shows a live diff, step-by-step progress as the supervisor reports it, and the result.
+            </li>
+        </ol>
         <p class="mb-0 text-muted">
-            Both save partial/incomplete work — you can leave a server or model half-configured and come
-            back to finish it later.
+            A fresh install shows a checklist on the Overview page for exactly these steps — it disappears
+            for good after your first swap.
         </p>
     </div>
 </div>
 
-<div class="card mb-4" id="docker-port">
+<div class="card mb-4" id="how-it-works">
     <div class="card-body">
-        <div class="card-title">Opening the Docker TCP port (for hot-swap)</div>
-        <p>
-            "Hot-swap" (starting, stopping, and replacing a model's container from this dashboard) needs to
-            reach the <strong>Docker daemon's own API</strong> on the machine running your model — not the
-            model's own API. By default, Docker only listens on a local Unix socket, which this dashboard
-            (usually running elsewhere, e.g. in its own container) can't reach. You need to tell Docker to
-            also listen on a network (TCP) port.
-        </p>
-
-        <p><strong>On a systemd-based Linux host</strong> (Ubuntu, Debian, Fedora, etc.):</p>
-        <ol>
+        <div class="card-title">How it works</div>
+        <ul>
             <li>
-                Create a systemd override for the Docker service:
-                <pre><code>sudo mkdir -p /etc/systemd/system/docker.service.d
-sudo tee /etc/systemd/system/docker.service.d/override.conf &lt;&lt;'EOF'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375
-EOF</code></pre>
+                <strong>No hot-swap, idle-unload, or preload settings</strong> — those were part of an
+                earlier design where the dashboard managed containers directly. Now the supervisor owns the
+                vLLM process's whole lifecycle; the dashboard only ever asks it to start, stop, or restart
+                a given recipe, and reads back its state.
             </li>
             <li>
-                Reload and restart Docker:
-                <pre><code>sudo systemctl daemon-reload
-sudo systemctl restart docker</code></pre>
+                <strong>Restore last known good model on boot</strong> — a per-instance toggle on the
+                Servers page (once that instance's supervisor is registered). On, the supervisor
+                automatically replays the last model that reached a healthy "ready" state when its
+                container restarts. A run that failed or crashed is never replayed, and it gives up after 3
+                attempts rather than retrying forever. Off, the instance just comes up idle and waits for
+                you to swap something in.
             </li>
             <li>
-                Verify it's listening, from the machine running this dashboard:
-                <pre><code>curl http://&lt;servername-or-ip&gt;:2375/version</code></pre>
-                A JSON response means it's reachable — this is exactly what the wizard's "Test connection"
-                button checks for you.
+                <strong>The token is never shown again once saved</strong> — the Servers page's token field
+                is write-only; leave it blank when editing an instance to keep the current one. It's stored
+                encrypted, and only ever decrypted server-side to call that instance's own supervisor.
             </li>
-        </ol>
-
-        <div class="alert alert-warning">
-            <strong>Security note:</strong> the Docker API has no authentication by default — anyone who can
-            reach this port can run arbitrary containers, which is equivalent to root access on that
-            machine. Never expose it to the public internet. Keep it on a private/trusted network only
-            (e.g. your home LAN), and firewall it off from anything else, for example with:
-            <pre class="mb-0"><code>sudo ufw allow from &lt;dashboard-host-ip&gt; to any port 2375 proto tcp</code></pre>
-            For anything beyond a small trusted home network, secure the Docker API with TLS
-            (<code>dockerd --tlsverify</code>) instead of leaving it open and unauthenticated.
-        </div>
-
-        <p class="mb-0 text-muted">
-            Docker Desktop (Windows/Mac) has an equivalent setting under
-            Settings → General → "Expose daemon on tcp://localhost:2375 without TLS" — the same security
-            note applies.
-        </p>
+            <li>
+                <strong>Changing an instance's proxy slug changes its URL</strong> — every client pointed at
+                <code>/proxy/&lt;slug&gt;/v1</code> needs updating if you rename it. The Servers page warns
+                you when you do this; it still saves the change.
+            </li>
+        </ul>
     </div>
 </div>
 
 <div class="card mb-4" id="walkthrough">
     <div class="card-body">
         <div class="card-title">Walkthrough example</div>
-        <p>A concrete example of what to enter in the Server Setup Wizard for a typical single-box vLLM setup:</p>
+        <p>A concrete example of what to enter on the Servers page for a typical single-box vLLM setup:</p>
         <table class="table table-sm">
             <tbody>
-                <tr><td class="text-muted">Label</td><td>My GPU box</td></tr>
-                <tr><td class="text-muted">Docker host</td><td><code>tcp://&lt;servername-or-ip&gt;:2375</code></td></tr>
-                <tr><td class="text-muted">Image</td><td><code>vllm/vllm-openai:latest</code></td></tr>
-                <tr><td class="text-muted">Serving port</td><td><code>8000</code></td></tr>
-                <tr><td class="text-muted">Inference URL</td><td><code>http://&lt;servername-or-ip&gt;:8000</code> (auto-suggested from the two above)</td></tr>
-                <tr><td class="text-muted">GPU vendor</td><td>NVIDIA, or Intel if using an Arc/integrated GPU with device passthrough</td></tr>
-                <tr><td class="text-muted">GPU VRAM total</td><td>Whatever your card actually has, e.g. <code>24</code> GB — this powers the size warnings on the Models page</td></tr>
+                <tr><td class="text-muted">Server label</td><td>My GPU box</td></tr>
+                <tr><td class="text-muted">GPU name</td><td>e.g. <code>NVIDIA RTX 4090</code>, or anything containing "Intel" for the Intel dtype rule</td></tr>
+                <tr><td class="text-muted">Models directory</td><td><code>/models</code> — shared by every instance on this server</td></tr>
+                <tr><td class="text-muted">Instance label</td><td>primary</td></tr>
+                <tr><td class="text-muted">Proxy slug</td><td><code>primary</code> — becomes <code>/proxy/primary/v1</code></td></tr>
+                <tr><td class="text-muted">vLLM port</td><td><code>9999</code></td></tr>
+                <tr><td class="text-muted">Supervisor URL</td><td><code>http://&lt;servername-or-ip&gt;:8080</code></td></tr>
+                <tr><td class="text-muted">Token</td><td>the shared token your compose file set for that supervisor</td></tr>
             </tbody>
         </table>
-        <p>Then in the Model Setup Wizard, for a Hugging Face model:</p>
+        <p>Then on <a href="models-recipes">Models &amp; Recipes</a>, for a Hugging Face model:</p>
         <table class="table table-sm mb-0">
             <tbody>
                 <tr><td class="text-muted">Repo id</td><td><code>meta-llama/Llama-3.1-8B-Instruct</code></td></tr>
-                <tr><td class="text-muted">Served model name</td><td><code>llama-3.1-8b</code> — whatever your API clients should request</td></tr>
-                <tr><td class="text-muted">Context length</td><td>Set explicitly rather than leaving blank — the wizard suggests a safe starting value from the model's own reported default</td></tr>
+                <tr><td class="text-muted">Served model name</td><td><code>llama-3.1-8b</code> — whatever your API clients should request; shown again on the Instances page's client snippet</td></tr>
+                <tr><td class="text-muted">Max model length</td><td>Set explicitly rather than leaving blank — the editor shows the model's own reported default as you type</td></tr>
             </tbody>
         </table>
     </div>
@@ -125,21 +109,28 @@ sudo systemctl restart docker</code></pre>
         <div class="card-title">Troubleshooting</div>
         <ul class="mb-0">
             <li>
-                <strong>"Test connection" fails / hot-swap says no Docker host configured</strong> — confirm
-                the port is open (see above), and that nothing between this dashboard and the target machine
-                (a firewall, a VPN) is blocking it.
+                <strong>"Test connection" fails</strong> — confirm the supervisor URL is reachable from this
+                dashboard (not just from your own machine) and that nothing between them (a firewall, a VPN)
+                is blocking it. A wrong token gives a clear "wrong token" message rather than a generic
+                failure.
             </li>
             <li>
-                <strong>A model loads but uses far more VRAM than expected</strong> — check whether
-                Quantization and Context length are set explicitly on the Models page. Left unset, vLLM
-                falls back to the model's own (sometimes very large) defaults, and
-                <code>gpu-memory-utilization</code> defaults to 90% of the card's VRAM on its own.
+                <strong>An instance shows "needs supervisor registration"</strong> — it exists in the
+                dashboard (often from an earlier version's data) but has no supervisor URL/token saved yet.
+                Its proxy URL keeps forwarding traffic either way; only swapping is blocked until you
+                register it on the Servers page.
             </li>
             <li>
-                <strong>A swap seems to hang</strong> — the first load of an uncached Hugging Face model
-                downloads its weights first, which can take a long time on a slow connection. The
-                Health-check timeout field (Advanced page) controls how long the dashboard waits before
-                giving up and cleaning up the container.
+                <strong>A model loads but uses far more VRAM than expected</strong> — check whether GPU
+                memory utilization and max model length are set explicitly on the recipe. Left at their
+                defaults, vLLM may fall back to the model's own (sometimes very large) native context length.
+            </li>
+            <li>
+                <strong>A swap seems stuck</strong> — the first load of an uncached Hugging Face model
+                downloads its weights first, which can take a long time on a slow connection; the swap
+                ceremony's progress steps and live log view show exactly where it is. If it's genuinely
+                stuck, Cancel is always available and leaves the instance in a known state (serving the old
+                model, or idle, depending on how far the swap got).
             </li>
         </ul>
     </div>

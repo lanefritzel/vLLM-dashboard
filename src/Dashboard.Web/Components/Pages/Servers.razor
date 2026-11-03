@@ -1,0 +1,498 @@
+@page "/servers"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Core.Abstractions
+@using Dashboard.Core.Supervisor
+@using Dashboard.Infrastructure.Persistence.V2
+@using Microsoft.AspNetCore.DataProtection
+@inject IServerService ServersSvc
+@inject IInstanceService Instances
+@inject ISupervisorClient SupervisorClient
+@inject IDataProtectionProvider DataProtection
+@inject Dashboard.Web.Components.Shared.IDialogService Dialogs
+
+<PageTitle>Servers — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Servers</h1>
+
+@if (_loading)
+{
+    <p class="text-muted">Loading…</p>
+}
+else
+{
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger py-2">@_error</div>
+    }
+
+    <div class="d-flex justify-content-end mb-3">
+        <button class="btn btn-primary btn-sm" @onclick="@OpenNewServer">+ Add server</button>
+    </div>
+
+    @foreach (var server in _servers)
+    {
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+                    <div>
+                        <div class="card-title mb-0">@server.Label</div>
+                        <div class="text-muted small">
+                            @(server.DockerHost ?? "no Docker host") ·
+                            @(server.GpuName ?? "no GPU set") @(server.GpuCount > 1 ? $"x{server.GpuCount}" : "") @(server.GpuMemGb is { } gb ? $"({gb} GB)" : "") ·
+                            models dir: @(string.IsNullOrWhiteSpace(server.ModelsDir) ? "—" : server.ModelsDir)
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline btn-sm" @onclick="@(() => OpenEditServer(server))">Edit</button>
+                        <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteServerAsync(server))">Delete</button>
+                    </div>
+                </div>
+
+                <table class="table table-sm mb-2">
+                    <thead><tr><th>Instance</th><th>Proxy slug</th><th>Port</th><th>Supervisor</th><th></th></tr></thead>
+                    <tbody>
+                        @if (_instancesByServer.TryGetValue(server.Id, out var list))
+                        {
+                            @foreach (var instance in list)
+                            {
+                                <tr>
+                                    <td>@instance.Label</td>
+                                    <td><code>@instance.ProxySlug</code></td>
+                                    <td>@instance.Port</td>
+                                    <td>@(instance.AdminUrl is null ? "needs supervisor registration" : instance.AdminUrl)</td>
+                                    <td class="text-end">
+                                        <button class="btn btn-outline btn-sm" @onclick="@(() => OpenEditInstance(server, instance))">Edit</button>
+                                        <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteInstanceAsync(instance))">Delete</button>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                        @if (!_instancesByServer.TryGetValue(server.Id, out var l2) || l2.Count == 0)
+                        {
+                            <tr><td colspan="5" class="text-muted">No instances on this server yet.</td></tr>
+                        }
+                    </tbody>
+                </table>
+                <button class="btn btn-outline btn-sm" @onclick="@(() => OpenNewInstance(server))">+ Add instance</button>
+            </div>
+        </div>
+    }
+    @if (_servers.Count == 0)
+    {
+        <div class="card"><div class="card-body text-muted">No servers configured yet.</div></div>
+    }
+}
+
+@if (_editingServer is not null)
+{
+    <div class="modal-overlay" @onclick="@CloseServerDialog">
+        <div class="modal-dialog-custom" @onclick:stopPropagation="true">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+                <div class="card-title mb-0">@(_serverIsNew ? "Add server" : "Edit server")</div>
+                <button type="button" class="modal-close-btn" @onclick="@CloseServerDialog" aria-label="Close">✕</button>
+            </div>
+            <form @onsubmit="@SaveServerAsync" @onsubmit:preventDefault="true" class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Label</label>
+                    <input class="form-control" @bind="_svLabel" required />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Docker host</label>
+                    <input class="form-control" @bind="_svDockerHost" placeholder="for Start/Hard-reset only" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">GPU name</label>
+                    <input class="form-control" @bind="_svGpuName" placeholder="e.g. Intel Max 1550" />
+                    <div class="form-text">Containing "intel" enables the Intel dtype rule.</div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">GPU count</label>
+                    <input class="form-control" type="number" min="1" @bind="_svGpuCount" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">GPU memory (GB)</label>
+                    <input class="form-control" type="number" min="0" @bind="_svGpuMemGb" />
+                </div>
+                <div class="col-md-12">
+                    <label class="form-label">Models directory</label>
+                    <input class="form-control" @bind="_svModelsDir" placeholder="/models" />
+                </div>
+                <div class="col-md-12">
+                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@CloseServerDialog">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+@if (_editingInstance is not null)
+{
+    <div class="modal-overlay" @onclick="@CloseInstanceDialog">
+        <div class="modal-dialog-custom" style="max-width: 600px;" @onclick:stopPropagation="true">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+                <div class="card-title mb-0">@(_instanceIsNew ? "Add instance" : "Edit instance")</div>
+                <button type="button" class="modal-close-btn" @onclick="@CloseInstanceDialog" aria-label="Close">✕</button>
+            </div>
+            <form @onsubmit="@SaveInstanceAsync" @onsubmit:preventDefault="true" class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Label</label>
+                    <input class="form-control" @bind="_inLabel" required />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Proxy slug</label>
+                    <input class="form-control" @bind="_inProxySlug" required />
+                    @if (!_instanceIsNew)
+                    {
+                        <div class="form-text text-danger">Changing this changes every client's proxy URL.</div>
+                    }
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">vLLM port</label>
+                    <input class="form-control" type="number" min="1" @bind="_inPort" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Container name</label>
+                    <input class="form-control" @bind="_inContainerName" placeholder="for Start/Hard-reset only" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Poll interval (ms)</label>
+                    <input class="form-control" type="number" min="100" @bind="_inPollIntervalMs" />
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label">Supervisor URL</label>
+                    <input class="form-control" @bind="_inAdminUrl" placeholder="http://host:8080" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Token</label>
+                    <input class="form-control" type="password" @bind="_inToken" placeholder="@(_instanceIsNew ? "" : "leave blank to keep current")" autocomplete="new-password" />
+                </div>
+                <div class="col-md-12">
+                    <button type="button" class="btn btn-outline btn-sm" disabled="@(_testBusy || string.IsNullOrWhiteSpace(_inAdminUrl))" @onclick="@TestConnectionAsync">
+                        @(_testBusy ? "Testing…" : "Test connection")
+                    </button>
+                    @if (_testResult is not null)
+                    {
+                        <div class="@(_testOk ? "alert alert-success" : "alert alert-danger") py-2 mt-2">@_testResult</div>
+                    }
+                </div>
+
+                @if (!_instanceIsNew && _editingInstance.AdminUrl is not null)
+                {
+                    <div class="col-md-12">
+                        @if (_autoStartOn is null)
+                        {
+                            <label class="form-label mb-1 text-muted">Restore last known good model on boot — checking…</label>
+                        }
+                        else
+                        {
+                            <label class="form-label mb-1">
+                                <input type="checkbox" class="form-check-input" checked="@_autoStartOn" @onchange="@OnAutoStartToggledAsync" />
+                                Restore last known good model on boot
+                            </label>
+                        }
+                        <div class="form-text">
+                            Restores the last <em>healthy</em> model when the container starts — a failed run is
+                            never replayed, and it stops retrying after 3 attempts.
+                        </div>
+                    </div>
+                }
+
+                <div class="col-md-12">
+                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@CloseInstanceDialog">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private string? _error;
+    private List<Server> _servers = new();
+    private Dictionary<int, List<Instance>> _instancesByServer = new();
+
+    private Server? _editingServer;
+    private bool _serverIsNew;
+    private string _svLabel = "";
+    private string _svDockerHost = "";
+    private string _svGpuName = "";
+    private int _svGpuCount = 1;
+    private int? _svGpuMemGb;
+    private string _svModelsDir = "/models";
+
+    private Instance? _editingInstance;
+    private int _editingInstanceServerId;
+    private bool _instanceIsNew;
+    private string _inLabel = "";
+    private string _inProxySlug = "";
+    private int _inPort = 9999;
+    private string _inContainerName = "";
+    private int _inPollIntervalMs = 1000;
+    private string _inAdminUrl = "";
+    private string _inToken = "";
+
+    private bool _testBusy;
+    private bool _testOk;
+    private string? _testResult;
+    private bool? _autoStartOn;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _servers = (await ServersSvc.ListAsync()).ToList();
+            _instancesByServer.Clear();
+            foreach (var server in _servers)
+                _instancesByServer[server.Id] = (await Instances.ListByServerAsync(server.Id)).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not load: " + ex.Message;
+        }
+        _loading = false;
+    }
+
+    private void OpenNewServer()
+    {
+        _editingServer = new Server();
+        _serverIsNew = true;
+        _svLabel = ""; _svDockerHost = ""; _svGpuName = ""; _svGpuCount = 1; _svGpuMemGb = null; _svModelsDir = "/models";
+    }
+
+    private void OpenEditServer(Server server)
+    {
+        _editingServer = server;
+        _serverIsNew = false;
+        _svLabel = server.Label;
+        _svDockerHost = server.DockerHost ?? "";
+        _svGpuName = server.GpuName ?? "";
+        _svGpuCount = server.GpuCount;
+        _svGpuMemGb = server.GpuMemGb;
+        _svModelsDir = server.ModelsDir;
+    }
+
+    private void CloseServerDialog() => _editingServer = null;
+
+    private async Task SaveServerAsync()
+    {
+        try
+        {
+            var server = new Server
+            {
+                Id = _editingServer!.Id, Label = _svLabel.Trim(),
+                DockerHost = string.IsNullOrWhiteSpace(_svDockerHost) ? null : _svDockerHost.Trim(),
+                GpuName = string.IsNullOrWhiteSpace(_svGpuName) ? null : _svGpuName.Trim(),
+                GpuCount = Math.Max(1, _svGpuCount), GpuMemGb = _svGpuMemGb,
+                ModelsDir = _svModelsDir.Trim(),
+            };
+            if (_serverIsNew) await ServersSvc.CreateAsync(server);
+            else await ServersSvc.UpdateAsync(server);
+            _editingServer = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not save: " + ex.Message);
+        }
+    }
+
+    private async Task DeleteServerAsync(Server server)
+    {
+        var confirmed = await Dialogs.ConfirmAsync($"Delete server \"{server.Label}\"? This cannot be undone.", confirmText: "Delete");
+        if (!confirmed) return;
+        try
+        {
+            await ServersSvc.DeleteAsync(server.Id);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not delete (it may still have instances/models/recipes): " + ex.Message);
+        }
+    }
+
+    private void OpenNewInstance(Server server)
+    {
+        _editingInstanceServerId = server.Id;
+        _editingInstance = new Instance { ServerId = server.Id };
+        _instanceIsNew = true;
+        _inLabel = ""; _inProxySlug = ""; _inPort = 9999; _inContainerName = ""; _inPollIntervalMs = 1000;
+        _inAdminUrl = ""; _inToken = "";
+        _testResult = null;
+        _autoStartOn = null;
+    }
+
+    private void OpenEditInstance(Server server, Instance instance)
+    {
+        _editingInstanceServerId = server.Id;
+        _editingInstance = instance;
+        _instanceIsNew = false;
+        _inLabel = instance.Label;
+        _inProxySlug = instance.ProxySlug;
+        _inPort = instance.Port;
+        _inContainerName = instance.ContainerName ?? "";
+        _inPollIntervalMs = instance.PollIntervalMs;
+        _inAdminUrl = instance.AdminUrl ?? "";
+        _inToken = "";
+        _testResult = null;
+        // null ("checking…") until RefreshAutoStartAsync resolves the real value --
+        // showing a guessed default here would flash the wrong state on every open.
+        _autoStartOn = null;
+        if (instance.AdminUrl is not null)
+            _ = RefreshAutoStartAsync(instance);
+    }
+
+    private async Task RefreshAutoStartAsync(Instance instance)
+    {
+        var token = await ResolveTokenForTestAsync(instance);
+        if (instance.AdminUrl is null || token is null) return;
+        try
+        {
+            var value = await SupervisorClient.GetAutoStartAsync(instance.AdminUrl, token);
+            _autoStartOn = value != "off";
+            StateHasChanged();
+        }
+        catch
+        {
+            // Best-effort -- leave the toggle at its default rather than blocking the dialog.
+        }
+    }
+
+    private void CloseInstanceDialog() => _editingInstance = null;
+
+    private async Task TestConnectionAsync()
+    {
+        _testBusy = true;
+        _testResult = null;
+        StateHasChanged();
+        try
+        {
+            var healthy = await SupervisorClient.HealthAsync(_inAdminUrl.Trim());
+            if (!healthy)
+            {
+                _testOk = false;
+                _testResult = "Could not reach this supervisor at that URL.";
+                return;
+            }
+
+            var token = string.IsNullOrEmpty(_inToken) && _editingInstance?.AdminTokenEnc is not null
+                ? await ResolveTokenForTestAsync(_editingInstance)
+                : _inToken;
+            if (string.IsNullOrEmpty(token))
+            {
+                _testOk = false;
+                _testResult = "Reachable, but no token was given to authenticate with.";
+                return;
+            }
+
+            var status = await SupervisorClient.GetStatusAsync(_inAdminUrl.Trim(), token);
+            var gpu = await SupervisorClient.GetGpuAsync(_inAdminUrl.Trim(), token);
+            var currentModel = status.Child?.Argv is { Count: > 0 } argv ? string.Join(" ", argv.TakeLast(2)) : "idle";
+            _testOk = true;
+            _testResult = $"Connected. GPU: {gpu.Vendor} ({gpu.TotalMb ?? 0} MB total) · supervisor state: {status.State} · {currentModel}";
+        }
+        catch (SupervisorApiException ex) when (ex.StatusCode == 401 || ex.StatusCode == 403)
+        {
+            _testOk = false;
+            _testResult = "Wrong token -- the supervisor rejected it.";
+        }
+        catch (Exception ex)
+        {
+            _testOk = false;
+            _testResult = "Connection failed: " + ex.Message;
+        }
+        finally
+        {
+            _testBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<string?> ResolveTokenForTestAsync(Instance instance)
+    {
+        if (instance.AdminTokenEnc is null) return null;
+        try
+        {
+            return DataProtection.CreateProtector(InstanceTokenProvider.Purpose).Unprotect(instance.AdminTokenEnc);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task OnAutoStartToggledAsync(ChangeEventArgs e)
+    {
+        if (_editingInstance?.AdminUrl is null) return;
+        var on = e.Value is bool b && b;
+        var token = await ResolveTokenForTestAsync(_editingInstance);
+        if (token is null) return;
+        try
+        {
+            await SupervisorClient.SetAutoStartAsync(_editingInstance.AdminUrl, token, on ? "last_good" : "off");
+            _autoStartOn = on;
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not change the boot-restore setting: " + ex.Message);
+        }
+    }
+
+    private async Task SaveInstanceAsync()
+    {
+        try
+        {
+            var instance = new Instance
+            {
+                Id = _editingInstance!.Id, ServerId = _editingInstanceServerId,
+                Label = _inLabel.Trim(), ProxySlug = _inProxySlug.Trim(), Port = Math.Max(1, _inPort),
+                ContainerName = string.IsNullOrWhiteSpace(_inContainerName) ? null : _inContainerName.Trim(),
+                PollIntervalMs = Math.Max(100, _inPollIntervalMs),
+                AdminUrl = string.IsNullOrWhiteSpace(_inAdminUrl) ? null : _inAdminUrl.Trim(),
+                Host = _editingInstance.Host,
+                AdminTokenEnc = _editingInstance.AdminTokenEnc,
+                IsActive = true,
+            };
+
+            if (!string.IsNullOrEmpty(_inToken))
+                instance.AdminTokenEnc = DataProtection.CreateProtector(InstanceTokenProvider.Purpose).Protect(_inToken);
+
+            if (_instanceIsNew)
+            {
+                await Instances.CreateAsync(instance);
+            }
+            else
+            {
+                var (_, slugChanged) = await Instances.UpdateAsync(instance);
+                if (slugChanged)
+                    await Dialogs.AlertAsync("The proxy slug changed -- every client's proxy URL for this instance is now different.");
+            }
+            _editingInstance = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not save: " + ex.Message);
+        }
+    }
+
+    private async Task DeleteInstanceAsync(Instance instance)
+    {
+        var confirmed = await Dialogs.ConfirmAsync($"Delete instance \"{instance.Label}\"? This cannot be undone.", confirmText: "Delete");
+        if (!confirmed) return;
+        try
+        {
+            await Instances.DeleteAsync(instance.Id);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Dialogs.AlertAsync("Could not delete: " + ex.Message);
+        }
+    }
+}

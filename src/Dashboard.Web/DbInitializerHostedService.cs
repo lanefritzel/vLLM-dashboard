@@ -83,7 +83,7 @@ public sealed class DbInitializerHostedService(
 
         if (sortOrder == 0)
         {
-            logger.LogInformation("No VLLM_URL/OLLAMA_URL set — starting with no sources. Use the Server Setup Wizard on the Settings page.");
+            logger.LogInformation("No VLLM_URL/OLLAMA_URL set — starting with no legacy sources. Register a server and instance on the Servers page.");
             return;
         }
 

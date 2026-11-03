@@ -145,7 +145,7 @@ builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IInstanceS
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IModelService, Dashboard.Infrastructure.Persistence.V2.ModelService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IRecipeService, Dashboard.Infrastructure.Persistence.V2.RecipeService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IDeploymentService, Dashboard.Infrastructure.Persistence.V2.DeploymentService>();
-builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorTokenProvider, Dashboard.Infrastructure.Persistence.V2.ConfigSupervisorTokenProvider>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorTokenProvider, Dashboard.Infrastructure.Persistence.V2.InstanceTokenProvider>();
 
 // Swap orchestration (P10a).
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorClient, Dashboard.Infrastructure.Supervisor.SupervisorClient>();
@@ -161,6 +161,9 @@ builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.BootReconc
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IBootReconciler>(sp => sp.GetRequiredService<Dashboard.Infrastructure.Persistence.V2.BootReconciler>());
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IReconcileActions>(sp => sp.GetRequiredService<Dashboard.Infrastructure.Persistence.V2.BootReconciler>());
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IMinimalDockerClient, Dashboard.Infrastructure.Docker.MinimalDockerClient>();
+
+// First-run onboarding checklist (P15b).
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IOnboardingService, Dashboard.Infrastructure.Persistence.V2.OnboardingService>();
 
 // Hosted services. Order matters: hosted services start in registration order,
 // so the DB initializer (migrations + seed) must start before the metrics

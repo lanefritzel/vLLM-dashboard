@@ -46,7 +46,7 @@ public sealed class SupervisorEventReceiver
             return SupervisorEventReceiverResult.NotFound;
 
         var instance = await _instances.GetAsync(deployment.InstanceId, ct);
-        var expectedToken = instance is null ? null : _tokenProvider.GetToken(instance.Id);
+        var expectedToken = instance is null ? null : await _tokenProvider.GetTokenAsync(instance.Id, ct);
         if (string.IsNullOrEmpty(expectedToken) || authorizationHeader != $"Bearer {expectedToken}")
             return SupervisorEventReceiverResult.Unauthorized;
 

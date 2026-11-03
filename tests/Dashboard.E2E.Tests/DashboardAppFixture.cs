@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Dashboard.Infrastructure.Identity;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +29,7 @@ public sealed class DashboardAppFixture : IAsyncLifetime
         .WithPassword("dashboard")
         .Build();
 
+    private readonly string _dataProtectionDir = Path.Combine(Path.GetTempPath(), "dashboard-e2e-dp-" + Guid.NewGuid().ToString("n"));
     private Process? _appProcess;
     private IPlaywright? _playwright;
 
@@ -54,11 +56,13 @@ public sealed class DashboardAppFixture : IAsyncLifetime
         startInfo.EnvironmentVariables["ASPNETCORE_URLS"] = BaseUrl;
         startInfo.EnvironmentVariables["ConnectionStrings__DefaultConnection"] = _postgres.GetConnectionString();
         startInfo.EnvironmentVariables["DetailedErrors"] = "true";
-        // ConfigSupervisorTokenProvider reads this for every instance -- needed for
-        // the Add Model Hugging Face flow to treat any instance as having a token,
-        // and (P14) must match SupervisorImageFixture.Token exactly so the swap
-        // ceremony E2E tests' real supervisor container accepts this app's calls.
-        startInfo.EnvironmentVariables["Supervisor__Token"] = Dashboard.Infrastructure.Tests.SupervisorImageFixture.Token;
+        // Fixed, per-fixture key directory (P15b): the launched app's own
+        // InstanceTokenProvider decrypts Instance.AdminTokenEnc with ASP.NET
+        // Data Protection, so a test that wants to seed a working token must
+        // encrypt it with a protector pointed at this SAME directory --
+        // see EncryptTokenForApp.
+        Directory.CreateDirectory(_dataProtectionDir);
+        startInfo.EnvironmentVariables["DATAPROTECTION_KEYS_DIR"] = _dataProtectionDir;
 
         _appProcess = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start Dashboard.Web.");
         // Drain stdout/stderr so the child never blocks on a full pipe buffer.
@@ -88,6 +92,24 @@ public sealed class DashboardAppFixture : IAsyncLifetime
         _appProcess?.Dispose();
 
         await _postgres.DisposeAsync();
+
+        try { Directory.Delete(_dataProtectionDir, recursive: true); } catch { /* best effort */ }
+    }
+
+    /// <summary>Encrypts a token the same way the launched app's own
+    /// InstanceTokenProvider will decrypt it: same key directory (this
+    /// fixture's own, via DATAPROTECTION_KEYS_DIR), same application name,
+    /// same purpose string. A test seeding Instance.AdminTokenEnc directly
+    /// via NewDbContext() must go through this, not a dummy encrypted-looking
+    /// string, or the running app will fail to decrypt it and silently treat
+    /// the instance as having no token at all.</summary>
+    public string EncryptTokenForApp(string token)
+    {
+        var provider = Microsoft.AspNetCore.DataProtection.DataProtectionProvider.Create(
+            new DirectoryInfo(_dataProtectionDir),
+            builder => builder.SetApplicationName("vllm-dashboard"));
+        var protector = provider.CreateProtector(Dashboard.Infrastructure.Persistence.V2.InstanceTokenProvider.Purpose);
+        return protector.Protect(token);
     }
 
     /// <summary>A short-lived <see cref="AppDbContext"/> against the same

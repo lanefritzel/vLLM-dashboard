@@ -470,7 +470,7 @@
     private async Task RunSmokeTestAsync()
     {
         if (Instance.AdminUrl is null) return;
-        var token = TokenProvider.GetToken(Instance.Id);
+        var token = await TokenProvider.GetTokenAsync(Instance.Id);
         if (token is null) return;
         try
         {

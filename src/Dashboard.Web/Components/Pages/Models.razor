@@ -24,9 +24,7 @@
         <div class="card-body">
             <div class="d-flex align-items-center justify-content-between mb-3">
                 <div class="card-title">Models</div>
-                <div>
-                    <button class="btn btn-primary btn-sm" @onclick="@(() => _modelWizardOpen = true)">+ Add model</button>
-                </div>
+                <a class="btn btn-primary btn-sm" href="models-recipes">+ Add model (Models &amp; Recipes)</a>
             </div>
             <p class="text-muted small mb-2">
                 Models are registered on the physical server, shared by every vLLM instance on it — the
@@ -103,14 +101,6 @@
         </div>
     </div>
 
-    @if (_modelWizardOpen)
-    {
-        <Dashboard.Web.Components.Wizards.ModelSetupWizard
-            PreselectedSourceId="@src.Id"
-            OnCancelled="@(() => _modelWizardOpen = false)"
-            OnSaved="@OnModelWizardSavedAsync"
-            OnSwitchToAdvanced="@OnModelWizardSwitchToAdvancedAsync" />
-    }
 
     @if (_editingModel is not null)
     {
@@ -323,7 +313,6 @@
     private List<PhysicalServerInfo> _physicalServers = new();
     private List<ModelInfo> _models = new();
     private ModelInfo? _editingModel;
-    private bool _modelWizardOpen;
     private bool _isCreatingModel;
     private string? _busyModelId;
     private ModelInfo? _swapTarget;
@@ -664,22 +653,6 @@
     }
 
     private void CancelEditModel() => _editingModel = null;
-
-    private async Task OnModelWizardSavedAsync(ModelInfo saved)
-    {
-        _modelWizardOpen = false;
-        await ReloadAsync();
-    }
-
-    /// <summary>The wizard already persisted the (possibly incomplete) model — this
-    /// just closes the wizard and opens the same Edit modal the row's own "Edit"
-    /// button uses, loaded from what was just saved.</summary>
-    private async Task OnModelWizardSwitchToAdvancedAsync(ModelInfo saved)
-    {
-        _modelWizardOpen = false;
-        await ReloadAsync();
-        await StartEditModel(saved);
-    }
 
     private async Task OnModelSubmit()
     {

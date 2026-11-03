@@ -50,7 +50,7 @@ public sealed class SwapService : ISwapService
         int instanceId, int modelId, int recipeId, bool acknowledgeServedNameChange = false, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = RequireToken(instanceId);
+        var token = await RequireTokenAsync(instanceId, ct);
         var model = await _models.GetAsync(modelId, ct) ?? throw new KeyNotFoundException($"No model with id {modelId}.");
         var recipe = await _recipes.GetAsync(recipeId, ct) ?? throw new KeyNotFoundException($"No recipe with id {recipeId}.");
         var server = await _servers.GetAsync(recipe.ServerId, ct) ?? throw new KeyNotFoundException($"No server with id {recipe.ServerId}.");
@@ -102,7 +102,7 @@ public sealed class SwapService : ISwapService
     public async Task<SwapResult> RollbackAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = RequireToken(instanceId);
+        var token = await RequireTokenAsync(instanceId, ct);
         var active = await _deployments.GetActiveAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to roll back on this instance -- no active deployment.");
 
@@ -136,7 +136,7 @@ public sealed class SwapService : ISwapService
         var source = await _deployments.GetAsync(deploymentId, ct)
             ?? throw new KeyNotFoundException($"No deployment with id {deploymentId}.");
         var instance = await RequireInstanceAsync(source.InstanceId, ct);
-        var token = RequireToken(source.InstanceId);
+        var token = await RequireTokenAsync(source.InstanceId, ct);
 
         var argv = JsonSerializer.Deserialize<List<string>>(source.ArgsSnapshot)
             ?? throw new InvalidOperationException($"Deployment {source.Id}'s args_snapshot could not be read.");
@@ -153,7 +153,7 @@ public sealed class SwapService : ISwapService
     public async Task<SupervisorStopResult> StopAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = RequireToken(instanceId);
+        var token = await RequireTokenAsync(instanceId, ct);
         var result = await _supervisorClient.StopAsync(instance.AdminUrl!, token, ct);
 
         var now = DateTime.UtcNow;
@@ -170,7 +170,7 @@ public sealed class SwapService : ISwapService
     public async Task<SwapResult> CancelAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = RequireToken(instanceId);
+        var token = await RequireTokenAsync(instanceId, ct);
         var pending = await _deployments.GetPendingAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to cancel on this instance -- no deploy in flight.");
 
@@ -198,7 +198,7 @@ public sealed class SwapService : ISwapService
     public async Task<SwapResult> RestartAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = RequireToken(instanceId);
+        var token = await RequireTokenAsync(instanceId, ct);
         var active = await _deployments.GetActiveAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to restart on this instance -- no active deployment.");
 
@@ -217,7 +217,7 @@ public sealed class SwapService : ISwapService
     public async Task<SwapResult> ForceRedeployAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = RequireToken(instanceId);
+        var token = await RequireTokenAsync(instanceId, ct);
         var active = await _deployments.GetActiveAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to fix on this instance -- no active deployment recorded.");
 
@@ -270,7 +270,7 @@ public sealed class SwapService : ISwapService
         return instance;
     }
 
-    private string RequireToken(int instanceId) =>
-        _tokenProvider.GetToken(instanceId)
+    private async Task<string> RequireTokenAsync(int instanceId, CancellationToken ct) =>
+        await _tokenProvider.GetTokenAsync(instanceId, ct)
             ?? throw new InvalidOperationException($"No supervisor token is configured for instance {instanceId}.");
 }

@@ -228,7 +228,7 @@ else
             _smokeResult = "No supervisor registered on this instance.";
             return;
         }
-        var token = TokenProvider.GetToken(_instance.Id);
+        var token = await TokenProvider.GetTokenAsync(_instance.Id);
         if (token is null)
         {
             _smokeResult = "No supervisor token configured.";

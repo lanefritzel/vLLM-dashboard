@@ -37,6 +37,11 @@ public class AddModelDownloadE2ETests
         var instance = new Instance
         {
             ServerId = server.Id, Label = "primary", ProxySlug = $"slug-{Guid.NewGuid():N}", AdminUrl = adminUrl,
+            // FakeSupervisorAdmin doesn't check the token's value at all, but
+            // InstanceTokenProvider must still resolve a non-null one for
+            // AddModelDialog to even attempt the call (P15b: tokens are now
+            // per-instance, not a single config-wide value).
+            AdminTokenEnc = _fixture.EncryptTokenForApp("fake-admin-token"),
         };
         db.InstancesV2.Add(instance);
         await db.SaveChangesAsync();

@@ -35,7 +35,7 @@ public class BootReconcilerTests : IAsyncDisposable
 
     private sealed class FixedTokenProvider : ISupervisorTokenProvider
     {
-        public string? GetToken(int instanceId) => SupervisorImageFixture.Token;
+        public Task<string?> GetTokenAsync(int instanceId, CancellationToken ct = default) => Task.FromResult<string?>(SupervisorImageFixture.Token);
     }
 
     private async Task<(IBootReconciler Reconciler, IReconcileActions Actions, ISwapService Swap, IDeploymentEventApplier Applier, IServiceScopeFactory ScopeFactory, string AdminUrl)>
