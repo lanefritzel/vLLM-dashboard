@@ -4,7 +4,9 @@ public class MetricsRollupEntity
 {
     public long Id { get; set; }
     public DateTime BucketStart { get; set; }
-    public Guid SourceId { get; set; }
+    // Was Guid (a hard FK to Sources) -- see MetricsSampleEntity.SourceId's
+    // own comment for why this is now a plain string (P16a finding #21).
+    public string SourceId { get; set; } = "";
     public string ModelName { get; set; } = "";
     public int Samples { get; set; }
     public double? AvgRunning { get; set; }
@@ -21,6 +23,4 @@ public class MetricsRollupEntity
     public double? P95TtftSec { get; set; }
     public double? AvgGenTps { get; set; }
     public double? PeakGenTps { get; set; }
-
-    public Source? Source { get; set; }
 }

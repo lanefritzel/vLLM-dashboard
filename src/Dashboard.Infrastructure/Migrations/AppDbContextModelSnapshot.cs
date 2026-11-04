@@ -304,8 +304,10 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<int>("Samples")
                         .HasColumnType("integer");
 
-                    b.Property<Guid>("SourceId")
-                        .HasColumnType("uuid");
+                    b.Property<string>("SourceId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<long>("TokensGenerated")
                         .HasColumnType("bigint");
@@ -371,8 +373,9 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<int>("Running")
                         .HasColumnType("integer");
 
-                    b.Property<Guid?>("SourceId")
-                        .HasColumnType("uuid");
+                    b.Property<string>("SourceId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("SourceLabel")
                         .IsRequired()
@@ -1079,27 +1082,6 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasForeignKey("Dashboard.Infrastructure.Persistence.LaunchSpecEntity", "SourceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("Source");
-                });
-
-            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.MetricsRollupEntity", b =>
-                {
-                    b.HasOne("Dashboard.Infrastructure.Persistence.Source", "Source")
-                        .WithMany()
-                        .HasForeignKey("SourceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Source");
-                });
-
-            modelBuilder.Entity("Dashboard.Infrastructure.Persistence.MetricsSampleEntity", b =>
-                {
-                    b.HasOne("Dashboard.Infrastructure.Persistence.Source", "Source")
-                        .WithMany()
-                        .HasForeignKey("SourceId")
-                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("Source");
                 });

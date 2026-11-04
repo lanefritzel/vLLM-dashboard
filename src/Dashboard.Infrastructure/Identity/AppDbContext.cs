@@ -127,6 +127,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.ToTable("MetricsSamples");
             entity.HasKey(s => s.Id);
             entity.Property(s => s.Id).ValueGeneratedOnAdd();
+            entity.Property(s => s.SourceId).HasMaxLength(200);
             entity.Property(s => s.SourceLabel).HasMaxLength(200).IsRequired();
             entity.Property(s => s.ModelName).HasMaxLength(300);
             entity.Property(s => s.KvPct).HasPrecision(5, 2);
@@ -140,10 +141,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.Property(s => s.PrefixHitRatio).HasPrecision(5, 4);
             entity.HasIndex(s => new { s.SourceId, s.Ts });
             entity.HasIndex(s => s.Ts);
-            entity.HasOne(s => s.Source)
-                .WithMany()
-                .HasForeignKey(s => s.SourceId)
-                .OnDelete(DeleteBehavior.SetNull);
+            // No FK to Sources anymore (P16a finding #21) -- SourceId is a
+            // plain string now, shared by legacy sources (a Guid's own
+            // ToString()) and V2 instances ("instance-N") alike, with no
+            // table that could hold both kinds of id as its primary key.
         });
 
         builder.Entity<MetricsRollupEntity>(entity =>
@@ -151,12 +152,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.ToTable("MetricsRollups");
             entity.HasKey(r => r.Id);
             entity.Property(r => r.Id).ValueGeneratedOnAdd();
+            entity.Property(r => r.SourceId).HasMaxLength(200).IsRequired();
             entity.Property(r => r.ModelName).HasMaxLength(300).IsRequired();
             entity.HasIndex(r => new { r.SourceId, r.ModelName, r.BucketStart }).IsUnique();
-            entity.HasOne(r => r.Source)
-                .WithMany()
-                .HasForeignKey(r => r.SourceId)
-                .OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<AppLogEntity>(entity =>

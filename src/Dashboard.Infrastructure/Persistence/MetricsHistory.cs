@@ -37,8 +37,8 @@ public sealed class MetricsHistory : IMetricsHistory
         if (rawFrom <= to)
         {
             var q = db.MetricsSamples.AsNoTracking().Where(s => s.Ts >= rawFrom && s.Ts <= to);
-            if (sourceId is not null && Guid.TryParse(sourceId, out var sid))
-                q = q.Where(s => s.SourceId == sid);
+            if (sourceId is not null)
+                q = q.Where(s => s.SourceId == sourceId);
             if (modelName is not null)
                 q = q.Where(s => s.ModelName == modelName);
             raw = await q.OrderBy(s => s.Ts).Select(s => s.ToInfo()).ToListAsync(ct);
@@ -56,8 +56,8 @@ public sealed class MetricsHistory : IMetricsHistory
     {
         var q = db.MetricsRollups.AsNoTracking()
             .Where(r => r.BucketStart >= from && r.BucketStart < to);
-        if (sourceId is not null && Guid.TryParse(sourceId, out var sid))
-            q = q.Where(r => r.SourceId == sid);
+        if (sourceId is not null)
+            q = q.Where(r => r.SourceId == sourceId);
         if (modelName is not null)
             q = q.Where(r => r.ModelName == modelName);
 
@@ -65,7 +65,7 @@ public sealed class MetricsHistory : IMetricsHistory
         return rows.Select(r => new MetricsSample
         {
             Ts = r.BucketStart,
-            SourceId = r.SourceId.ToString(),
+            SourceId = r.SourceId,
             SourceLabel = "",
             ModelName = r.ModelName,
             Running = (int)(r.AvgRunning ?? 0),
@@ -88,8 +88,8 @@ public sealed class MetricsHistory : IMetricsHistory
         if (rawFrom <= to)
         {
             var q = db.MetricsSamples.AsNoTracking().Where(s => s.Ts >= rawFrom && s.Ts <= to);
-            if (sourceId is not null && Guid.TryParse(sourceId, out var sid))
-                q = q.Where(s => s.SourceId == sid);
+            if (sourceId is not null)
+                q = q.Where(s => s.SourceId == sourceId);
             if (modelName is not null)
                 q = q.Where(s => s.ModelName == modelName);
             samples.AddRange(await q.Select(s => s.ToInfo()).ToListAsync(ct));
@@ -99,8 +99,8 @@ public sealed class MetricsHistory : IMetricsHistory
         {
             var rq = db.MetricsRollups.AsNoTracking()
                 .Where(r => r.BucketStart >= from && r.BucketStart < retentionCutoff);
-            if (sourceId is not null && Guid.TryParse(sourceId, out var sid))
-                rq = rq.Where(r => r.SourceId == sid);
+            if (sourceId is not null)
+                rq = rq.Where(r => r.SourceId == sourceId);
             if (modelName is not null)
                 rq = rq.Where(r => r.ModelName == modelName);
             var rollRows = await rq.ToListAsync(ct);
@@ -147,9 +147,6 @@ public sealed class MetricsHistory : IMetricsHistory
     public async Task<GenerationThroughputStats?> GetActiveGenerationStatsAsync(
         string sourceId, TimeSpan window, CancellationToken ct = default)
     {
-        if (!Guid.TryParse(sourceId, out var sid))
-            return null;
-
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var cutoff = DateTime.UtcNow - window;
@@ -161,7 +158,7 @@ public sealed class MetricsHistory : IMetricsHistory
         // This only sees as far back as retention keeps raw samples; a window longer
         // than that just yields fewer samples, not an error.
         var agg = await db.MetricsSamples.AsNoTracking()
-            .Where(s => s.SourceId == sid && s.Ts >= cutoff && s.GenTps > 0)
+            .Where(s => s.SourceId == sourceId && s.Ts >= cutoff && s.GenTps > 0)
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -176,13 +173,10 @@ public sealed class MetricsHistory : IMetricsHistory
 
     public async Task ClearAsync(string sourceId, CancellationToken ct = default)
     {
-        if (!Guid.TryParse(sourceId, out var sid))
-            return;
-
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        await db.MetricsSamples.Where(s => s.SourceId == sid).ExecuteDeleteAsync(ct);
-        await db.MetricsRollups.Where(r => r.SourceId == sid).ExecuteDeleteAsync(ct);
+        await db.MetricsSamples.Where(s => s.SourceId == sourceId).ExecuteDeleteAsync(ct);
+        await db.MetricsRollups.Where(r => r.SourceId == sourceId).ExecuteDeleteAsync(ct);
     }
 }

@@ -21,6 +21,7 @@
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
 @inject IOnboardingService Onboarding
 @inject IBootReconciler Reconciler
+@inject IMetricsHistory History
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
 
@@ -217,7 +218,15 @@ else
         <div class="row g-3">
             <div class="col-lg-6">
                 <div class="card h-100"><div class="card-body">
-                    <div class="card-title">Throughput (tok/s)</div>
+                    <div class="d-flex align-items-start justify-content-between gap-2">
+                        <div class="card-title">Throughput (tok/s)</div>
+                        <div class="gen-stats">
+                            <div title="Peak generation throughput in the last 30 days">▲ @Fmt(_genStats?.Peak)</div>
+                            <div title="Average generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Avg) avg</div>
+                            <div title="Lowest generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Low) low</div>
+                            <a href="javascript:void(0)" class="gen-stats-reset" title="Delete generation history and reset these stats" @onclick="ResetGenStatsAsync">reset</a>
+                        </div>
+                    </div>
                     <div class="chart-wrap"><canvas id="ov2-throughput"></canvas></div>
                 </div></div>
             </div>
@@ -276,6 +285,10 @@ else
     private string? _chartKey;
     private MetricsSample? _latestSample;
     private string? _hubJoinedSourceId;
+
+    private static readonly TimeSpan GenStatsWindow = TimeSpan.FromDays(30);
+    private GenerationThroughputStats? _genStats;
+    private DateTime _genStatsLastRefresh = DateTime.MinValue;
 
     protected override async Task OnInitializedAsync()
     {
@@ -540,8 +553,64 @@ else
 
         _latestSample = s;
         await PushToChartsAsync(s);
+
+        // Peak/low only ever need a running max/min against the live value — cheap
+        // and instant, no need to wait for the periodic DB refresh below for those.
+        // Avg can't be maintained incrementally without also removing samples that
+        // age out of the rolling window, so it's just re-queried periodically instead
+        // (only while samples are actually arriving — nothing changes while idle).
+        if (s.GenTps is > 0)
+        {
+            _genStats = _genStats is null
+                ? new GenerationThroughputStats { Peak = s.GenTps.Value, Avg = s.GenTps.Value, Low = s.GenTps.Value }
+                : _genStats with { Peak = Math.Max(_genStats.Peak, s.GenTps.Value), Low = Math.Min(_genStats.Low, s.GenTps.Value) };
+            await RefreshGenStatsAsync(s.SourceId, force: false);
+        }
+
         StateHasChanged();
     });
+
+    private async Task RefreshGenStatsAsync(string sourceId, bool force)
+    {
+        if (!force && DateTime.UtcNow - _genStatsLastRefresh < TimeSpan.FromSeconds(60))
+            return;
+        _genStatsLastRefresh = DateTime.UtcNow;
+        try
+        {
+            _genStats = await History.GetActiveGenerationStatsAsync(sourceId, GenStatsWindow);
+        }
+        catch
+        {
+            // Best-effort — keep whatever we already had rather than blanking the card.
+        }
+    }
+
+    private async Task ResetGenStatsAsync()
+    {
+        if (_instance is null) return;
+        var sourceId = Dashboard.Web.Metrics.InstanceMetricsPollingService.SourceIdFor(_instance.Id);
+
+        var ok = await Dialogs.ConfirmAsync(
+            "This permanently deletes all generation history for this instance — the Peak/Avg/Low stats above and the History views for it will be empty until new data comes in. This cannot be undone.",
+            title: "Clear generation stats?",
+            confirmText: "Clear");
+        if (!ok) return;
+
+        try
+        {
+            await History.ClearAsync(sourceId);
+        }
+        catch
+        {
+            return;
+        }
+
+        _genStats = null;
+        await RefreshGenStatsAsync(sourceId, force: true);
+        StateHasChanged();
+    }
+
+    private static string Fmt(double? v) => v is null ? "—" : v.Value.ToString("0.#");
 
     [JSInvokable]
     public Task OnConfigUpdated() => Task.CompletedTask;
@@ -557,6 +626,8 @@ else
                 await JS.InvokeVoidAsync("hub_leave", _hubJoinedSourceId);
             await JS.InvokeVoidAsync("hub_join", sourceId);
             _hubJoinedSourceId = sourceId;
+            _genStats = null;
+            await RefreshGenStatsAsync(sourceId, force: true);
         }
 
         if (_chartKey == sourceId) return;

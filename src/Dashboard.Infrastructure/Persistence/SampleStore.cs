@@ -93,7 +93,10 @@ public sealed class SampleStore : ISampleStore
 
     private static MetricsSampleEntity ToEntity(MetricsSample s) => new()
     {
-        SourceId = Guid.TryParse(s.SourceId, out var sid) ? sid : (Guid?)null,
+        // Stored as-is (P16a finding #21) -- SourceId is a plain string now,
+        // not a Guid? that silently dropped any non-GUID-shaped id (every V2
+        // instance's own "instance-N") to null on every single write.
+        SourceId = s.SourceId,
         SourceLabel = s.SourceLabel,
         ModelName = s.ModelName,
         Ts = s.Ts,

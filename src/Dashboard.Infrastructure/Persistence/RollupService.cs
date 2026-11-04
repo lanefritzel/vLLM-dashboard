@@ -67,7 +67,7 @@ public sealed class RollupService : IRetentionService, IHostedService
                 .Where(s => s.Ts >= from && s.Ts < now && s.SourceId != null)
                 .ToListAsync(ct);
 
-            foreach (var grp in raw.GroupBy(s => (s.SourceId!.Value, s.ModelName ?? "")))
+            foreach (var grp in raw.GroupBy(s => (s.SourceId!, s.ModelName ?? "")))
             {
                 var (sid, model) = grp.Key;
                 var bucket = new DateTime(grp.Min(s => s.Ts).Year, grp.Min(s => s.Ts).Month, grp.Min(s => s.Ts).Day,
