@@ -1,0 +1,222 @@
+/* ============================================================================
+   layout.css — app shell frame (Style Refactor P2.1–P2.3)
+
+   Sticky 56px header, 232px rail (64px collapsed), 1440px content cap.
+   Visual treatment only — navigation IA is owned by the UX program.
+   Consumes --ui-* tokens only.
+   ============================================================================ */
+
+/* Skip link target + shell -------------------------------------------------- */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Header --------------------------------------------------------------------- */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-4);
+  height: var(--ui-header-h);
+  padding: 0 var(--ui-space-4);
+  background: var(--ui-bg-2);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  color: var(--ui-text);
+}
+
+.brand-logo {
+  color: var(--ui-primary);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.brand-name {
+  font-size: 0.875rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--ui-text);
+  white-space: nowrap;
+}
+
+.brand .ui-icon { flex: none; }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  min-width: 0;
+}
+
+/* Body: rail + main ------------------------------------------------------------ */
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-nav {
+  width: var(--ui-rail-w);
+  flex: 0 0 var(--ui-rail-w);
+  background: var(--ui-bg-2);
+  border-right: 1px solid var(--ui-border);
+  padding: var(--ui-space-3) var(--ui-space-3) var(--ui-space-5);
+  overflow-y: auto;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  padding: var(--ui-content-pt) var(--ui-content-px) var(--ui-content-pb);
+}
+
+.content {
+  width: 100%;
+  max-width: var(--ui-content-max);
+  margin: 0 auto;
+}
+
+/* Navigation -------------------------------------------------------------------- */
+.app-nav .nav { gap: 2px; }
+
+.app-nav .nav-item {
+  padding: 0;
+  margin: 0;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nav-link:hover {
+  color: var(--ui-text);
+  background: var(--ui-hover);
+  text-decoration: none;
+}
+
+.nav-link.active {
+  color: var(--ui-text);
+  background: var(--ui-active);
+  box-shadow: inset 2px 0 0 var(--ui-primary);
+  font-weight: 600;
+}
+
+.nav-link .ui-icon {
+  flex: none;
+  color: var(--ui-subtle);
+}
+
+.nav-link:hover .ui-icon { color: var(--ui-text); }
+.nav-link.active .ui-icon { color: var(--ui-primary); }
+
+.nav-group-label {
+  color: var(--ui-subtle);
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: var(--ui-space-4) 0.65rem var(--ui-space-1);
+}
+
+.nav-sub .nav-link { padding-left: 1.5rem; }
+.nav-sub .nav-link .ui-icon { margin-left: 0; }
+
+/* Header widgets ------------------------------------------------------------------ */
+.source-selector,
+.theme-switcher {
+  height: var(--ui-control-h-sm);
+  padding: 0.15rem 0.45rem;
+  background: var(--ui-surface-2);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  font-size: var(--ui-text-sm);
+  font-family: inherit;
+}
+
+.source-selector:focus,
+.theme-switcher:focus {
+  border-color: var(--ui-primary);
+  box-shadow: var(--ui-focus-ring);
+  outline: none;
+}
+
+.source-selector option,
+.theme-switcher option {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.user-email {
+  color: var(--ui-muted);
+  font-size: var(--ui-text-sm);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Wizard step highlight (kept from legacy; token-driven now) --------------------- */
+.wizard-step-active { color: var(--ui-text); font-weight: 700; }
+
+/* Responsive ------------------------------------------------------------------------ */
+@media (max-width: 1100px) {
+  .brand-name { display: none; }
+}
+
+@media (max-width: 900px) {
+  .app-nav {
+    width: var(--ui-rail-w-collapsed);
+    flex-basis: var(--ui-rail-w-collapsed);
+    padding: var(--ui-space-3) var(--ui-space-2) var(--ui-space-5);
+  }
+
+  .nav-link {
+    justify-content: center;
+    padding: 0.6rem;
+    font-size: 0;
+    gap: 0;
+  }
+
+  .nav-link .ui-icon { margin: 0; }
+
+  .nav-group-label,
+  .nav-sub .nav-link .nav-label { display: none; }
+
+  .app-main { padding: var(--ui-space-4) var(--ui-space-4) var(--ui-space-6); }
+  .content { max-width: none; }
+
+  .header-right { gap: var(--ui-space-2); }
+  .user-email { display: none; }
+}
+
+@media (max-width: 560px) {
+  .app-header { padding: 0 var(--ui-space-3); gap: var(--ui-space-2); }
+  .source-selector { max-width: 140px; text-overflow: ellipsis; }
+}

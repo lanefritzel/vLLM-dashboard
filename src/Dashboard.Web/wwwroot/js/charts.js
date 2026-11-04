@@ -13,14 +13,24 @@
 
   function colors() {
     return {
-      text: cssVar('--text', '#e6e9ef'),
-      muted: cssVar('--muted', '#8b93a7'),
-      grid: cssVar('--border', '#232a3a'),
-      accent: cssVar('--accent', '#4c8dff'),
-      green: cssVar('--green', '#31c06b'),
-      red: cssVar('--red', '#e5484d'),
-      warn: cssVar('--warn', '#f5a524')
+      text: cssVar('--ui-text', '#e8ecf4'),
+      muted: cssVar('--ui-muted', '#98a2ba'),
+      grid: cssVar('--ui-chart-grid', '#1c2537'),
+      accent: cssVar('--ui-chart-2', '#5b9dff'),
+      green: cssVar('--ui-chart-1', '#2fd07c'),
+      red: cssVar('--ui-danger', '#f0566e'),
+      warn: cssVar('--ui-warn', '#f2b23e'),
+      violet: cssVar('--ui-chart-3', '#8b7cf6'),
+      cyan: cssVar('--ui-chart-4', '#22d3ee'),
+      pink: cssVar('--ui-chart-5', '#f472b6')
     };
+  }
+
+  function resolveColor(c) {
+    if (!c) return null;
+    var m = /^var\(\s*(--[\w-]+)\s*\)$/.exec(c);
+    if (m) return cssVar(m[1], null) || c;
+    return c;
   }
 
   function canvas(id) {
@@ -40,7 +50,7 @@
     var pal = colors();
     var hiddenKeys = (opts && opts.hidden) || [];
     var datasets = series.map(function (s) {
-      var col = s.color || pal.accent;
+      var col = resolveColor(s.color) || pal.accent;
       return {
         key: s.key, label: s.label, data: [],
         borderColor: col, backgroundColor: col + '22',
@@ -123,4 +133,26 @@
   window.chart_dispose_all = function () {
     Object.keys(charts).forEach(function (k) { window.chart_dispose(k); });
   };
+
+  // Theme change: refresh theme-dependent colors (ticks, grid, legend) on all
+  // live charts without rebuilding them.
+  window.addEventListener('themechange', function () {
+    var pal = colors();
+    Object.keys(charts).forEach(function (id) {
+      var chart = charts[id];
+      if (!chart) return;
+      var o = chart.options;
+      if (o.scales) {
+        ['x', 'y'].forEach(function (axis) {
+          if (!o.scales[axis]) return;
+          if (o.scales[axis].ticks) o.scales[axis].ticks.color = pal.muted;
+          if (o.scales[axis].grid) o.scales[axis].grid.color = pal.grid;
+        });
+      }
+      if (o.plugins && o.plugins.legend && o.plugins.legend.labels) {
+        o.plugins.legend.labels.color = pal.text;
+      }
+      try { chart.update('none'); } catch (e) { /* chart may be mid-destroy */ }
+    });
+  });
 })();

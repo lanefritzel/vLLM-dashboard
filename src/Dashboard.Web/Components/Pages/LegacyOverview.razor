@@ -195,11 +195,11 @@
                             <div class="series-toggles">
                                 <label class="series-toggle @(_showGen ? "" : "off")">
                                     <input type="checkbox" checked="@_showGen" @onchange="OnToggleGen" />
-                                    <span class="dot" style="background:#4c8dff"></span> generation
+                                    <span class="dot" style="background:var(--ui-chart-2)"></span> generation
                                 </label>
                                 <label class="series-toggle @(_showPrompt ? "" : "off")">
                                     <input type="checkbox" checked="@_showPrompt" @onchange="OnTogglePrompt" />
-                                    <span class="dot" style="background:#31c06b"></span> prompt
+                                    <span class="dot" style="background:var(--ui-chart-1)"></span> prompt
                                 </label>
                             </div>
                         </div>
@@ -581,26 +581,26 @@
 
     private static List<Dictionary<string, string>> ThroughputSeries() => new()
     {
-        new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "#4c8dff" },
-        new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "#31c06b" },
+        new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)" },
+        new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "var(--ui-chart-1)" },
     };
 
     private static List<Dictionary<string, string>> KvSeries() => new()
     {
-        new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "#f5a524" },
+        new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "var(--ui-chart-6)" },
     };
 
     private static List<Dictionary<string, string>> SchedulerSeries() => new()
     {
-        new() { ["key"] = "running", ["label"] = "running", ["color"] = "#4c8dff" },
-        new() { ["key"] = "waiting", ["label"] = "waiting", ["color"] = "#f5a524" },
+        new() { ["key"] = "running", ["label"] = "running", ["color"] = "var(--ui-chart-2)" },
+        new() { ["key"] = "waiting", ["label"] = "waiting", ["color"] = "var(--ui-chart-6)" },
     };
 
     private static List<Dictionary<string, string>> LatencySeries() => new()
     {
-        new() { ["key"] = "ttft", ["label"] = "ttft", ["color"] = "#4c8dff" },
-        new() { ["key"] = "itl", ["label"] = "itl", ["color"] = "#31c06b" },
-        new() { ["key"] = "e2e", ["label"] = "e2e", ["color"] = "#f5a524" },
+        new() { ["key"] = "ttft", ["label"] = "ttft", ["color"] = "var(--ui-chart-2)" },
+        new() { ["key"] = "itl", ["label"] = "itl", ["color"] = "var(--ui-chart-1)" },
+        new() { ["key"] = "e2e", ["label"] = "e2e", ["color"] = "var(--ui-chart-6)" },
     };
 
     private static string Fmt(double? v) => v is null ? "—" : v.Value.ToString("0.#");

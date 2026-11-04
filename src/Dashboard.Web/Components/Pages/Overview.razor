@@ -29,7 +29,7 @@
 
 @if (_onboarding is { ShouldShow: true })
 {
-    <div class="card mb-3" style="border-left: 3px solid var(--blue, #4c8dff);">
+    <div class="card mb-3" style="border-left: 3px solid var(--ui-info);">
         <div class="card-body">
             <div class="card-title mb-2">Get started</div>
             <ol class="onboarding-checklist mb-0">
@@ -649,11 +649,11 @@ else
         var throughputOk = await JS.InvokeAsync<bool>("chart_create", "ov2-throughput",
             new List<Dictionary<string, string>>
             {
-                new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "#4c8dff" },
-                new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "#31c06b" },
+                new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)" },
+                new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "var(--ui-chart-1)" },
             }, new { });
         var kvOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv",
-            new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "#f5a524" } },
+            new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "var(--ui-chart-6)" } },
             new { yMin = 0.0, yMax = 100.0 });
 
         if (throughputOk && kvOk)

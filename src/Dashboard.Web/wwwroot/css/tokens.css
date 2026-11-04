@@ -1,0 +1,255 @@
+/* ============================================================================
+   tokens.css — vLLM Dashboard design tokens (Style Refactor P1.1)
+
+   Direction: Deep Navy Ops Console.
+   - deep navy surfaces
+   - signal green: primary actions AND healthy status
+   - blue: links / info
+   - amber: warning, crimson: danger
+   - violet / cyan / pink: chart series
+
+   Dark is the default; light is first-class. All hardcoded color values live
+   in this file. Everything else consumes --ui-* variables only.
+   ============================================================================ */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces --------------------------------------------------------------- */
+  --ui-bg: #0a0e16;
+  --ui-bg-2: #0d1322;
+  --ui-surface: #111827;
+  --ui-surface-2: #17202f;
+  --ui-surface-3: #1d2738;
+  --ui-hover: rgba(255, 255, 255, 0.04);
+  --ui-active: rgba(255, 255, 255, 0.07);
+
+  /* Borders ---------------------------------------------------------------- */
+  --ui-border: #202a3d;
+  --ui-border-strong: #2e3b52;
+  --ui-border-subtle: #182135;
+
+  /* Text ------------------------------------------------------------------- */
+  --ui-text: #e8ecf4;
+  --ui-text-2: #c3cad9;
+  --ui-muted: #98a2ba;
+  --ui-subtle: #6b7488;
+
+  /* Primary / status ------------------------------------------------------- */
+  --ui-primary: #2fd07c;
+  --ui-primary-strong: #46dd92;
+  --ui-primary-deep: #1fa860;
+  --ui-primary-contrast: #05130b;
+  --ui-success: #2fd07c;
+
+  --ui-info: #5b9dff;
+  --ui-info-strong: #74abff;
+  --ui-info-deep: #3f84e0;
+
+  --ui-warn: #f2b23e;
+  --ui-warn-deep: #d99a24;
+
+  --ui-danger: #f0566e;
+  --ui-danger-strong: #ff7089;
+  --ui-danger-deep: #d8455e;
+
+  /* Tonal backgrounds (soft chips, callouts, status fills) ------------------ */
+  --ui-primary-soft: rgba(47, 208, 124, 0.12);
+  --ui-info-soft: rgba(91, 157, 255, 0.12);
+  --ui-warn-soft: rgba(242, 178, 62, 0.13);
+  --ui-danger-soft: rgba(240, 86, 110, 0.13);
+
+  /* Chart series ------------------------------------------------------------- */
+  --ui-chart-1: #2fd07c;
+  --ui-chart-2: #5b9dff;
+  --ui-chart-3: #8b7cf6;
+  --ui-chart-4: #22d3ee;
+  --ui-chart-5: #f472b6;
+  --ui-chart-6: #f2b23e;
+  --ui-chart-grid: #1c2537;
+
+  /* Elevation / shape -------------------------------------------------------- */
+  --ui-shadow: rgba(2, 6, 18, 0.5);
+  --ui-shadow-sm: rgba(2, 6, 18, 0.35);
+  --ui-overlay: rgba(3, 7, 18, 0.62);
+  --ui-radius: 10px;
+  --ui-radius-sm: 6px;
+  --ui-radius-lg: 14px;
+
+  /* Focus / selection ------------------------------------------------------------ */
+  --ui-focus-ring: 0 0 0 3px rgba(47, 208, 124, 0.28);
+  --ui-focus-ring-info: 0 0 0 3px rgba(91, 157, 255, 0.28);
+  --ui-selection-bg: rgba(47, 208, 124, 0.25);
+
+  /* Select chevron (theme-specific data URI — the only place a color literal may live) */
+  --ui-select-chevron: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%2398a2ba' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M4 6l4 4 4-4'/%3e%3c/svg%3e");
+
+  /* Typography --------------------------------------------------------------- */
+  --ui-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ui-font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --ui-text-xs: 0.72rem;
+  --ui-text-sm: 0.8125rem;
+  --ui-text-md: 0.875rem;
+  --ui-text-lg: 1rem;
+  --ui-text-xl: 1.25rem;
+  --ui-text-2xl: 1.5rem;
+
+  /* Spacing ------------------------------------------------------------------ */
+  --ui-gap: 1rem;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 24px;
+  --ui-space-6: 32px;
+  --ui-space-7: 48px;
+
+  /* Controls ----------------------------------------------------------------- */
+  --ui-control-h-sm: 28px;
+  --ui-control-h-md: 34px;
+  --ui-control-h-lg: 40px;
+  --ui-input-h: 34px;
+
+  /* Layout ------------------------------------------------------------------- */
+  --ui-header-h: 56px;
+  --ui-rail-w: 232px;
+  --ui-rail-w-collapsed: 64px;
+  --ui-content-max: 1440px;
+  --ui-content-px: 32px;
+  --ui-content-pt: 24px;
+  --ui-content-pb: 40px;
+
+  /* Compatibility aliases — legacy pages/charts read the old names.
+     They now resolve to the new token system (removed in P4.1). */
+  --bg: var(--ui-bg);
+  --bg-2: var(--ui-bg-2);
+  --card: var(--ui-surface);
+  --border: var(--ui-border);
+  --text: var(--ui-text);
+  --muted: var(--ui-muted);
+  --accent: var(--ui-info);
+  --accent-2: var(--ui-info-deep);
+  --green: var(--ui-primary);
+  --red: var(--ui-danger);
+  --warn: var(--ui-warn);
+  --focus: var(--ui-primary);
+  --shadow: var(--ui-shadow);
+  --radius: var(--ui-radius);
+  --radius-sm: var(--ui-radius-sm);
+
+  /* Bootstrap component vars (cards/tables/alerts read these directly) */
+  --bs-body-color: var(--ui-text);
+  --bs-body-bg: var(--ui-bg);
+  --bs-secondary-color: var(--ui-muted);
+  --bs-border-color: var(--ui-border);
+  --bs-emphasis-color: var(--ui-text);
+  --bs-primary: var(--ui-primary);
+  --bs-primary-rgb: 47, 208, 124;
+  --bs-link-color: var(--ui-info);
+  --bs-link-color-rgb: 91, 157, 255;
+  --bs-link-hover-color: var(--ui-info-strong);
+  --bs-link-hover-color-rgb: 116, 171, 255;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces ----------------------------------------------------------------- */
+  --ui-bg: #f4f6fb;
+  --ui-bg-2: #eceff6;
+  --ui-surface: #ffffff;
+  --ui-surface-2: #f2f4f9;
+  --ui-surface-3: #e9edf5;
+  --ui-hover: rgba(23, 32, 54, 0.045);
+  --ui-active: rgba(23, 32, 54, 0.08);
+
+  /* Borders ------------------------------------------------------------------- */
+  --ui-border: #d9dfeb;
+  --ui-border-strong: #b9c3d6;
+  --ui-border-subtle: #e4e9f1;
+
+  /* Text ---------------------------------------------------------------------- */
+  --ui-text: #17202f;
+  --ui-text-2: #333e52;
+  --ui-muted: #5c6679;
+  --ui-subtle: #8b94a8;
+
+  /* Primary / status ------------------------------------------------------------ */
+  --ui-primary: #0e9e5a;
+  --ui-primary-strong: #0c854d;
+  --ui-primary-deep: #0a6e3f;
+  --ui-primary-contrast: #ffffff;
+  --ui-success: #0e9e5a;
+
+  --ui-info: #2563eb;
+  --ui-info-strong: #3b73ec;
+  --ui-info-deep: #1d4fd0;
+
+  --ui-warn: #a05e07;
+  --ui-warn-deep: #8a5106;
+
+  --ui-danger: #cc3348;
+  --ui-danger-strong: #b02338;
+  --ui-danger-deep: #a51f33;
+
+  /* Tonal backgrounds ------------------------------------------------------------- */
+  --ui-primary-soft: rgba(14, 158, 90, 0.10);
+  --ui-info-soft: rgba(37, 99, 235, 0.10);
+  --ui-warn-soft: rgba(160, 94, 7, 0.10);
+  --ui-danger-soft: rgba(204, 51, 72, 0.10);
+
+  /* Chart series ------------------------------------------------------------------- */
+  --ui-chart-1: #0e9e5a;
+  --ui-chart-2: #2563eb;
+  --ui-chart-3: #6d5ef0;
+  --ui-chart-4: #0891b2;
+  --ui-chart-5: #d6338a;
+  --ui-chart-6: #b06a08;
+  --ui-chart-grid: #dfe5ee;
+
+  /* Elevation / shape ---------------------------------------------------------------- */
+  --ui-shadow: rgba(23, 32, 54, 0.12);
+  --ui-shadow-sm: rgba(23, 32, 54, 0.08);
+  --ui-overlay: rgba(23, 32, 54, 0.40);
+  --ui-radius: 10px;
+  --ui-radius-sm: 6px;
+  --ui-radius-lg: 14px;
+
+  /* Focus ----------------------------------------------------------------------------- */
+  --ui-focus-ring: 0 0 0 3px rgba(14, 158, 90, 0.22);
+  --ui-focus-ring-info: 0 0 0 3px rgba(37, 99, 235, 0.22);
+  --ui-selection-bg: rgba(14, 158, 90, 0.22);
+
+  /* Select chevron (light variant) */
+  --ui-select-chevron: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%235c6679' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M4 6l4 4 4-4'/%3e%3c/svg%3e");
+
+  /* Compatibility aliases (mirror of dark block, same legacy names) */
+  --bg: var(--ui-bg);
+  --bg-2: var(--ui-bg-2);
+  --card: var(--ui-surface);
+  --border: var(--ui-border);
+  --text: var(--ui-text);
+  --muted: var(--ui-muted);
+  --accent: var(--ui-info);
+  --accent-2: var(--ui-info-deep);
+  --green: var(--ui-primary);
+  --red: var(--ui-danger);
+  --warn: var(--ui-warn);
+  --focus: var(--ui-primary);
+  --shadow: var(--ui-shadow);
+  --radius: var(--ui-radius);
+  --radius-sm: var(--ui-radius-sm);
+
+  --bs-body-color: var(--ui-text);
+  --bs-body-bg: var(--ui-bg);
+  --bs-secondary-color: var(--ui-muted);
+  --bs-border-color: var(--ui-border);
+  --bs-emphasis-color: var(--ui-text);
+  --bs-primary: var(--ui-primary);
+  --bs-primary-rgb: 14, 158, 90;
+  --bs-link-color: var(--ui-info);
+  --bs-link-color-rgb: 37, 99, 235;
+  --bs-link-hover-color: var(--ui-info-strong);
+  --bs-link-hover-color-rgb: 59, 115, 236;
+}

@@ -134,7 +134,7 @@
         {
             await JS.InvokeVoidAsync("chart_create", "hist-gen", new List<Dictionary<string, string>>
             {
-                new() { ["key"] = "gen", ["label"] = "generation tok/s", ["color"] = "#4c8dff" },
+                new() { ["key"] = "gen", ["label"] = "generation tok/s", ["color"] = "var(--ui-chart-2)" },
             }, new { });
             _chartReady = true;
         }

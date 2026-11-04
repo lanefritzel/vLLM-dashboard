@@ -4,6 +4,7 @@
 <AuthorizeView>
     <Authorized Context="user">
         <div class="app-shell">
+            <a class="skip-link" href="#main-content">Skip to content</a>
             <header class="app-header">
                 <div class="brand">
                     <span class="brand-logo">◆</span>
@@ -16,10 +17,10 @@
                 </div>
             </header>
             <div class="app-body">
-                <nav class="app-nav">
+                <nav class="app-nav" aria-label="Primary">
                     <NavMenu />
                 </nav>
-                <main class="app-main">
+                <main class="app-main" id="main-content">
                     <article class="content">
                         @Body
                     </article>
@@ -29,6 +30,7 @@
     </Authorized>
     <NotAuthorized>
         <div class="app-shell">
+            <a class="skip-link" href="#main-content">Skip to content</a>
             <header class="app-header">
                 <div class="brand">
                     <span class="brand-logo">◆</span>
@@ -36,7 +38,7 @@
                 </div>
             </header>
             <div class="app-body">
-                <main class="app-main">
+                <main class="app-main" id="main-content">
                     <article class="content">
                         @Body
                     </article>

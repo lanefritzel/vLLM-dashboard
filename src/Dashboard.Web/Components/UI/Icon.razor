@@ -1,0 +1,145 @@
+@* vLLM Dashboard icon set — 24px viewBox, 1.5px stroke, inherits currentColor.
+   Sizes: 16 / 18 / 20 (via ui-icon-16/18/20). *@
+<svg class="ui-icon @(string.IsNullOrEmpty(Size) ? "ui-icon-18" : $"ui-icon-{Size}")" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+      aria-hidden="true" focusable="false" @attributes=AdditionalAttributes>
+    @((MarkupString)(Paths.TryGetValue(Name, out var p) ? p : Paths["dot"]))
+</svg>
+
+@code {
+    [Parameter] public string Name { get; set; } = "dot";
+    [Parameter] public string Size { get; set; } = "18";
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; } = new();
+
+    private static readonly Dictionary<string, string> Paths = new()
+    {
+        ["overview"] = """
+            <path d="M12 15l4.5-4.5"/>
+            <path d="M3.5 17a9 9 0 1 1 17 0"/>
+            """,
+        ["deployments"] = """
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <path d="M3.27 6.96 12 12.01l8.73-5.05"/>
+            <path d="M12 22.08V12"/>
+            """,
+        ["models"] = """
+            <path d="M12 2 2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+            """,
+        ["playground"] = """
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            """,
+        ["traffic"] = """
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            """,
+        ["logs"] = """
+            <path d="M8 6h13M8 12h13M8 18h13"/>
+            <path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>
+            """,
+        ["history"] = """
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M12 7v5l3.5 2"/>
+            """,
+        ["instances"] = """
+            <rect x="2" y="2" width="20" height="8" rx="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2"/>
+            <path d="M6 6h.01M6 18h.01"/>
+            """,
+        ["servers"] = """
+            <rect x="2" y="2" width="20" height="8" rx="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2"/>
+            <path d="M6 6h.01M6 18h.01"/>
+            """,
+        ["settings"] = """
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            """,
+        ["help"] = """
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/>
+            <path d="M12 17h.01"/>
+            """,
+        ["close"] = """
+            <path d="M18 6 6 18"/>
+            <path d="M6 6l12 12"/>
+            """,
+        ["menu"] = """
+            <path d="M3 6h18"/>
+            <path d="M3 12h18"/>
+            <path d="M3 18h18"/>
+            """,
+        ["sun"] = """
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+            """,
+        ["moon"] = """
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            """,
+        ["monitor"] = """
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <path d="M8 21h8M12 17v4"/>
+            """,
+        ["chevron-down"] = """
+            <path d="M6 9l6 6 6-6"/>
+            """,
+        ["chevron-right"] = """
+            <path d="M9 6l6 6-6 6"/>
+            """,
+        ["refresh"] = """
+            <path d="M23 4v6h-6"/>
+            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10"/>
+            <path d="M1 20v-6h6"/>
+            <path d="M3.51 15a9 9 0 0 0 14.85 3.36L23 14"/>
+            """,
+        ["copy"] = """
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            """,
+        ["external"] = """
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+            <path d="M15 3h6v6"/>
+            <path d="M10 14 21 3"/>
+            """,
+        ["alert"] = """
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <path d="M12 9v4"/>
+            <path d="M12 17h.01"/>
+            """,
+        ["check"] = """
+            <path d="M20 6 9 17l-5-5"/>
+            """,
+        ["x-circle"] = """
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M15 9l-6 6"/>
+            <path d="M9 9l6 6"/>
+            """,
+        ["search"] = """
+            <circle cx="11" cy="11" r="8"/>
+            <path d="M21 21l-4.35-4.35"/>
+            """,
+        ["play"] = """
+            <path d="M5 3.5 19 12 5 20.5z"/>
+            """,
+        ["stop"] = """
+            <rect x="5" y="5" width="14" height="14" rx="2"/>
+            """,
+        ["rollback"] = """
+            <path d="M1 4v6h6"/>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+            """,
+        ["swap"] = """
+            <path d="M17 1l4 4-4 4"/>
+            <path d="M3 8h18"/>
+            <path d="M7 23l-4-4 4-4"/>
+            <path d="M21 16H3"/>
+            """,
+        ["user"] = """
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+            """,
+        ["dot"] = """
+            <circle cx="12" cy="12" r="5"/>
+            """,
+    };
+}
