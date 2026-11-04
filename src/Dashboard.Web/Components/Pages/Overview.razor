@@ -219,7 +219,13 @@ else
             <div class="col-lg-6">
                 <div class="card h-100"><div class="card-body">
                     <div class="d-flex align-items-start justify-content-between gap-2">
-                        <div class="card-title">Throughput (tok/s)</div>
+                        <div>
+                            <div class="card-title">Throughput (tok/s)</div>
+                            <div class="d-flex align-items-baseline gap-1">
+                                <span class="kpi-value">@Fmt(_latestSample?.GenTps)</span>
+                                <span class="kpi-unit">tok/s live</span>
+                            </div>
+                        </div>
                         <div class="gen-stats">
                             <div title="Peak generation throughput in the last 30 days">▲ @Fmt(_genStats?.Peak)</div>
                             <div title="Average generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Avg) avg</div>
