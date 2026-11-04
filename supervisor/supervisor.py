@@ -31,7 +31,14 @@ from supervisor.gpu_backend import detect_backend
 from supervisor.process_manager import ProcessManager
 from supervisor.state import RETRY_CAP, StateStore, decide_boot_action
 
-BOOT_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("BOOT_HEALTH_TIMEOUT_SECONDS", "30"))
+# Was 30s by default -- fine for the fake-vllm test double, far too short
+# for a real model (confirmed live, P16a: boot-replay of an already-known-
+# good 27B model timed out and was killed every time, despite loading fine
+# moments earlier via a user-initiated swap, which already got bumped to
+# 15 min for the same reason). Same stopgap value as SwapService's
+# DefaultHealthTimeout; a real fix is a configurable per-recipe timeout
+# (tracked separately, not done here).
+BOOT_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("BOOT_HEALTH_TIMEOUT_SECONDS", "900"))
 RETRY_DELAY_SECONDS = 2.0
 ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8000"))  # TBD per doc 5 -- any free port works; firmed up by P15b
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")  # unset -- and every /admin/* route except /health 401s

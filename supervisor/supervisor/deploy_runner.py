@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -41,9 +42,28 @@ RELEASING_GPU_POLL_INTERVAL_SECONDS = 2.0
 RELEASED_FRACTION_THRESHOLD = 0.1
 RELEASED_ABSOLUTE_FLOOR_MB = 100
 HEALTH_POLL_INTERVAL_SECONDS = 1.0
+HEALTH_HEARTBEAT_INTERVAL_SECONDS = 10.0
 CRASH_WATCH_POLL_INTERVAL_SECONDS = 1.0
 LOG_BATCH_INTERVAL_SECONDS = 1.0
 DEFAULT_CHILD_PORT = 9999
+WEIGHT_WATCH_INTERVAL_SECONDS = 2.0
+# Bail out of _watch_weight_loading fast when nothing at all has matched yet
+# -- deliberately just over one WEIGHT_WATCH_INTERVAL_SECONDS cycle, so a
+# model/vLLM version that never prints this pattern gives up on its first
+# real check rather than sitting idle. self._state stays "loading" for the
+# whole span this runs, so staying here needlessly also blocks a prompt
+# transition to "waiting_health" that other code (tests included) expects.
+WEIGHT_WATCH_NO_SIGNAL_TIMEOUT_SECONDS = 1.5
+# vLLM's own tqdm progress output (confirmed against two real deploys' own
+# captured log_tail on real hardware, P16a) -- e.g. "Loading safetensors
+# checkpoint shards:  50% Completed | 1/2 [00:58<00:58, 58.71s/it]" and,
+# once genuinely finished, a line like "Loading weights took 60.87 seconds"
+# immediately followed later by "Model loading took 18.35 GiB memory and
+# 127.981414 seconds" (gpu_model_runner.py's own final summary -- the one
+# used here, since a model with a drafter/MTP pass repeats the checkpoint-
+# shards pattern twice and this is the one line that's always last).
+WEIGHT_PCT_PATTERN = re.compile(r"Loading safetensors checkpoint shards:\s+(\d+)% Completed")
+WEIGHTS_DONE_PATTERN = re.compile(r"Model loading took .+ seconds")
 
 
 @dataclass
@@ -105,6 +125,18 @@ class DeployRunner:
         self._current_deployment_id: Optional[str] = None
         self._events: dict[str, list[DeploymentEvent]] = {}
         self._seq_counters: dict[str, "itertools.count[int]"] = {}
+        # True only for a deploy the dashboard itself asked for (a real
+        # `deployments.id`, passed in explicitly) -- a boot-replay has no such
+        # id and self-generates a UUID (see _begin) purely for internal
+        # bookkeeping. Pushing events for a UUID the dashboard never issued
+        # is meaningless to it (no row to correlate with) and, worse, its
+        # receiver only accepts integer ids and 400s on a UUID -- a 400 on a
+        # non-droppable "state" push gets retried forever by EventPusher's
+        # strictly-sequential queue, permanently blocking every real event
+        # behind it (P16a: confirmed live, root cause of "logs never arrive"
+        # across an entire supervisor process's lifetime after any boot
+        # replay). Gates every push call site below.
+        self._dashboard_initiated: dict[str, bool] = {}
         self._last_failure_report: Optional[FailureReport] = None
         # None until the first deploy's smoke test runs (or forever, if
         # every deploy so far was skipped) -- P06, in-memory only.
@@ -222,7 +254,9 @@ class DeployRunner:
             self._post_ready_watcher.cancel()
             self._post_ready_watcher = None
         self._event_pusher.start()  # no-op if disabled or already started
+        was_dashboard_initiated = deployment_id is not None
         deployment_id = deployment_id or str(uuid.uuid4())
+        self._dashboard_initiated[deployment_id] = was_dashboard_initiated
         self._current_deployment_id = deployment_id
         self._events[deployment_id] = []
         self._seq_counters[deployment_id] = itertools.count(1)
@@ -234,6 +268,14 @@ class DeployRunner:
         # "seq increases monotonically per deployment across all kinds").
         return next(self._seq_counters[deployment_id])
 
+    def _should_push(self, deployment_id: str) -> bool:
+        """False for a boot-replay's self-generated UUID id (see _begin) --
+        the dashboard never issued it, has no row to correlate it with, and
+        (confirmed live, P16a) its receiver 400s on a non-integer id, which
+        for a non-droppable push gets retried forever and deadlocks every
+        real event queued behind it for the rest of this process's life."""
+        return self._dashboard_initiated.get(deployment_id, True)
+
     def _record(self, deployment_id: str, state: str, detail: Optional[dict] = None) -> None:
         now = time.time()
         seq = self._next_seq(deployment_id)
@@ -241,16 +283,19 @@ class DeployRunner:
         self._events[deployment_id].append(event)
         self._archive.append_event(deployment_id, event.to_dict())  # P05: survives a restart
         self._state = state
-        self._event_pusher.push(PushItem(
-            deployment_id=deployment_id, seq=seq, ts=now, kind="state",
-            payload={"state": state, "detail": detail}, droppable=False,
-        ))
+        if self._should_push(deployment_id):
+            self._event_pusher.push(PushItem(
+                deployment_id=deployment_id, seq=seq, ts=now, kind="state",
+                payload={"state": state, "detail": detail}, droppable=False,
+            ))
 
     def _push_report(self, deployment_id: str, report: FailureReport) -> None:
         # A separate push, distinct from the state event above (doc 5:
         # kind "report" -> {report:{reason, exit_code, log_tail}}, sent
         # alongside failed/crashed) -- the GET /events catch-up API still
         # only needs the state event's own `detail` (unchanged, P03a/b).
+        if not self._should_push(deployment_id):
+            return
         self._event_pusher.push(PushItem(
             deployment_id=deployment_id, seq=self._next_seq(deployment_id), ts=time.time(), kind="report",
             payload={"report": report.to_dict()}, droppable=False,
@@ -273,12 +318,90 @@ class DeployRunner:
                 if lines:
                     for line in lines:
                         self._archive.append_log_line(deployment_id, line)
-                    self._event_pusher.push(PushItem(
-                        deployment_id=deployment_id, seq=self._next_seq(deployment_id), ts=time.time(), kind="log",
-                        payload={"lines": lines}, droppable=True,
-                    ))
+                    if self._should_push(deployment_id):
+                        self._event_pusher.push(PushItem(
+                            deployment_id=deployment_id, seq=self._next_seq(deployment_id), ts=time.time(), kind="log",
+                            payload={"lines": lines}, droppable=True,
+                        ))
         except asyncio.CancelledError:
             pass
+
+    async def _watch_weight_loading(
+        self, deployment_id: str, port: int, max_wait: float, cancel_event: threading.Event,
+    ) -> float:
+        """Best-effort real progress for the "loading" step (P16a: this step
+        previously flipped to Done the instant the process spawned, with
+        nothing behind it -- "Load weights" showed complete before any VRAM
+        was even in use). Watches the child's own captured output via
+        ProcessManager.logs() -- the SAME non-destructive ring-buffer read
+        GET /admin/logs itself uses, never a second reader of the pipe and
+        never interfering with _run_log_batch's own destructive drain --
+        for vLLM's own tqdm weight-loading percentage and its final
+        completion line, emitting a real "loading" heartbeat with
+        weights_pct as it goes.
+
+        Also does its own lightweight `/health` probe each pass and exits
+        the moment that succeeds, regardless of whether a log marker was
+        ever found: a model (or the fake-vllm test double) that loads fast,
+        or doesn't print either tqdm pattern at all, must not sit here
+        burning its whole timeout budget hunting for text that's never
+        coming while the server is already up and the real health-wait loop
+        that follows could simply confirm it in one call. Without this, a
+        process already healthy would wait out the FULL budget here before
+        the health-wait loop ever got a chance to run at all, with zero
+        budget left for it (confirmed turning every existing fake-vllm
+        based deploy test into an instant failure before this check was
+        added).
+
+        Capped at `max_wait` (health_timeout) as an outer ceiling, but never
+        actually runs anywhere near it unless it's genuinely seeing progress:
+        if NO weight-loading pattern has matched at all within the first
+        WEIGHT_WATCH_NO_SIGNAL_TIMEOUT_SECONDS, it gives up immediately
+        rather than sitting around for the rest of the budget -- a vLLM
+        version/model that never prints this pattern at all is distinguished
+        (fast bail) from one that's actively printing real progress (keeps
+        watching, up to the full budget, since that's clearly the real
+        signal). This matters beyond just speed: `self._state` stays
+        "loading" for as long as this runs, and other code (tests included)
+        reasonably expects a prompt transition to "waiting_health" when
+        there's nothing real to show -- confirmed two existing tests broke
+        when this bailed only at the full shared budget instead.
+
+        Deliberately does NOT reduce the health-wait loop's own budget
+        afterward (the caller passes `health_timeout` here AND keeps the
+        full original value for that loop) -- they're different concerns
+        sharing one ceiling each, not one budget split between them. A
+        pathological case where neither this nor the real health check ever
+        succeeds now takes up to ~2x health_timeout to finally fail instead
+        of exactly health_timeout, which is an acceptable tradeoff: the
+        alternative (sharing one budget) made the real health-wait loop's
+        own fail-fast reason unreliable whenever this phase used any of it.
+        """
+        last_pct: Optional[int] = None
+        found_any_signal = False
+        start = time.monotonic()
+        health_url = f"http://127.0.0.1:{port}/health"
+        while time.monotonic() - start < max_wait:
+            if not self._process_manager.is_running():
+                break
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            text = self._process_manager.logs()
+            pct_matches = WEIGHT_PCT_PATTERN.findall(text)
+            if pct_matches:
+                found_any_signal = True
+                pct = int(pct_matches[-1])
+                if pct != last_pct:
+                    last_pct = pct
+                    self._record(deployment_id, "loading", {"weights_pct": pct})
+            if WEIGHTS_DONE_PATTERN.search(text):
+                break
+            if await asyncio.to_thread(_quick_health_check, health_url):
+                break
+            if not found_any_signal and time.monotonic() - start >= WEIGHT_WATCH_NO_SIGNAL_TIMEOUT_SECONDS:
+                break
+            await asyncio.sleep(WEIGHT_WATCH_INTERVAL_SECONDS)
+        return time.monotonic() - start
 
     async def _run_deploy(
         self,
@@ -306,14 +429,49 @@ class DeployRunner:
             await asyncio.to_thread(self._process_manager.spawn, argv, env)
             log_batch_task = asyncio.create_task(self._run_log_batch(deployment_id))
             self._record(deployment_id, "loading")
-            self._record(deployment_id, "waiting_health")
-
             served_model_name = _extract_value(argv, "--served-model-name")
             port = _extract_port(argv)
-            healthy, timed_out_while_alive = await asyncio.to_thread(
-                _wait_for_health, port, served_model_name, health_timeout, self._process_manager.is_running,
-                cancel_event,
-            )
+            await self._watch_weight_loading(deployment_id, port, health_timeout, cancel_event)
+            self._record(deployment_id, "waiting_health")
+
+            # A large model's health wait can run for minutes (confirmed via
+            # the real P16a hardware rehearsal -- a 27B model took ~2m38s)
+            # with vLLM emitting no event of its own in between. A single
+            # blocking asyncio.to_thread(_wait_for_health, ..., health_timeout)
+            # call left the UI with nothing to show for that whole span but a
+            # static "waiting" dot. _wait_for_health can't call self._record
+            # directly -- it runs in a worker thread, and _record (via the
+            # event pusher's asyncio.Event) isn't thread-safe to call from
+            # there -- so this instead calls it repeatedly with a short
+            # sub-timeout, emitting a "waiting_health" heartbeat (with
+            # elapsed_seconds) back on the event loop between sub-calls.
+            # health_timeout is NOT reduced by weight_watch_elapsed -- see
+            # _watch_weight_loading's own docstring for why they're each
+            # capped at the full health_timeout independently rather than
+            # splitting one shared budget (that approach starved this loop
+            # of its own time whenever weight-watching used any at all,
+            # breaking its fail-fast reason).
+            healthy = False
+            timed_out_while_alive = False
+            elapsed = 0.0
+            sub_timeout = min(HEALTH_HEARTBEAT_INTERVAL_SECONDS, health_timeout)
+            while elapsed < health_timeout:
+                this_timeout = min(sub_timeout, health_timeout - elapsed)
+                healthy, timed_out_while_alive = await asyncio.to_thread(
+                    _wait_for_health, port, served_model_name, this_timeout, self._process_manager.is_running,
+                    cancel_event,
+                )
+                elapsed += this_timeout
+                if healthy or not timed_out_while_alive or (cancel_event is not None and cancel_event.is_set()):
+                    break
+                # Only a heartbeat, not a real transition -- skip it when this
+                # was the last sub-wait anyway (elapsed has now reached
+                # health_timeout), or a short health_timeout (as in the
+                # "fails exactly at the timeout" test) spuriously grows an
+                # extra "waiting_health" event between the real one and the
+                # terminal "failed" that follows.
+                if elapsed < health_timeout:
+                    self._record(deployment_id, "waiting_health", {"elapsed_seconds": round(elapsed)})
 
             if not healthy:
                 report = build_report(
@@ -596,6 +754,21 @@ def _extract_port(argv: list[str], default: int = DEFAULT_CHILD_PORT) -> int:
         except ValueError:
             pass
     return default
+
+
+def _quick_health_check(health_url: str) -> bool:
+    """A single, fast GET /health probe -- used only by _watch_weight_loading
+    to bail out early once the server is already responding, so that watcher
+    never outlives the real health-wait loop that follows it. Deliberately
+    not the served-model-name check _wait_for_health does -- that loop is
+    still the real judge of success; this is only "is it worth continuing
+    to watch logs for a weight-loading marker, or has the server clearly
+    already moved past that point."""
+    try:
+        with urllib.request.urlopen(health_url, timeout=2) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError, ValueError):
+        return False
 
 
 def _wait_for_health(

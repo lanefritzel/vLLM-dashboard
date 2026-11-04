@@ -17,7 +17,7 @@ public interface IModelService
 /// <summary>CRUD for the new-schema <see cref="Model"/> table (P09b). Blank
 /// name/path are rejected here -- the literal first qwen incident (an empty
 /// --model crash-looped the container). Whether this model's path actually
-/// lives under its server's models_dir/hf-cache/ is a RECIPE-save-time and
+/// lives under its server's models_dir is a RECIPE-save-time and
 /// deploy-pre-flight check (<see cref="Dashboard.Core.Recipes.CompatibilityPass"/>),
 /// not enforced here, since a bare model row can be registered (e.g. by a
 /// P08 download) before any recipe ever references it.</summary>

@@ -11,6 +11,7 @@
 @inject ISupervisorTokenProvider TokenProvider
 @inject IJSRuntime JS
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
+@inject IBootReconciler Reconciler
 
 <div class="modal-overlay" @onclick="@OnOverlayClick">
     <div class="modal-dialog-custom" style="max-width: 720px;" @onclick:stopPropagation="true">
@@ -209,6 +210,7 @@
     private int? _resultExitCode;
 
     private DotNetObjectReference<SwapCeremonyDialog>? _receiver;
+    private CancellationTokenSource? _logPollCts;
     private bool _hubStarted;
 
     protected override async Task OnInitializedAsync()
@@ -248,10 +250,58 @@
             await JS.InvokeVoidAsync("deploymenthub_start", _receiver);
             await JS.InvokeVoidAsync("deploymenthub_join", _deploymentId);
             _hubStarted = true;
+            _logPollCts = new CancellationTokenSource();
+            _ = PollLogsAsync(_deploymentId, _logPollCts.Token);
         }
         catch
         {
             // JS not ready yet (prerender) -- retried on the next render.
+        }
+    }
+
+    /// <summary>Pull-based fallback for the live log pane (P16a finding): the
+    /// supervisor's own log push is best-effort and "droppable" by design
+    /// (never retried, so one dropped push loses those lines forever) --
+    /// confirmed for real during a 27B model's multi-minute health wait,
+    /// where push delivery went quiet under load but the supervisor still
+    /// had every line archived the whole time, just never asked for it.
+    /// This asks directly, on a plain timer, independent of whether any
+    /// push for this deployment ever arrives -- same admin HTTP API this
+    /// dialog already calls for everything else, no new SignalR plumbing
+    /// needed since this runs server-side already.</summary>
+    private async Task PollLogsAsync(int deploymentId, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (Instance.AdminUrl is not null)
+                {
+                    var token = await TokenProvider.GetTokenAsync(Instance.Id, ct);
+                    if (token is not null)
+                    {
+                        var text = await SupervisorClient.GetDeploymentLogsAsync(
+                            Instance.AdminUrl, token, deploymentId.ToString(), 200, ct);
+                        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                        _logLines.Clear();
+                        _logLines.AddRange(lines);
+                        await InvokeAsync(StateHasChanged);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch
+            {
+                // Best-effort -- the next tick tries again; the push-based
+                // path (OnLog) still updates live in the meantime if it's
+                // working for this deployment.
+            }
+
+            try { await Task.Delay(TimeSpan.FromSeconds(2), ct); }
+            catch (OperationCanceledException) { return; }
         }
     }
 
@@ -288,13 +338,14 @@
     });
 
     [JSInvokable]
-    public Task OnLog(string line) => InvokeAsync(() =>
-    {
-        _logLines.Add(line);
-        if (_logLines.Count > 200) _logLines.RemoveAt(0);
-        StateHasChanged();
-        return Task.CompletedTask;
-    });
+    // The log push this used to append from is best-effort/droppable and
+    // confirmed unreliable under load (P16a finding) -- PollLogsAsync now owns
+    // _logLines entirely via the supervisor's own per-deployment log archive,
+    // so appending here too would just fight the poll's full-tail replace
+    // every couple seconds. Kept as a no-op (not removed) since the JS side
+    // still calls it; a future push that arrives faster than the poll's
+    // interval just has nothing to add on top of.
+    public Task OnLog(string line) => Task.CompletedTask;
 
     private void ApplyState(string state, string? detail)
     {
@@ -308,12 +359,23 @@
 
     private StepStatus StepState(string key)
     {
+        // Off-by-one, found live (P16a): _maxSeenStepIndex is "the step whose
+        // event we most recently saw" -- that step is still IN PROGRESS
+        // (e.g. a repeated "waiting_health" heartbeat keeps re-reporting the
+        // same index while the real wait continues), not finished. It was
+        // previously marked Done immediately on its own first event, with
+        // the step AFTER it shown as Current -- so a many-minute wait on a
+        // single long step (health check) displayed as "already done,
+        // waiting on the NEXT step" the entire time, even though heartbeats
+        // were correctly arriving underneath. A step is only truly Done once
+        // a LATER step's event has actually arrived.
         var idx = Array.FindIndex(Steps, s => s.Key == key);
-        if (_terminalSeen && !_resultSucceeded && idx == _maxSeenStepIndex + 1)
+        if (idx < 0) return StepStatus.Pending;
+        if (_terminalSeen && !_resultSucceeded && idx == _maxSeenStepIndex)
             return StepStatus.Failed;
-        if (idx <= _maxSeenStepIndex)
+        if (idx < _maxSeenStepIndex)
             return StepStatus.Done;
-        if (idx == _maxSeenStepIndex + 1 && !_terminalSeen)
+        if (idx == _maxSeenStepIndex)
             return StepStatus.Current;
         return StepStatus.Pending;
     }
@@ -395,8 +457,21 @@
             var result = await Swap.SwapAsync(Instance.Id, _pickedModelId, _pickedRecipeId, _ackServedNameChange);
             if (result.Outcome == "already_active")
             {
-                await Close();
-                return;
+                // SwapAsync's "already active" short-circuit trusts the DB's
+                // own active-deployment row at face value -- correct when
+                // the picked (model, recipe) really is already serving, but
+                // wrong (and previously silent -- the dialog just closed
+                // with no feedback at all, P16a finding) when that row is
+                // stale: the supervisor crashed/died after an earlier
+                // failed swap attempt and nothing ever flipped the DB back.
+                // Cross-check live status before accepting the no-op.
+                var reconcile = await Reconciler.ReconcileInstanceAsync(Instance.Id);
+                if (reconcile.Status != ReconcileStatus.IdleVsActive)
+                {
+                    await Close();
+                    return;
+                }
+                result = await Swap.ForceRedeployAsync(Instance.Id);
             }
             _deploymentId = result.DeploymentId!.Value;
             _deployStartedAt = DateTime.UtcNow;
@@ -447,6 +522,7 @@
 
     private async Task EnterResultAsync(Deployment deployment)
     {
+        _logPollCts?.Cancel();
         _resultSucceeded = deployment.Status == "active";
         _resultElapsedSeconds = deployment.StartedAt is { } started
             ? (DateTime.UtcNow - started).TotalSeconds
@@ -494,6 +570,7 @@
             _terminalSeen = false;
             _logLines.Clear();
             _hubStarted = false;
+            _logPollCts?.Cancel();
             _phase = Phase.Progress;
         }
         catch (Exception ex)
@@ -515,6 +592,7 @@
                 _terminalSeen = false;
                 _logLines.Clear();
                 _hubStarted = false;
+                _logPollCts?.Cancel();
                 _phase = Phase.Progress;
             }
         }
@@ -537,6 +615,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        _logPollCts?.Cancel();
         if (_hubStarted)
         {
             try

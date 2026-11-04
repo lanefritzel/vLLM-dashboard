@@ -2158,3 +2158,78 @@ Out of scope, not touched: Docker orchestration (gone, per the doc), Ollama.
 | Fresh install (empty DB): the 4-step card shows and completing the steps makes it disappear for good; on a migrated DB it never shows | Yes | `Onboarding_ShowsOnAFreshDatabase_ButNeverOnAMigratedOne`; the live-swap-driven P14 E2E tests already exercise the "disappears after a real deployment" half incidentally (`OnDeploymentSettled` refreshes it), not re-asserted by name here |
 | Editing a proxy slug shows the "changes client URLs" warning | Yes | `EditingAProxySlug_ShowsTheChangesClientUrlsWarning` |
 | The token is not visible in the page source or logs after saving | Yes | `TheToken_IsNotVisibleInThePageSource_AfterSaving` (page source + the stored `AdminTokenEnc` column both checked). App-log-output specifically not checked -- the E2E harness drains the launched process's stdout/stderr rather than capturing it, so there is no log file to assert against in this phase; the token is never passed to any `ILogger` call in `Servers.razor`'s own code, which is the actual guarantee. |
+
+## P16a -- Test deployment (separate database)
+
+Owner-run, assisted (per the phase's own instruction): a real-hardware
+rehearsal of the whole supervisor-based stack on `tes.home`, as a parallel
+test deployment (`deploy/docker-compose.p16a-test.yml`, ports 18080/18001/
+9999) alongside -- never touching -- the live `llm-stack` Portainer
+project. Used the real Qwen3.8-27B-INT4 model, not the fake-vllm double.
+
+Full narrative, every finding, and the step-by-step end-user workflow
+captured live are in `plan/p16a-test-deploy-findings.md` (20 numbered
+findings) and `plan/p16a-end-user-workflow.md` -- this section is the
+summary and sign-off record, not a restatement.
+
+### What this phase actually found
+
+This was the first time the new architecture ran against real hardware, a
+real large model, and a real person clicking through it, instead of the
+fast fake-vllm double every automated test uses. 20 findings came out of
+it -- roughly: 2 deliberate policy/environment decisions made with the
+owner (the `hf-cache`-only model-path rule relaxed to "anywhere under
+models_dir"; a GPU-info sysfs detection gap deferred), and the rest real
+bugs, several of them significant:
+
+- Two separate hardcoded health-timeout constants (dashboard-side default,
+  and a completely separate boot-replay one) were both far too short for a
+  real large model's cold load -- both bumped as a stopgap; a real
+  per-recipe configurable timeout is tracked, not built.
+- The Overview page's "Ready" banner trusted the database's own
+  active-deployment row with no live cross-check, so it could (and did)
+  confidently show a dead model as healthy and serving. Fixed by
+  cross-checking `IBootReconciler`'s live status before trusting it for
+  display -- this same gap also silently broke "Re-deploy last working"
+  (a true no-op in exactly the scenario it exists to recover from) and the
+  swap dialog itself (silently closed instead of opening, with zero
+  feedback, in the same DB-vs-reality mismatch).
+- The single biggest finding: `SupervisorPushEvent`'s own doc comment
+  claimed a naming policy that was never actually configured for that one
+  endpoint's JSON binding. Every live push from the supervisor to the
+  dashboard for `deployment_id` (the one field with an underscore) 400'd
+  before the handler ever ran -- meaning live push likely never worked for
+  any deploy, ever; state events only ever looked like they worked because
+  independent catch-up polling silently backfilled them, and log lines
+  (which have no such fallback) were always completely missing. Fixed with
+  explicit `[JsonPropertyName]` attributes, and covered by a new E2E test
+  that sends the supervisor's real raw JSON text through the real route
+  (verified meaningful: fails without the fix, passes with it) -- the
+  existing handler-level test could never have caught this, since it hands
+  the handler a pre-built object rather than real bytes over the wire.
+- A genuine, separate off-by-one in the swap dialog's own step-highlighting
+  logic marked the in-progress step "Done" immediately instead of showing
+  it as current -- found only because the owner kept pushing past "the
+  underlying heartbeats are correct" to "but the screen still looks wrong."
+- The swap dialog's "Load weights" step had no real signal behind it at
+  all (flipped to Done the instant the process spawned). Built real
+  detection from vLLM's own captured log output (a progress percentage,
+  parsed live) rather than just relabeling the step to hide the gap --
+  caught and fixed two of its own test regressions (wrong failure reason,
+  a test stuck waiting on a state that never arrived promptly) before
+  shipping it.
+
+### DoD self-check
+
+| DoD bullet | Met? | Evidence |
+|---|---|---|
+| Every client's proxy slug answers unchanged, byte-for-byte | Yes | Real `curl` through `/proxy/<slug>/v1/chat/completions` returned a genuine completion with correct `model`/usage fields |
+| Real swap completes end-to-end through the UI | Yes | Multiple real swaps of the Qwen3.8-27B-INT4 model, confirmed via live metrics and direct inference |
+| Bad recipe fails cleanly without looping | Yes | Deliberately bad flag (`--this-flag-does-not-exist`) -> `state: failed`, `exit_code: 2`, `reason: bad_args`, ~56s, no retry |
+| bfloat16-on-Intel is blocked | Yes | Hard block confirmed live: editing a recipe's dtype to `bfloat16` shows the error immediately and disables Save |
+| Boot test: restart -> last healthy model returns | Yes (after finding #20's fix) | Supervisor container restart auto-replayed the last-good model; VRAM confirmed loaded |
+| Boot test: forced failure -> idle, stops retrying after 3 | Not separately exercised | Only the "last run was healthy -> replay" path was tested; the retry-cap-after-3-failures path was not |
+| Network: only 8445 reachable from LAN; 9999 fallback inference-only | N/A for this phase | This parallel test stack intentionally uses its own ports (18080/18001/9999), not the real cutover's network topology -- applies to the real P16b cutover, not this rehearsal |
+| tok/s before/after recorded | Yes (qualitative) | Owner's own real-time comparison: "looks like the same tok/s on the graph as the legacy app" -- no measured regression |
+| Rollback rehearsed, old DB untouched | Skipped, owner's call | Deferred -- the live `llm-stack`'s own DB was never touched by this parallel stack regardless (separate Postgres container throughout) |
+| Results/deviations recorded; owner signs off before P16b | This section | Awaiting explicit sign-off |

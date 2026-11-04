@@ -44,7 +44,8 @@ public sealed record RecipeEnvOverride(string Key, string Value);
 /// user dials in directly (that's <see cref="Recipe"/>).</summary>
 public sealed record RecipeModel
 {
-    /// <summary>Host path on the models volume (e.g. "&lt;models_dir&gt;/hf-cache/qwen").</summary>
+    /// <summary>Host path on the models volume, anywhere under models_dir (e.g.
+    /// "&lt;models_dir&gt;/qwen" or "&lt;models_dir&gt;/hf-cache/qwen").</summary>
     public required string Path { get; init; }
 
     public string LoadFormat { get; init; } = "auto";

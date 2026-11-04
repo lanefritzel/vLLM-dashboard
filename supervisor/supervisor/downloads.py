@@ -1,10 +1,9 @@
 """Model downloads (P08): the supervisor is the single egress point to
 Hugging Face. Models live on a host-mounted volume, never in the
-container -- host `<models_root>/hf-cache/<slug>/` <-> container
-`/models/hf-cache/<slug>/` (doc 6). One download at a time (a second
-POST while one is in flight is rejected, not queued); `HF_TOKEN` comes
-from the environment only, and is never put into a request/response body
-or logged anywhere in this module.
+container -- host `<models_root>/<slug>/` <-> container `/models/<slug>/`
+(doc 6). One download at a time (a second POST while one is in flight is
+rejected, not queued); `HF_TOKEN` comes from the environment only, and is
+never put into a request/response body or logged anywhere in this module.
 """
 from __future__ import annotations
 
@@ -224,7 +223,7 @@ class DownloadManager:
         self._thread: Optional[threading.Thread] = None
 
     def dest_dir(self, slug: str) -> Path:
-        return self._models_root / "hf-cache" / slug
+        return self._models_root / slug
 
     def inspect(self, repo_id: str) -> dict:
         files = self._hf_client.list_files(repo_id)

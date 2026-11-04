@@ -96,7 +96,8 @@ public static class ArgBuilder
     }
 
     /// <summary>Host models.path with the server's models_dir prefix replaced by
-    /// /models (e.g. &lt;models_dir&gt;/hf-cache/&lt;slug&gt; -> /models/hf-cache/&lt;slug&gt;).
+    /// /models (e.g. &lt;models_dir&gt;/my-model -> /models/my-model) -- works for
+    /// any path under models_dir, whatever structure it's actually in.
     /// Leaves the path untouched if it doesn't actually start with that prefix --
     /// a mismatch here is a data problem for the compatibility pass to flag
     /// (and, pre-conversion, for P01b's report), not something to silently guess at.</summary>

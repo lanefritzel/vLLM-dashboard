@@ -1,0 +1,64 @@
+/* Step highlighting for the Swapping... progress list. StepState()/StepCssClass()
+   in the component already compute which of these applies per step from real
+   deployment-event progress -- this file was simply missing until now, so every
+   step rendered identically regardless of actual progress (P16a finding). */
+
+.ceremony-steps {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+}
+
+.ceremony-steps li {
+    position: relative;
+    padding: 0.35rem 0 0.35rem 1.75rem;
+    color: var(--muted, #8b93a7);
+}
+
+.ceremony-steps li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.55rem;
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+    background: var(--border, #232a3a);
+}
+
+.ceremony-steps li.step-done {
+    color: var(--text, #e6e9ef);
+}
+
+.ceremony-steps li.step-done::before {
+    background: var(--green, #31c06b);
+}
+
+.ceremony-steps li.step-current {
+    color: var(--text, #e6e9ef);
+    font-weight: 600;
+}
+
+.ceremony-steps li.step-current::before {
+    background: var(--accent, #4c8dff);
+    box-shadow: 0 0 0 3px rgba(76, 141, 255, 0.25);
+    animation: ceremony-pulse 1.2s ease-in-out infinite;
+}
+
+.ceremony-steps li.step-failed {
+    color: var(--red, #e5484d);
+    font-weight: 600;
+}
+
+.ceremony-steps li.step-failed::before {
+    background: var(--red, #e5484d);
+}
+
+.ceremony-steps li.step-pending {
+    color: var(--muted, #8b93a7);
+}
+
+@keyframes ceremony-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(76, 141, 255, 0.25); }
+    50% { box-shadow: 0 0 0 6px rgba(76, 141, 255, 0.12); }
+}

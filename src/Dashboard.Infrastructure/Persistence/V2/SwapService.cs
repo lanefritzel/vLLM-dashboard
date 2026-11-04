@@ -23,7 +23,15 @@ namespace Dashboard.Infrastructure.Persistence.V2;
 /// outcome, nothing to wait on asynchronously.</summary>
 public sealed class SwapService : ISwapService
 {
-    private static readonly TimeSpan DefaultHealthTimeout = TimeSpan.FromMinutes(5);
+    // Confirmed via the real P16a hardware rehearsal: a 27B quantized model
+    // with a drafter/MTP model and mamba cache took ~297s (right at the old
+    // 5-minute edge) to go from spawn to genuinely healthy on a cold
+    // filesystem cache -- every existing E2E test uses the fast fake-vllm
+    // double, so this never surfaced before. Bumped to a generous ceiling;
+    // this really should be configurable per recipe/model eventually (a
+    // tiny model and a large MTP model shouldn't share one hardcoded
+    // number), but that's its own follow-up, not a blocker for now.
+    private static readonly TimeSpan DefaultHealthTimeout = TimeSpan.FromMinutes(15);
 
     private readonly IInstanceService _instances;
     private readonly IModelService _models;

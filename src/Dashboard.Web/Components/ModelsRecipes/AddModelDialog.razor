@@ -43,7 +43,7 @@
             <div class="row g-3 mt-1">
                 <div class="col-md-12">
                     <label class="form-label">Weights path (on the server's disk)</label>
-                    <input class="form-control" @bind="_localPath" placeholder="/models/hf-cache/my-model" disabled="@IsBusy" />
+                    <input class="form-control" @bind="_localPath" @bind:event="oninput" placeholder="/models/hf-cache/my-model" disabled="@IsBusy" />
                 </div>
                 <div class="col-md-12">
                     <button type="button" class="btn btn-primary btn-sm" disabled="@(!CanSaveLocal || IsBusy)" @onclick="@SaveLocalAsync">Save</button>

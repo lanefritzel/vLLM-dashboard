@@ -92,11 +92,11 @@ def test_download_reaches_done_with_monotonic_progress_and_lands_at_the_right_pa
     assert seen_pct == sorted(seen_pct), "progress_pct must never decrease"
     assert status["files_done"] == status["files_total"] == 3  # 2 files + config.json
     assert status["eta_seconds"] is None or status["eta_seconds"] >= 0
-    assert status["path"] == str(models_root / "hf-cache" / "model-a")
+    assert status["path"] == str(models_root / "model-a")
     assert status["load_format"] is None
     assert status["config"] == {"max_position_embeddings": 4096}
 
-    dest = models_root / "hf-cache" / "model-a"
+    dest = models_root / "model-a"
     assert (dest / "model.safetensors").stat().st_size == 5 * 1024 * 1024
     assert (dest / "tokenizer.json").stat().st_size == 1024
 
@@ -119,7 +119,7 @@ def test_single_file_gguf_download_sets_load_format_gguf(tmp_path):
     assert status["load_format"] == "gguf"
     assert status["config"] is None
     assert status["size_bytes"] == 2048
-    assert status["path"] == str(models_root / "hf-cache" / "model-gguf" / "model.Q4_K_M.gguf")
+    assert status["path"] == str(models_root / "model-gguf" / "model.Q4_K_M.gguf")
 
 
 def test_second_concurrent_download_gets_409(tmp_path):
@@ -146,7 +146,7 @@ def test_delete_mid_download_removes_the_partial_directory(tmp_path):
     manager.cancel(download_id)
 
     assert manager.get(download_id)["status"] == "cancelled"
-    assert not (models_root / "hf-cache" / "model-a").exists()
+    assert not (models_root / "model-a").exists()
 
 
 def test_unreachable_repo_download_fails_with_readable_message(tmp_path):
@@ -179,7 +179,7 @@ def test_retry_after_failure_resumes_without_redownloading_finished_files(tmp_pa
     # First attempt: manually pre-populate the destination as if "a.bin"
     # finished and the process died before "b.bin" -- the realistic shape
     # of a partial download on disk.
-    dest = models_root / "hf-cache" / "model-a"
+    dest = models_root / "model-a"
     dest.mkdir(parents=True)
     (dest / "a.bin").write_bytes(b"a" * 1024)
     before_mtime = (dest / "a.bin").stat().st_mtime
@@ -254,7 +254,7 @@ def test_cleanup_of_an_already_failed_download_removes_its_partial_directory(tmp
         time.sleep(0.05)
 
     # Simulate a leftover partial dir for the failed attempt, then "Clean up".
-    dest = models_root / "hf-cache" / "model-x"
+    dest = models_root / "model-x"
     dest.mkdir(parents=True)
     (dest / "stray.bin").write_bytes(b"x")
 

@@ -404,8 +404,8 @@ public class V2ServiceTests(PostgresFixture postgres)
 
         // The Intel dtype=bfloat16 rule is model-independent -- still fires.
         Assert.Contains(result.HardBlocks, i => i.Code == "dtype_bfloat16_blocked_on_intel");
-        // But nothing model-dependent (e.g. path-under-hf-cache) can fire with no model.
-        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_hf_cache");
+        // But nothing model-dependent (e.g. path-under-models_dir) can fire with no model.
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_models_dir");
     }
 
     [Fact]
@@ -425,11 +425,14 @@ public class V2ServiceTests(PostgresFixture postgres)
     // --- validating an existing legacy/converted-shaped row ---
 
     [Fact]
-    public async Task RecipeService_ValidateAsync_OnALegacyShapedRow_ReturnsIssuesWithoutThrowing()
+    public async Task RecipeService_ValidateAsync_OnALegacyShapedRow_HasNoPathIssue()
     {
-        // The seed fixture's own model path ("/models/qwen3.8-int4") is NOT under
-        // this server's models_dir/hf-cache/ -- exactly the shape a P01b-converted
-        // row can have (doc 13 gap 12). Validate() must still just report it.
+        // The seed fixture's own model path ("/models/qwen3.8-int4") is under
+        // this server's models_dir ("/models") but not inside an hf-cache/
+        // subfolder -- exactly the shape a P01b-converted row (and, confirmed
+        // during the real P16a rehearsal, the actual live production host) has.
+        // CompatibilityPass no longer requires the hf-cache subfolder specifically
+        // (P16a finding), only that the path sit somewhere under models_dir.
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -441,6 +444,6 @@ public class V2ServiceTests(PostgresFixture postgres)
 
         var result = await service.ValidateAsync(recipe.Id, model.Id);
 
-        Assert.Contains(result.HardBlocks, i => i.Code == "model_path_outside_hf_cache");
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_models_dir");
     }
 }

@@ -1,0 +1,117 @@
+# P16a test deployment -- a throwaway stack run alongside (never replacing)
+# the live llm-stack Portainer project, on its own network/ports/volumes so
+# nothing here can collide with it. Goal is to prove the new supervisor-based
+# dashboard end to end against the real GPU and a real model before any
+# cutover. See plan/live-compose-reference.md for the target this reproduces,
+# and the Build Plan's P16a doc for the full rehearsal steps/DoD.
+#
+# Brought up in two stages on purpose:
+#   1. postgres + dashboard first -- confirms migrations/conversion run clean
+#      against a fresh DB with zero GPU risk.
+#   2. supervisor, once (1) looks right -- this is the step that touches the
+#      GPU, so it's deliberately not auto-started with the rest.
+#
+# Usage (run from this directory on tes.home):
+#   docker compose -f docker-compose.p16a-test.yml up -d --build postgres dashboard
+#   docker compose -f docker-compose.p16a-test.yml up -d --build supervisor
+#
+# The live stack must be stopped before bringing up `supervisor` -- it holds
+# the GPU (network_mode: host, /dev/dri) and only one vLLM process fits at a
+# time on this hardware.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dashboard
+      POSTGRES_USER: dashboard
+      POSTGRES_PASSWORD: dashboard
+    volumes:
+      - p16a-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - p16a-net
+    # Internal only -- never published, same as production.
+    expose:
+      - "5432"
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
+      ASPNETCORE_ENVIRONMENT: Production
+      DATAPROTECTION_KEYS_DIR: /data/dataprotection
+      # No hot-swap DockerOrchestrator path needed anymore -- registration
+      # happens through the Servers page (P15b) against the supervisor below.
+      DOCKER_HOST: ""
+    networks:
+      - p16a-net
+    ports:
+      # Deliberately NOT 8080/8445 -- those are the live dashboard's ports;
+      # kept distinct so there's no collision even if the live stack comes
+      # back up mid-test. No HTTPS for this smoke test (no cert needed).
+      - "18080:8080"
+    volumes:
+      - p16a-dataprotection:/data
+    # The dashboard sits on this compose's own bridge network, but the
+    # supervisor below uses network_mode: host (it needs the real GPU
+    # device), so it has no bridge-network DNS name -- reach it via the
+    # host's own loopback through this gateway alias. When registering the
+    # instance on the Servers page, use http://host.docker.internal:18001
+    # as its admin URL, not 127.0.0.1 (that would mean the container itself).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  supervisor:
+    build:
+      context: ../supervisor
+      dockerfile: Dockerfile
+      # Must match the live host's actual base image/driver version, not the
+      # Dockerfile's own default (0.21.0-b3) -- confirmed via `docker inspect`
+      # against the running llm-stack_vllm-scaler container.
+      args:
+        BASE_IMAGE: intel/llm-scaler-vllm:0.26.0-b2
+    restart: "no"
+    # Matches the real target topology (plan/live-compose-reference.md):
+    # the GPU device + ipc + privileged requirements are the same whether
+    # vLLM is launched directly (today's prod) or via the supervisor (P16a).
+    network_mode: host
+    devices:
+      - /dev/dri
+    volumes:
+      - /dev/dri/by-path:/dev/dri/by-path
+      - p16a-state:/state
+      # Models root, not a single per-model mount -- the supervisor resolves
+      # MODELS_ROOT + the recipe's own relative path at deploy time.
+      - /home/lanef/hf-models:/models:ro
+    ipc: host
+    privileged: true
+    init: true
+    environment:
+      ADMIN_PORT: "18001"
+      SUPERVISOR_TOKEN: "e8ed9e75a7177bc999b7facf758936161214c43b50e6e87d"
+      # Supervisor is on host network -- the dashboard's published port is
+      # reachable via localhost on the same host.
+      DASHBOARD_EVENT_URL: "http://127.0.0.1:18080/internal/supervisor-events"
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+      VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+
+networks:
+  p16a-net:
+    driver: bridge
+
+volumes:
+  p16a-pgdata:
+  p16a-dataprotection:
+  p16a-state:

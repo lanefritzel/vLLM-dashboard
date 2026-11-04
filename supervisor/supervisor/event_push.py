@@ -123,6 +123,32 @@ class EventPusher:
         )
         try:
             with urllib.request.urlopen(req, timeout=SEND_TIMEOUT_SECONDS) as resp:
-                return 200 <= resp.status < 300
-        except (urllib.error.URLError, OSError, ValueError):
+                ok = 200 <= resp.status < 300
+                if not ok:
+                    print(f"event_push: non-2xx response kind={item.kind} seq={item.seq} status={resp.status}", flush=True)
+                return ok
+        except urllib.error.HTTPError as exc:
+            # A 400 here almost always means a non-integer deployment_id --
+            # the dashboard's receiver only accepts a real `deployments.id`
+            # (see DeployRunner._should_push, which exists specifically to
+            # stop this from ever being pushed in the first place for a
+            # boot-replay's self-generated id). A non-droppable item that
+            # keeps hitting this gets retried forever by the queue below,
+            # blocking every real event behind it -- loud logging here is
+            # the whole point, not noise.
+            # TEMPORARY P16a DIAGNOSTIC (round 2) -- this specific 400 is NOT
+            # explained by the boot-replay/UUID cause already fixed; remove
+            # once this new one is found.
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                detail = "<could not read body>"
+            print(
+                f"event_push: HTTPError kind={item.kind} seq={item.seq} status={exc.code} "
+                f"body={detail!r} sent_body={body.decode('utf-8', errors='replace')!r}",
+                flush=True,
+            )
+            return False
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            print(f"event_push: send failed kind={item.kind} seq={item.seq} exc_type={type(exc).__name__}", flush=True)
             return False

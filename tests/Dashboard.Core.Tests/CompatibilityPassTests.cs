@@ -214,13 +214,13 @@ public class CompatibilityPassTests
     }
 
     [Fact]
-    public void Check_ModelPathOutsideServersHfCache_IsAHardBlock()
+    public void Check_ModelPathOutsideServersModelsDir_IsAHardBlock()
     {
-        var model = PlainModel() with { Path = "/data/models/not-hf-cache/some-model" };
+        var model = PlainModel() with { Path = "/somewhere/else/some-model" };
 
         var result = CompatibilityPass.Check(model, PlainRecipe(), PlainServer());
 
-        Assert.Contains(result.HardBlocks, i => i.Code == "model_path_outside_hf_cache");
+        Assert.Contains(result.HardBlocks, i => i.Code == "model_path_outside_models_dir");
     }
 
     [Fact]
@@ -230,6 +230,20 @@ public class CompatibilityPassTests
 
         var result = CompatibilityPass.Check(model, PlainRecipe(), PlainServer());
 
-        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_hf_cache");
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_models_dir");
+    }
+
+    [Fact]
+    public void Check_ModelPathUnderModelsDirButNotHfCache_HasNoPathIssue()
+    {
+        // The dashboard's own HF downloads default to models_dir/hf-cache/<slug>,
+        // but that's no longer a requirement for every model -- a model placed
+        // anywhere else under models_dir (manually registered, a different
+        // existing layout, etc.) is equally valid.
+        var model = PlainModel() with { Path = "/data/models/not-hf-cache/some-model" };
+
+        var result = CompatibilityPass.Check(model, PlainRecipe(), PlainServer());
+
+        Assert.DoesNotContain(result.HardBlocks, i => i.Code == "model_path_outside_models_dir");
     }
 }

@@ -91,13 +91,25 @@ public static class CompatibilityPass
 
         if (!string.IsNullOrWhiteSpace(model.Path) && !string.IsNullOrWhiteSpace(server.ModelsDir))
         {
-            var expectedPrefix = NormalizePath(server.ModelsDir.TrimEnd('/', '\\')) + "/hf-cache/";
+            // Only the server's models_dir itself needs to be mounted into the
+            // container (ArgBuilder.ContainerModelPath rewrites any path under
+            // it to /models/...) -- a model can live anywhere underneath, in
+            // whatever structure the user already has (their own hf-cache-style
+            // layout, a downloaded repo straight under the root, nested folders,
+            // etc.). This used to additionally require a literal "hf-cache"
+            // subfolder, which only ever matched models the dashboard's own HF
+            // download feature placed there -- any pre-existing/hand-registered
+            // model was hard-blocked from ever deploying. hf-cache/ is still
+            // where the dashboard's own downloads default to (see
+            // supervisor/downloads.py's dest_dir), it's just no longer a
+            // requirement for everything else.
+            var expectedPrefix = NormalizePath(server.ModelsDir.TrimEnd('/', '\\')) + "/";
             var normalizedModelPath = NormalizePath(model.Path);
             if (!normalizedModelPath.StartsWith(expectedPrefix, StringComparison.Ordinal))
             {
                 hardBlocks.Add(new CompatibilityIssue(
-                    "model_path_outside_hf_cache",
-                    $"This model's path ({model.Path}) is not under this server's models_dir/hf-cache/ ({expectedPrefix})."));
+                    "model_path_outside_models_dir",
+                    $"This model's path ({model.Path}) is not under this server's models_dir ({server.ModelsDir})."));
             }
         }
 

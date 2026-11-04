@@ -93,6 +93,16 @@ public sealed class SupervisorClient : ISupervisorClient
         return await ReadAsync<List<SupervisorDeploymentEvent>>(response, ct);
     }
 
+    public async Task<string> GetDeploymentLogsAsync(
+        string adminUrl, string token, string deploymentId, int lines = 200, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, $"/admin/deployments/{deploymentId}/logs?lines={lines}"), token);
+        using var response = await client.SendAsync(request, ct);
+        var body = await ReadAsync<JsonElement>(response, ct);
+        return body.GetProperty("lines").GetString() ?? "";
+    }
+
     public async Task<SupervisorStopResult> StopAsync(string adminUrl, string token, CancellationToken ct = default)
     {
         using var client = NewClient();

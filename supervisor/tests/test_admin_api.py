@@ -360,7 +360,7 @@ def test_downloads_endpoints_round_trip_through_the_admin_api(tmp_path):
 
     resp = client.delete(f"/admin/downloads/{download_id}", headers=auth_headers())
     assert resp.status_code == 200
-    assert not (tmp_path / "models" / "hf-cache" / "model-a").exists()
+    assert not (tmp_path / "models" / "model-a").exists()
 
     resp = client.delete("/admin/downloads/nope", headers=auth_headers())
     assert resp.status_code == 404

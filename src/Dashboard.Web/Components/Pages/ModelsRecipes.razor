@@ -293,6 +293,16 @@ else
     {
         _addModelOpen = false;
         _models = (await Models.ListByServerAsync(_selectedServerId)).ToList();
+
+        // _servingModelId is only ever computed from _models at page load
+        // (RefreshActiveDeploymentAsync) -- on a database with no models yet,
+        // that leaves it at 0 (no match), and nothing re-picks it once a model
+        // is added here without a full page reload. A stale/invalid id here
+        // silently breaks "New recipe"'s own model-aware validation (it just
+        // looks up a nonexistent model and swallows the resulting error) with
+        // no visible warning until the recipe is reopened for edit later.
+        if (!_models.Any(m => m.Id == _servingModelId))
+            _servingModelId = saved.Id;
     }
 
     private async Task SwapToThisAsync(Recipe recipe)

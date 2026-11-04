@@ -29,9 +29,13 @@
   }
 
   // Create a line chart. `series` = [{key,label,color}]; `opts` = {yMin,yMax,beginAtZero}.
+  // Returns true if the canvas existed and the chart was created, false
+  // otherwise -- the canvas can genuinely not exist yet on the caller's
+  // first attempt (e.g. right after an @if block flips true but the DOM
+  // hasn't caught up), so callers must check this rather than assume success.
   window.chart_create = function (id, series, opts) {
     var c = canvas(id);
-    if (!c) return;
+    if (!c) return false;
     if (charts[id]) { try { charts[id].destroy(); } catch (e) {} delete charts[id]; }
     var pal = colors();
     var hiddenKeys = (opts && opts.hidden) || [];
@@ -66,6 +70,7 @@
       }
     };
     charts[id] = new Chart(c, config);
+    return true;
   };
 
   // Push one sample. `label` is the x-axis (timestamp), `values` maps dataset key -> value.

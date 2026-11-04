@@ -9,10 +9,14 @@ COPY supervisor/   /app/supervisor/
 COPY requirements.txt /app/requirements.txt
 
 # fastapi/uvicorn already ship in the vLLM base image (doc 5's "zero
-# extra deps") -- huggingface_hub likely does too (vllm depends on it
-# itself) but that's unverified against the real image (P08), so it's
-# pinned and installed explicitly here rather than assumed. A no-op if
-# the base image's version already satisfies the pin.
+# extra deps") -- huggingface_hub does too (vllm/transformers depend on it
+# themselves). Confirmed via the real P16a hardware rehearsal: pinning a
+# specific huggingface_hub range here (as this once did) can force a
+# version that conflicts with whatever this exact base image's transformers
+# was actually built/tested against -- broke transformers' own import of
+# huggingface_hub on intel/llm-scaler-vllm:0.26.0-b2. requirements.txt
+# leaves huggingface_hub unpinned so this install is a true no-op when it's
+# already present, whatever version that is.
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 RUN chmod +x /entrypoint.sh

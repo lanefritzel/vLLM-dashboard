@@ -21,6 +21,16 @@ public interface ISupervisorClient
     Task<IReadOnlyList<SupervisorDeploymentEvent>> GetEventsAsync(
         string adminUrl, string token, string deploymentId, int after = 0, CancellationToken ct = default);
 
+    /// <summary>Pull-based counterpart to the supervisor's own best-effort,
+    /// un-retried log push (P16a finding): log lines are "droppable" on
+    /// purpose, so the UI's live log pane never had any way to recover from
+    /// a dropped push -- the supervisor itself still has every line archived
+    /// per deployment, it just never gets asked for it live. Returns the
+    /// last <paramref name="lines"/> lines of this specific deployment's own
+    /// archived output, independent of whether any push for it ever arrived.</summary>
+    Task<string> GetDeploymentLogsAsync(
+        string adminUrl, string token, string deploymentId, int lines = 200, CancellationToken ct = default);
+
     Task<SupervisorStopResult> StopAsync(string adminUrl, string token, CancellationToken ct = default);
 
     Task<SupervisorCancelResult> CancelAsync(string adminUrl, string token, string deploymentId, CancellationToken ct = default);
@@ -42,7 +52,7 @@ public interface ISupervisorClient
     /// downloaded.</summary>
     Task<SupervisorDownloadInspectResult> InspectDownloadAsync(string adminUrl, string token, string repoId, CancellationToken ct = default);
 
-    /// <summary>Starts a download into <c>&lt;models_dir&gt;/hf-cache/&lt;slug&gt;</c>.
+    /// <summary>Starts a download into <c>&lt;models_dir&gt;/&lt;slug&gt;</c>.
     /// Throws <see cref="SupervisorApiException"/> with StatusCode 409 if one is
     /// already in flight on this instance's supervisor (one download at a time, doc 6).</summary>
     Task<string> StartDownloadAsync(string adminUrl, string token, string repoId, string slug, string? filename = null, CancellationToken ct = default);

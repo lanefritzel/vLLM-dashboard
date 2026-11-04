@@ -20,6 +20,7 @@
 @inject IJSRuntime JS
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
 @inject IOnboardingService Onboarding
+@inject IBootReconciler Reconciler
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
 
@@ -87,7 +88,7 @@ else
             </div>
         </div>
     }
-    else if (_activeDeployment is not null)
+    else if (_activeDeployment is not null && _reconcile?.Status is null or ReconcileStatus.Ok)
     {
         <div class="card status-card status-up mb-3">
             <div class="card-body py-3">
@@ -146,8 +147,8 @@ else
                 <div class="mt-2">
                     @if (_lastWorking is not null)
                     {
-                        <button class="btn btn-primary btn-sm" @onclick="@RedeployLastWorkingAsync">
-                            Re-deploy last working: @(_lastWorkingModelName) · @(_lastWorkingRecipeName)
+                        <button class="btn btn-primary btn-sm" disabled="@_redeployBusy" @onclick="@RedeployLastWorkingAsync">
+                            @(_redeployBusy ? "Re-deploying…" : $"Re-deploy last working: {_lastWorkingModelName} · {_lastWorkingRecipeName}")
                         </button>
                     }
                     <button class="btn btn-outline btn-sm" @onclick="@(() => OpenCeremony(null))">Pick a recipe</button>
@@ -186,7 +187,7 @@ else
                                 <td>@NameFor(d.RecipeId, _recipes)</td>
                                 <td>@d.Status</td>
                                 <td>@(d.StopReason ?? "—")</td>
-                                <td>@(d.StoppedAt ?? d.CreatedAt).ToLocalTime().ToString("MMM d, HH:mm")</td>
+                                <td>@((d.StoppedAt ?? d.CreatedAt).ToLocalTime().ToString("MMM d, HH:mm"))</td>
                             </tr>
                         }
                     </tbody>
@@ -250,6 +251,7 @@ else
     private List<Recipe> _recipes = new();
     private Deployment? _activeDeployment;
     private Deployment? _pendingDeployment;
+    private ReconcileState? _reconcile;
     private Model? _activeModel;
     private Recipe? _activeRecipe;
     private List<Deployment> _recentDeployments = new();
@@ -258,6 +260,7 @@ else
     private string _lastWorkingModelName = "";
     private string _lastWorkingRecipeName = "";
     private bool _canRollback;
+    private bool _redeployBusy;
 
     private bool _swapOpen;
     private int? _resumeDeploymentId;
@@ -330,6 +333,20 @@ else
         _activeDeployment = await Deployments.GetActiveAsync(_instance.Id);
         _pendingDeployment = await Deployments.GetPendingAsync(_instance.Id);
 
+        // The DB's own "active deployment" row is only ever cleared once a LATER
+        // swap actually succeeds (by design -- a failed swap attempt leaves the
+        // previous row's bookkeeping alone, since that's still "what's supposed
+        // to be running"). But the supervisor never auto-restarts anything after
+        // a failed deploy (also by design), so a DB-active row can easily be
+        // pointing at a process that's actually dead. Confirmed the hard way
+        // during P16a's real-hardware rehearsal: the banner confidently showed
+        // "Ready -- Serving... Uptime 1h 56m" for a model that had crashed over
+        // a minute earlier. Cross-check against the supervisor's live status
+        // (the same reconcile the Instances page already uses) before trusting
+        // the DB row for display.
+        try { _reconcile = await Reconciler.ReconcileInstanceAsync(_instance.Id); }
+        catch { _reconcile = null; }
+
         _activeModel = _activeDeployment is null ? null : _models.FirstOrDefault(m => m.Id == _activeDeployment.ModelId);
         _activeRecipe = _activeDeployment is null ? null : _recipes.FirstOrDefault(r => r.Id == _activeDeployment.RecipeId);
 
@@ -338,7 +355,8 @@ else
 
         _canRollback = history.Any(d => d.Id != _activeDeployment?.Id && d.Status == "stopped");
 
-        if (_activeDeployment is null && _pendingDeployment is null)
+        var reallyIdle = _reconcile?.Status == ReconcileStatus.IdleVsActive;
+        if ((_activeDeployment is null || reallyIdle) && _pendingDeployment is null)
         {
             var last = history.FirstOrDefault();
             _lastFailed = last is { Status: "stopped" or "failed" } && last.FailureReason is not null ? last : null;
@@ -418,16 +436,31 @@ else
 
     private async Task RedeployLastWorkingAsync()
     {
-        if (_lastWorking is null || _instance is null) return;
+        if (_lastWorking is null || _instance is null || _redeployBusy) return;
+        _redeployBusy = true;
         try
         {
-            var result = await Swap.SwapAsync(_instance.Id, _lastWorking.ModelId, _lastWorking.RecipeId, acknowledgeServedNameChange: true);
+            // If the "last working" deployment IS the DB's current active row
+            // (the IdleVsActive case: the supervisor crashed/died after it, but
+            // nothing ever flipped the DB's own active flag), a plain SwapAsync
+            // would silently no-op via its own "already active" short-circuit --
+            // same (model, recipe) pair, as far as the DB can tell. ForceRedeployAsync
+            // exists specifically to bypass that for this exact mismatch. A
+            // genuinely idle instance (no active row at all) still goes through
+            // the normal SwapAsync path.
+            var result = _activeDeployment is not null && _activeDeployment.Id == _lastWorking.Id
+                ? await Swap.ForceRedeployAsync(_instance.Id)
+                : await Swap.SwapAsync(_instance.Id, _lastWorking.ModelId, _lastWorking.RecipeId, acknowledgeServedNameChange: true);
             _resumeDeploymentId = result.DeploymentId;
             _swapOpen = true;
         }
         catch (Exception ex)
         {
             _error = "Could not re-deploy: " + ex.Message;
+        }
+        finally
+        {
+            _redeployBusy = false;
         }
     }
 
@@ -528,17 +561,26 @@ else
 
         if (_chartKey == sourceId) return;
         await JS.InvokeVoidAsync("chart_dispose_all");
-        _chartKey = sourceId;
 
-        await JS.InvokeVoidAsync("chart_create", "ov2-throughput",
+        // chart_create can genuinely fail on its first attempt -- e.g. right
+        // after this card's own @if block flips from hidden to visible, the
+        // canvas may not have reached the DOM yet even though OnAfterRenderAsync
+        // has already fired. Only latch _chartKey (which blocks all future
+        // retries) once both charts actually exist; otherwise leave it unset
+        // so the next OnAfterRenderAsync call (which already fires on every
+        // render, not just the first) tries again.
+        var throughputOk = await JS.InvokeAsync<bool>("chart_create", "ov2-throughput",
             new List<Dictionary<string, string>>
             {
                 new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "#4c8dff" },
                 new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "#31c06b" },
             }, new { });
-        await JS.InvokeVoidAsync("chart_create", "ov2-kv",
+        var kvOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv",
             new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "#f5a524" } },
             new { yMin = 0.0, yMax = 100.0 });
+
+        if (throughputOk && kvOk)
+            _chartKey = sourceId;
     }
 
     private Task PushToChartsAsync(MetricsSample s)
