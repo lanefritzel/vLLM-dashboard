@@ -103,9 +103,6 @@ builder.Services.AddSingleton<Dashboard.Core.Abstractions.IHuggingFaceModelLooku
 // client disconnecting (HttpContext.RequestAborted), not a timer.
 builder.Services.AddHttpClient("proxy", c => c.Timeout = Timeout.InfiniteTimeSpan);
 
-// Cross-circuit shared UI state (which source the dashboard is showing).
-builder.Services.AddSingleton<SourceSelection>();
-
 // Themed confirm/alert dialogs — scoped, not singleton: each circuit's pending
 // dialog (if any) is its own, never shared across users.
 builder.Services.AddScoped<Dashboard.Web.Components.Shared.IDialogService, Dashboard.Web.Components.Shared.DialogService>();
@@ -118,19 +115,8 @@ builder.Services.AddSingleton<IBroadcastThrottler, Dashboard.Application.Metrics
 builder.Services.AddSingleton<IMetricsService, Dashboard.Application.Metrics.MetricsService>();
 builder.Services.AddSingleton<IMetricsSourceFactory, Dashboard.Infrastructure.Scrapers.MetricsSourceFactory>();
 builder.Services.AddSingleton<IInferenceProbe, Dashboard.Application.Metrics.InferenceProbeService>();
-builder.Services.AddSingleton<IGpuProvisionerFactory, Dashboard.Infrastructure.Docker.GpuProvisionerFactory>();
-builder.Services.AddSingleton<IDockerOrchestrator, Dashboard.Infrastructure.Docker.DockerOrchestrator>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Proxy.IModelProxyService, Dashboard.Infrastructure.Proxy.ModelProxyService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Proxy.IInFlightTrafficTracker, Dashboard.Infrastructure.Proxy.InFlightTrafficTracker>();
-builder.Services.AddSingleton<Dashboard.Application.Logs.ILogStreamManager, Dashboard.Application.Logs.LogStreamManager>();
-
-// Singleton; each opens a fresh AppDbContext per operation via IServiceScopeFactory
-// (same pattern as ConfigStore/SampleStore) so concurrent calls from different
-// components sharing one Blazor circuit never race on a single DbContext instance.
-builder.Services.AddSingleton<ISourceCatalog, SourceCatalog>();
-builder.Services.AddSingleton<Dashboard.Core.Abstractions.IPhysicalServerCatalog, Dashboard.Infrastructure.Persistence.PhysicalServerCatalog>();
-builder.Services.AddSingleton<IModelCatalog, ModelCatalog>();
-builder.Services.AddSingleton<ILaunchSpecStore, LaunchSpecStore>();
 builder.Services.AddSingleton<IMetricsHistory, MetricsHistory>();
 
 // Read-only write guard (P12) -- registered before the V2 services below
@@ -169,7 +155,6 @@ builder.Services.AddSingleton<Dashboard.Core.Abstractions.IOnboardingService, Da
 // so the DB initializer (migrations + seed) must start before the metrics
 // polling and rollup loops that depend on the schema.
 builder.Services.AddHostedService<Dashboard.Web.DbInitializerHostedService>();
-builder.Services.AddHostedService<MetricsPollingService>();
 builder.Services.AddHostedService<Dashboard.Web.Metrics.InstanceMetricsPollingService>();
 builder.Services.AddHostedService<RollupService>();
 
@@ -212,7 +197,6 @@ app.MapRazorComponents<App>()
 
 app.MapHub<MetricsHub>("/metrics-hub").RequireAuthorization();
 app.MapHub<Dashboard.Infrastructure.Proxy.TrafficHub>("/traffic-hub").RequireAuthorization();
-app.MapHub<Dashboard.Application.Logs.LogsHub>("/logs-hub").RequireAuthorization();
 app.MapHub<Dashboard.Infrastructure.Events.DeploymentHub>("/deployment-hub").RequireAuthorization();
 
 // Supervisor event receiver (P10b) -- machine-to-machine, bearer-token

@@ -1,7 +1,4 @@
-using System.Globalization;
-using Dashboard.Core.Recipes;
 using Dashboard.Infrastructure.Conversion;
-using Dashboard.Infrastructure.Docker;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -22,7 +19,7 @@ public class LegacyConversionServiceTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task LiveQwenFixture_ConvertsToExpectedRows_AndArgBuilderOutputMatchesTheOracle()
+    public async Task LiveQwenFixture_ConvertsToExpectedRows()
     {
         using var db = await NewMigratedContextAsync();
         var fixture = LegacyOracleFixture.Load("live-qwen.json");
@@ -62,45 +59,6 @@ public class LegacyConversionServiceTests(PostgresFixture postgres)
         // defaults, not silently back-filled from the live compose reference.
         Assert.False(recipe.EnforceEager);
         Assert.Equal("auto", recipe.KvCacheDtype);
-
-        // The golden comparison: ArgBuilder on the CONVERTED recipe vs the OLD
-        // app's own oracle (DockerOrchestrator.BuildCreatePayload) for the
-        // equivalent legacy row. A SUBSET match, not set equality (both points
-        // owner-confirmed 2026-10-31): excludes the container model path (old and
-        // new resolve it via genuinely different, redesigned schemes) and the
-        // port (instance-owned on the new side, not recipe-owned); and the new
-        // side may have EXTRA flags the oracle doesn't -- e.g.
-        // --max-num-batched-tokens/--block-size, which the new recipe dial table
-        // always emits (with its own default) even when the legacy row never
-        // configured them at all. Every flag the oracle DOES set must still match
-        // exactly -- that's the actual "nothing was lost in conversion" guarantee.
-        var oracle = BuildOracleForLiveQwen();
-        var newArgs = ArgBuilder.Build(
-            model: new RecipeModel { Path = model.Path, LoadFormat = model.LoadFormat, Status = model.Status },
-            recipe: ToArgBuilderRecipe(recipe),
-            instance: new RecipeInstance { Port = instance.Port },
-            server: new RecipeServer { ModelsDir = server.ModelsDir });
-
-        var oracleFlags = ToFlagDictionary(oracle.Argv, skipLeadingTokens: 2); // skip "serve", "<path>"
-        var newFlags = ToFlagDictionary(newArgs.Argv, skipLeadingTokens: 3);   // skip "vllm", "serve", "<path>"
-        newFlags.Remove("--port"); // instance-owned, injected last on the new side -- not part of this comparison
-
-        var missingFromNew = oracleFlags.Keys.Except(newFlags.Keys).ToList();
-        Assert.Empty(missingFromNew);
-        foreach (var (flag, oracleValue) in oracleFlags)
-        {
-            // The legacy row's stored string is ".80" (a historical formatting
-            // quirk of how it was typed into the old UI) vs. the new side's
-            // normalized "0.8" -- numerically identical, so compare as numbers
-            // for this one flag rather than demanding the old app's odd literal
-            // formatting survive the round trip.
-            if (flag == "--gpu-memory-utilization")
-            {
-                Assert.Equal(double.Parse(oracleValue!, CultureInfo.InvariantCulture), double.Parse(newFlags[flag]!, CultureInfo.InvariantCulture));
-                continue;
-            }
-            Assert.Equal(oracleValue, newFlags[flag]);
-        }
     }
 
     [Fact]
@@ -191,72 +149,4 @@ public class LegacyConversionServiceTests(PostgresFixture postgres)
         Assert.Equal(before.SecurityStamp, after.SecurityStamp);
     }
 
-    private static Recipe ToArgBuilderRecipe(Persistence.V2.Recipe recipe) => new()
-    {
-        ServedModelName = recipe.ServedModelName,
-        MaxModelLen = recipe.MaxModelLen,
-        GpuMemoryUtilization = recipe.GpuMemoryUtilization,
-        KvCacheDtype = recipe.KvCacheDtype,
-        Dtype = recipe.Dtype,
-        EnforceEager = recipe.EnforceEager,
-        MaxNumBatchedTokens = recipe.MaxNumBatchedTokens,
-        BlockSize = recipe.BlockSize,
-        SpeculativeDecoding = recipe.SpeculativeDecoding,
-        SpeculativeTokens = recipe.SpeculativeTokens,
-        EnableAutoToolChoice = recipe.EnableAutoToolChoice,
-        ToolCallParser = recipe.ToolCallParser,
-        ReasoningParser = recipe.ReasoningParser,
-        ExtraArgs = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string?>>>(recipe.ExtraArgs)!
-            .Select(d => new RecipeExtraArg(d["key"]!, d.GetValueOrDefault("value")))
-            .ToList(),
-    };
-
-    /// <summary>The oracle: what the OLD app's own argv builder produces for the
-    /// live qwen row's actual stored data (not the live compose file, which the
-    /// page itself says may differ -- see plan/conversion-mapping.md).</summary>
-    private static Core.Recipes.ArgBuilderResult BuildOracleForLiveQwen()
-    {
-        var model = new Core.Models.ModelInfo
-        {
-            Name = "qwen3.8-vllm",
-            ModelSource = Core.Models.ModelSource.LocalPath,
-            ModelPathOrRepoId = "/media/external6tb/llm-models/hf-cache/Qwen3.8-27B-INT4",
-            Options = new Dictionary<string, string>
-            {
-                ["dtype"] = "float16",
-                ["enable-auto-tool-choice"] = "true",
-                ["tool-call-parser"] = "qwen3_coder",
-                ["reasoning-parser"] = "qwen3",
-                ["max-model-len"] = "131072",
-                ["gpu-memory-utilization"] = ".80",
-                ["mm-encoder-tp-mode"] = "data",
-            },
-        };
-        var server = new Core.Models.PhysicalServerInfo
-        {
-            Id = Guid.NewGuid().ToString(), Label = "tes.home", DockerHost = "tcp://tes.home:2375",
-            GpuVendor = Core.Models.GpuVendor.Intel,
-        };
-        var spec = new Core.Models.LaunchSpec();
-
-        var payload = (Dictionary<string, object>)DockerOrchestrator.BuildCreatePayload(spec, model, server, new NoneGpuProvisioner());
-        var cmd = ((List<string>)payload["Cmd"]).ToArray();
-        var env = payload.TryGetValue("Env", out var envObj)
-            ? ((string[])envObj).Select(kv => kv.Split('=', 2)).ToDictionary(p => p[0], p => p[1])
-            : new Dictionary<string, string>();
-
-        return new Core.Recipes.ArgBuilderResult { Argv = cmd, Env = env };
-    }
-
-    private static Dictionary<string, string?> ToFlagDictionary(IReadOnlyList<string> argv, int skipLeadingTokens)
-    {
-        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
-        for (var i = skipLeadingTokens; i < argv.Count; i++)
-        {
-            var flag = argv[i];
-            var hasValue = i + 1 < argv.Count && !argv[i + 1].StartsWith("--", StringComparison.Ordinal);
-            result[flag] = hasValue ? argv[++i] : null;
-        }
-        return result;
-    }
 }

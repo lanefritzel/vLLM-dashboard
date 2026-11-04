@@ -903,6 +903,7 @@ tr:hover .ui-row-actions,
   width: 100%;
   max-width: 900px;
   max-height: calc(100vh - var(--ui-space-7));
+  overflow-y: auto;
   padding: var(--ui-space-5);
   border: 1px solid var(--ui-border-strong);
   border-radius: var(--ui-radius-lg);

@@ -3,7 +3,6 @@ using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -140,17 +139,16 @@ public class V2SchemaMigrationTests(PostgresFixture postgres)
 
         // The real boot path, not just a query through AppDbContext directly:
         // Dashboard.Web.DbInitializerHostedService.StartAsync runs the same
-        // Database.MigrateAsync() + config/source/backfill seeding the actual app
-        // runs on startup. It swallows its own exceptions (logs, doesn't rethrow),
-        // so a captured logger is the only way to tell a silent failure from a
-        // genuine "fresh install, nothing to do yet".
+        // Database.MigrateAsync() + config seeding the actual app runs on startup.
+        // It swallows its own exceptions (logs, doesn't rethrow), so a captured
+        // logger is the only way to tell a silent failure from a genuine
+        // "fresh install, nothing to do yet".
         var services = new ServiceCollection();
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
         using var provider = services.BuildServiceProvider();
-        var configuration = new ConfigurationBuilder().Build();
         var logger = new CapturingLogger<Dashboard.Web.DbInitializerHostedService>();
         var hosted = new Dashboard.Web.DbInitializerHostedService(
-            provider.GetRequiredService<IServiceScopeFactory>(), configuration, logger);
+            provider.GetRequiredService<IServiceScopeFactory>(), logger);
 
         await hosted.StartAsync(CancellationToken.None);
 
