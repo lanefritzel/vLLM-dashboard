@@ -13,19 +13,17 @@
 
 <PageTitle>Live Traffic — vLLM Dashboard</PageTitle>
 
-<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-    <h1 class="page-title mb-0">Live Traffic <span class="text-muted fs-5">/ @(_instance?.Label ?? "no instance selected")</span></h1>
+<div class="ui-page-header">
+    <h1 class="ui-page-title">Live Traffic <span class="ui-page-subtitle" style="margin:0;">/ @(_instance?.Label ?? "no instance selected")</span></h1>
     @if (_instance is not null)
     {
-        <button class="btn btn-outline-secondary btn-sm" @onclick="ClearCards">Clear</button>
+        <UiButton Variant="secondary" Size="sm" OnClick="ClearCards">Clear</UiButton>
     }
 </div>
 
 @if (_instance is null)
 {
-    <div class="card"><div class="card-body">
-        <p class="text-muted mb-0">No instance configured yet.</p>
-    </div></div>
+    <UiPanel><EmptyState Variant="no-instance" Description="Register one on the Servers page." /></UiPanel>
 }
 else
 {
@@ -35,70 +33,52 @@ else
         receives.
     </p>
 
-    <div class="card mb-3"><div class="card-body py-2">
-        <div class="row g-2 align-items-end">
-            <div class="col-md-3">
-                <label class="form-label small mb-1">Model</label>
-                <select class="form-select form-select-sm" @bind="_modelFilter">
-                    <option value="">All</option>
-                    @foreach (var m in DistinctModels())
-                    {
-                        <option value="@m">@m</option>
-                    }
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label small mb-1">Status</label>
-                <select class="form-select form-select-sm" @bind="_statusFilter">
-                    <option value="">All</option>
-                    <option value="ok">OK</option>
-                    <option value="error">Error</option>
-                </select>
-            </div>
-            <div class="col-md-6">
-                <label class="form-label small mb-1">Search text</label>
-                <input class="form-control form-control-sm" @bind="_textFilter" @bind:event="oninput" placeholder="Filter by message/response text…" />
-            </div>
-        </div>
-    </div></div>
+    <Toolbar Attached="true">
+        <Filters>
+            <UiSelect Id="traffic-model-filter" Value="@_modelFilter" ValueChanged="@(v => _modelFilter = v)">
+                <option value="">All models</option>
+                @foreach (var m in DistinctModels())
+                {
+                    <option value="@m">@m</option>
+                }
+            </UiSelect>
+            <SegmentedControl Items="_statusFilterItems" Value="_statusFilter" ValueChanged="@(v => _statusFilter = v)" />
+        </Filters>
+        <Search>
+            <UiInput Id="traffic-text-filter" Value="@_textFilter" ValueChanged="@(v => _textFilter = v)" Placeholder="Filter by message/response text…" />
+        </Search>
+    </Toolbar>
 
     @if (_hubError)
     {
-        <div class="card status-card status-down"><div class="card-body d-flex align-items-center gap-3 py-2">
-            <span class="dot dot-down"></span>
-            <div>Live updates aren't connecting. Try reloading this page.</div>
-        </div></div>
+        <Callout Tone="danger">Live updates aren't connecting. Try reloading this page.</Callout>
     }
     else if (_cards.Count == 0)
     {
-        <div class="card status-card status-wait"><div class="card-body d-flex align-items-center gap-3 py-2">
-            <span class="dot dot-off"></span>
-            <div class="text-muted">Waiting for the first request through the proxy…</div>
-        </div></div>
+        <UiPanel><EmptyState Variant="no-data" Title="Waiting for the first request" Description="Requests through this instance's proxy will appear here as they happen." /></UiPanel>
     }
 
     @foreach (var card in FilteredCards())
     {
-        <div class="card mb-3 traffic-card">
-            <div class="card-body">
-                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="dot @StatusDotClass(card)"></span>
-                        <span class="chip">@(card.Model ?? "unknown model")</span>
-                        <span class="text-muted small">@TokensText(card)</span>
+        <div style="margin-bottom: var(--ui-space-3);">
+            <UiPanel>
+                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap: var(--ui-space-2); margin-bottom: var(--ui-space-2);">
+                    <div style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                        <StatusPill Status="@StatusFor(card)" Size="sm" />
+                        <Chip Static="true">@(card.Model ?? "unknown model")</Chip>
+                        @if (!string.IsNullOrEmpty(TokensText(card)))
+                        {
+                            <Chip Static="true">@TokensText(card)</Chip>
+                        }
                     </div>
-                    <div class="text-muted small">
+                    <span class="text-muted small">
                         @card.StartedAt.ToLocalTime().ToString("HH:mm:ss")
                         · TTFT @TtftText(card)
                         @if (card.ElapsedMs is { } ms)
                         {
-                            <span> — @ms ms total</span>
+                            <text> — @ms ms total</text>
                         }
-                        @if (card.Status == TrafficCardStatus.Streaming)
-                        {
-                            <span> — streaming…</span>
-                        }
-                    </div>
+                    </span>
                 </div>
 
                 @if (SystemMessage(card) is { } sys)
@@ -114,7 +94,7 @@ else
                     <div class="traffic-headline mb-2">@user</div>
                 }
 
-                <div class="text-muted small mb-1">Response</div>
+                <div class="ui-label" style="margin-bottom: 6px;">Response</div>
                 <pre class="probe-output traffic-response">@(card.ResponseText.Length > 0 ? card.ResponseText.ToString() : "…")</pre>
 
                 @if (card.ReasoningText.Length > 0)
@@ -127,9 +107,9 @@ else
 
                 @if (!string.IsNullOrEmpty(card.Error))
                 {
-                    <div class="text-danger small">@card.Error</div>
+                    <div style="margin-top: var(--ui-space-2);"><Callout Tone="danger">@card.Error</Callout></div>
                 }
-            </div>
+            </UiPanel>
         </div>
     }
 }
@@ -153,6 +133,9 @@ else
     private string _modelFilter = "";
     private string _statusFilter = "";
     private string _textFilter = "";
+
+    private readonly IReadOnlyList<(string Key, string Label)> _statusFilterItems =
+        [("", "All"), ("ok", "OK"), ("error", "Error")];
 
     protected override async Task OnInitializedAsync()
     {
@@ -285,11 +268,11 @@ else
         StateHasChanged();
     }
 
-    private static string StatusDotClass(TrafficCard card) => card.Status switch
+    private static string StatusFor(TrafficCard card) => card.Status switch
     {
-        TrafficCardStatus.Streaming => "dot-off",
-        TrafficCardStatus.Error => "dot-down",
-        _ => "dot-up",
+        TrafficCardStatus.Streaming => "starting",
+        TrafficCardStatus.Error => "failed",
+        _ => "ready",
     };
 
     private static string? SystemMessage(TrafficCard card) =>

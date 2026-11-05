@@ -1,0 +1,45 @@
+@* Toast — one dismissible message inside ToastHost's stack (Style Refactor
+   P1.4). Pauses its own auto-dismiss clock on hover/focus. *@
+@using Dashboard.Web.Components.Shared
+<div class="ui-toast ui-toast-@Item.Tone" role="status"
+     @onmouseenter="@(() => ToastService.Pause(Item.Id))"
+     @onmouseleave="@(() => ToastService.Resume(Item.Id))"
+     @onfocusin="@(() => ToastService.Pause(Item.Id))"
+     @onfocusout="@(() => ToastService.Resume(Item.Id))">
+    <span class="ui-icon" aria-hidden="true"><Icon Name="@IconName" Size="18" /></span>
+    <div>
+        @if (!string.IsNullOrEmpty(Item.Title))
+        {
+            <p class="ui-callout-title">@Item.Title</p>
+        }
+        <span>@Item.Message</span>
+        @if (!string.IsNullOrEmpty(Item.ActionText))
+        {
+            <div>
+                <button type="button" class="ui-btn-link" @onclick="HandleAction">@Item.ActionText</button>
+            </div>
+        }
+    </div>
+    <button type="button" class="ui-toast-close" aria-label="Dismiss" @onclick="@(() => ToastService.Dismiss(Item.Id))">
+        <Icon Name="close" Size="14" />
+    </button>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ToastItem Item { get; set; } = default!;
+    [Inject] public IToastService ToastService { get; set; } = default!;
+
+    private string IconName => Item.Tone.ToLowerInvariant() switch
+    {
+        "success" => "check",
+        "warn" => "alert",
+        "danger" => "x-circle",
+        _ => "info",
+    };
+
+    private void HandleAction()
+    {
+        Item.OnAction?.Invoke();
+        ToastService.Dismiss(Item.Id);
+    }
+}

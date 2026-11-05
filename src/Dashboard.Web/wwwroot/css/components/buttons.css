@@ -1,0 +1,175 @@
+/* ============================================================================
+   buttons.css — button primitives (Style Refactor P1.2)
+
+   Legacy .btn* classes (Bootstrap-targeted restyle) + the new ui-btn
+   vocabulary used by UiButton.razor. Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.btn {
+  font-weight: 550;
+  letter-spacing: 0.01em;
+}
+
+.btn-primary {
+  background: var(--ui-primary);
+  border-color: var(--ui-primary);
+  color: var(--ui-primary-contrast);
+}
+
+.btn-primary:hover,
+.btn-primary:focus {
+  background: var(--ui-primary-strong);
+  border-color: var(--ui-primary-strong);
+  color: var(--ui-primary-contrast);
+}
+
+.btn-primary:disabled,
+.btn-primary[disabled] {
+  background: var(--ui-primary);
+  border-color: var(--ui-primary);
+  color: var(--ui-primary-contrast);
+  opacity: 0.5;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--ui-border-strong);
+  color: var(--ui-text);
+}
+
+.btn-outline:hover,
+.btn-outline:focus {
+  background: var(--ui-hover);
+  border-color: var(--ui-subtle);
+  color: var(--ui-text);
+}
+
+.btn-danger-soft {
+  background: var(--ui-danger-soft);
+  border: 1px solid color-mix(in srgb, var(--ui-danger) 40%, transparent);
+  color: var(--ui-danger);
+}
+
+.btn-danger-soft:hover,
+.btn-danger-soft:focus {
+  background: color-mix(in srgb, var(--ui-danger) 20%, transparent);
+  border-color: var(--ui-danger);
+  color: var(--ui-danger);
+}
+
+.btn-link {
+  color: var(--ui-info);
+  font-weight: 550;
+}
+
+.btn-link:hover {
+  color: var(--ui-info-strong);
+}
+
+/* ui-btn primitive (UiButton.razor) ----------------------------------------- */
+
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: var(--ui-text-sm);
+  font-weight: 550;
+  line-height: 1;
+  padding: 0 14px;
+  height: var(--ui-control-h-md);
+  border-radius: var(--ui-radius-sm);
+  border: 1px solid var(--ui-border-strong);
+  background: var(--ui-surface-2);
+  color: var(--ui-text);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.ui-btn:hover { background: var(--ui-surface-3); }
+
+.ui-btn:disabled,
+.ui-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ui-btn-sm {
+  height: var(--ui-control-h-sm);
+  padding: 0 10px;
+  font-size: var(--ui-text-xs);
+  border-radius: 5px;
+}
+
+.ui-btn-lg {
+  height: var(--ui-control-h-lg);
+  padding: 0 18px;
+  font-size: var(--ui-text-md);
+}
+
+.ui-btn-primary {
+  background: var(--ui-primary);
+  border-color: var(--ui-primary);
+  color: var(--ui-primary-contrast);
+}
+
+.ui-btn-primary:hover {
+  background: var(--ui-primary-strong);
+  border-color: var(--ui-primary-strong);
+}
+
+.ui-btn-secondary {
+  background: var(--ui-surface-2);
+  border-color: var(--ui-border-strong);
+  color: var(--ui-text);
+}
+
+.ui-btn-secondary:hover { background: var(--ui-surface-3); }
+
+.ui-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ui-muted);
+}
+
+.ui-btn-ghost:hover {
+  background: var(--ui-hover);
+  color: var(--ui-text);
+}
+
+.ui-btn-danger {
+  background: transparent;
+  border-color: var(--ui-danger-deep);
+  color: var(--ui-danger);
+}
+
+.ui-btn-danger:hover {
+  background: var(--ui-danger-soft);
+  border-color: var(--ui-danger);
+}
+
+.ui-btn-link {
+  background: none;
+  border: 0;
+  height: auto;
+  padding: 0 6px;
+  color: var(--ui-info);
+}
+
+.ui-btn-link:hover { color: var(--ui-info-strong); }
+
+/* Loading spinner */
+.ui-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ui-spin 0.7s linear infinite;
+}
+
+@keyframes ui-spin { to { transform: rotate(360deg); } }

@@ -8,142 +8,132 @@
 @inject ISupervisorClient SupervisorClient
 @inject IHuggingFaceModelLookup HfLookup
 
-<div class="modal-overlay" @onclick="@RequestCancelIfIdle">
-    <div class="modal-dialog-custom" @onclick:stopPropagation="true">
-        <div class="d-flex align-items-center justify-content-between mb-1">
-            <div class="card-title mb-0">Add model</div>
-            <button type="button" class="modal-close-btn" @onclick="@RequestCancelIfIdle" aria-label="Close">✕</button>
+<Dialog Title="Add model" Size="md" Open="true" OpenChanged="@(open => { if (!open) _ = RequestCancelIfIdle(); })">
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <Callout Tone="danger">@_error</Callout>
+    }
+
+    <div class="row g-3">
+        <div class="col-md-4">
+            <UiField Label="Name" For="am-name">
+                <UiInput Id="am-name" Value="@_name" ValueChanged="@(v => _name = v)" Disabled="IsBusy" />
+            </UiField>
         </div>
-
-        @if (!string.IsNullOrEmpty(_error))
-        {
-            <div class="alert alert-danger py-2">@_error</div>
-        }
-
-        <div class="row g-3">
-            <div class="col-md-4">
-                <label class="form-label">Name</label>
-                <input class="form-control" @bind="_name" @bind:event="oninput" disabled="@IsBusy" />
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">Source</label>
-                <select class="form-select" @bind="_source" disabled="@IsBusy">
+        <div class="col-md-4">
+            <UiField Label="Source" For="am-source"
+                     Hint="@(_source == "huggingface" && Instance?.AdminUrl is null ? "No supervisor registered on the selected instance — Hugging Face downloads need one. Use a local path instead." : null)">
+                <UiSelect Id="am-source" Value="@_source" ValueChanged="@(v => _source = v)" Disabled="IsBusy">
                     <option value="huggingface">Hugging Face</option>
                     <option value="local">Local path</option>
-                </select>
-                @if (_source == "huggingface" && Instance?.AdminUrl is null)
-                {
-                    <div class="form-text text-danger">No supervisor registered on the selected instance — Hugging Face downloads need one. Use a local path instead.</div>
-                }
+                </UiSelect>
+            </UiField>
+        </div>
+    </div>
+
+    @if (_source == "local")
+    {
+        <div class="row g-3 mt-1">
+            <div class="col-md-12">
+                <UiField Label="Weights path (on the server's disk)" For="am-local-path">
+                    <div style="display:flex; gap: var(--ui-space-2);">
+                        <div style="flex:1;"><UiInput Id="am-local-path" Value="@_localPath" ValueChanged="@(v => _localPath = v)" Placeholder="/models/hf-cache/my-model" Disabled="IsBusy" /></div>
+                        <UiButton Variant="secondary" Size="sm" Disabled="IsBusy" OnClick="@(() => _showPathPicker = true)">Browse…</UiButton>
+                    </div>
+                </UiField>
+            </div>
+            <div class="col-md-12">
+                <UiButton Variant="primary" Size="sm" Disabled="@(!CanSaveLocal || IsBusy)" OnClick="SaveLocalAsync">Save</UiButton>
+                <UiButton Variant="secondary" Size="sm" Disabled="IsBusy" OnClick="RequestCancelIfIdle">Cancel</UiButton>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="row g-3 mt-1">
+            <div class="col-md-8">
+                <UiField Label="Hugging Face repo id" For="am-repo-id">
+                    <UiInput Id="am-repo-id" Value="@_repoId" ValueChanged="@(v => _repoId = v)" Placeholder="org/repo-name" Disabled="IsBusy" />
+                </UiField>
+            </div>
+            <div class="col-md-4" style="display:flex; align-items:flex-end;">
+                <UiButton Variant="secondary" Size="sm" Disabled="@(string.IsNullOrWhiteSpace(_repoId) || IsBusy || Instance?.AdminUrl is null)"
+                          OnClick="InspectAsync">Inspect</UiButton>
             </div>
         </div>
 
-        @if (_source == "local")
+        @if (_inspecting)
         {
-            <div class="row g-3 mt-1">
-                <div class="col-md-12">
-                    <label class="form-label">Weights path (on the server's disk)</label>
-                    <div class="d-flex gap-2">
-                        <input class="form-control" @bind="_localPath" @bind:event="oninput" placeholder="/models/hf-cache/my-model" disabled="@IsBusy" />
-                        <button type="button" class="btn btn-outline btn-sm" disabled="@IsBusy" @onclick="@(() => _showPathPicker = true)">Browse…</button>
-                    </div>
-                </div>
-                <div class="col-md-12">
-                    <button type="button" class="btn btn-primary btn-sm" disabled="@(!CanSaveLocal || IsBusy)" @onclick="@SaveLocalAsync">Save</button>
-                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@RequestCancelIfIdle" disabled="@IsBusy">Cancel</button>
-                </div>
-            </div>
+            <p class="text-muted small mt-2">Inspecting @_repoId…</p>
         }
-        else
+
+        @if (_inspectError is not null)
         {
-            <div class="row g-3 mt-1">
-                <div class="col-md-8">
-                    <label class="form-label">Hugging Face repo id</label>
-                    <input class="form-control" @bind="_repoId" @bind:event="oninput" placeholder="org/repo-name" disabled="@IsBusy" />
-                </div>
-                <div class="col-md-4 d-flex align-items-end">
-                    <button type="button" class="btn btn-outline btn-sm" disabled="@(string.IsNullOrWhiteSpace(_repoId) || IsBusy || Instance?.AdminUrl is null)"
-                            @onclick="@InspectAsync">Inspect</button>
-                </div>
-            </div>
+            <div style="margin-top: var(--ui-space-2);"><Callout Tone="danger">@_inspectError</Callout></div>
+        }
 
-            @if (_inspecting)
-            {
-                <p class="text-muted small mt-2">Inspecting @_repoId…</p>
-            }
+        @if (_inspected is not null)
+        {
+            var requiredBytes = _inspected.Files.Sum(f => f.Size);
+            var diskCheck = DiskGuard.Check(requiredBytes, _inspected.FreeBytes);
 
-            @if (_inspectError is not null)
-            {
-                <div class="alert alert-danger py-2 mt-2">@_inspectError</div>
-            }
-
-            @if (_inspected is not null)
-            {
-                var requiredBytes = _inspected.Files.Sum(f => f.Size);
-                var diskCheck = DiskGuard.Check(requiredBytes, _inspected.FreeBytes);
-
-                <div class="card mt-2" style="border-left: 3px solid var(--green);">
-                    <div class="card-body py-2 small">
-                        <div><strong>Files:</strong> @_inspected.Files.Count</div>
-                        <div><strong>Size:</strong> @FormatBytes(requiredBytes)</div>
+            <div style="margin-top: var(--ui-space-2);">
+                <UiPanel Variant="inset">
+                    <div class="ui-stat-grid" style="gap: var(--ui-space-2);">
+                        <Chip Static="true">Files: @_inspected.Files.Count</Chip>
+                        <Chip Static="true">Size: @FormatBytes(requiredBytes)</Chip>
                         @if (_hfLookup is not null)
                         {
-                            <div><strong>Parameters:</strong> @FormatParamCount(_hfLookup.ParameterCount)</div>
-                            <div><strong>Quantized:</strong> @(_hfLookup.IsQuantized ? $"Yes ({_hfLookup.QuantizationMethod ?? "method unspecified"})" : "No — full precision")</div>
-                            <div><strong>Default context length:</strong> @(_hfLookup.DefaultMaxContextLength?.ToString("N0") ?? "unknown") tokens</div>
+                            <Chip Static="true">Params: @FormatParamCount(_hfLookup.ParameterCount)</Chip>
+                            <Chip Static="true">Quantized: @(_hfLookup.IsQuantized ? $"Yes ({_hfLookup.QuantizationMethod ?? "method unspecified"})" : "No — full precision")</Chip>
+                            <Chip Static="true">Context: @(_hfLookup.DefaultMaxContextLength?.ToString("N0") ?? "unknown") tokens</Chip>
                         }
                     </div>
-                </div>
+                </UiPanel>
+            </div>
 
-                @if (!diskCheck.Ok)
-                {
-                    <div class="alert alert-danger py-2 mt-2">
-                        @diskCheck.Message
-                        <div class="mt-2">
-                            <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => OnDeleteOldModelsRequested.InvokeAsync())">Delete old models</button>
-                            <button type="button" class="btn btn-outline btn-sm" @onclick="@ResetInspection">Choose another</button>
-                        </div>
-                    </div>
-                }
-                else if (_downloadStatus is null)
-                {
-                    <div class="mt-2">
-                        <button type="button" class="btn btn-primary btn-sm" disabled="@(!CanSaveHf || IsBusy)" @onclick="@StartDownloadAsync">Download</button>
-                        <button type="button" class="btn btn-secondary btn-sm" @onclick="@RequestCancelIfIdle">Cancel</button>
-                    </div>
-                }
-            }
-
-            @if (_downloadStatus is { } status)
+            @if (!diskCheck.Ok)
             {
-                @if (status.Status == "downloading")
-                {
-                    <div class="mt-3">
-                        <div class="progress" style="height: 1.25rem;">
-                            <div class="progress-bar" style="width: @(status.ProgressPct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%;"></div>
-                        </div>
-                        <div class="text-muted small mt-1">
-                            @status.ProgressPct.ToString("0.0")% · @FormatBytes((long)status.SpeedBps)/s ·
-                            @(status.EtaSeconds is { } eta ? FormatDuration(eta) : "unknown ETA") ·
-                            file @status.FilesDone of @status.FilesTotal
-                        </div>
-                        <button type="button" class="btn btn-outline btn-sm mt-2" @onclick="@CancelDownloadAsync">Cancel download</button>
-                    </div>
-                }
-                else if (status.Status == "done")
-                {
-                    <div class="alert alert-success py-2 mt-2">✓ available</div>
-                    <button type="button" class="btn btn-primary btn-sm" disabled="@IsBusy" @onclick="@FinishHfDownloadAsync">Add to catalog</button>
-                }
-                else
-                {
-                    <div class="alert alert-danger py-2 mt-2">Download @status.Status: @(status.Error ?? "no details")</div>
-                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@ResetInspection">Try again</button>
-                }
+                <div style="margin-top: var(--ui-space-2);">
+                    <Callout Tone="danger" Action="@DiskCheckActions">@diskCheck.Message</Callout>
+                </div>
+            }
+            else if (_downloadStatus is null)
+            {
+                <div class="mt-2">
+                    <UiButton Variant="primary" Size="sm" Disabled="@(!CanSaveHf || IsBusy)" OnClick="StartDownloadAsync">Download</UiButton>
+                    <UiButton Variant="secondary" Size="sm" OnClick="RequestCancelIfIdle">Cancel</UiButton>
+                </div>
             }
         }
-    </div>
-</div>
+
+        @if (_downloadStatus is { } status)
+        {
+            @if (status.Status == "downloading")
+            {
+                <div class="mt-3">
+                    <ProgressBar Value="@status.ProgressPct" />
+                    <div class="text-muted small mt-1">
+                        @status.ProgressPct.ToString("0.0")% · @FormatBytes((long)status.SpeedBps)/s ·
+                        @(status.EtaSeconds is { } eta ? FormatDuration(eta) : "unknown ETA") ·
+                        file @status.FilesDone of @status.FilesTotal
+                    </div>
+                    <div class="mt-2"><UiButton Variant="secondary" Size="sm" OnClick="CancelDownloadAsync">Cancel download</UiButton></div>
+                </div>
+            }
+            else if (status.Status == "done")
+            {
+                <div class="mt-2"><Callout Tone="success">Available</Callout></div>
+                <UiButton Variant="primary" Size="sm" Disabled="IsBusy" OnClick="FinishHfDownloadAsync">Add to catalog</UiButton>
+            }
+            else
+            {
+                <div class="mt-2"><Callout Tone="danger">Download @status.Status: @(status.Error ?? "no details")</Callout></div>
+                <UiButton Variant="secondary" Size="sm" OnClick="ResetInspection">Try again</UiButton>
+            }
+        }
+    }
+</Dialog>
 
 @if (_showPathPicker)
 {
@@ -181,6 +171,11 @@
     /// this dialog being modal already prevents a SECOND one opening; this flag is what
     /// blocks closing/cancelling out from under an in-flight download.</summary>
     private bool IsBusy => _downloadStatus?.Status == "downloading";
+
+    private RenderFragment DiskCheckActions => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="@(() => OnDeleteOldModelsRequested.InvokeAsync())">Delete old models</UiButton>
+        <UiButton Variant="secondary" Size="sm" OnClick="ResetInspection">Choose another</UiButton>
+    </text>;
 
     private async Task RequestCancelIfIdle()
     {

@@ -1,0 +1,56 @@
+@* StatCard — label/value/delta tile with optional sparkline slot (Style
+   Refactor P1.3). The sparkline slot is a plain RenderFragment until P1.6
+   wires in an actual Chart.js mini-chart; loading/unavailable reuse the
+   existing .ui-skeleton-line and empty-state treatment. *@
+<div class="ui-stat-card">
+    <div class="ui-stat-header">
+        <span class="ui-stat-label">@Label</span>
+        @if (!string.IsNullOrEmpty(Info))
+        {
+            <span class="ui-stat-info" title="@Info" aria-label="@Info">
+                <Icon Name="help" Size="14" />
+            </span>
+        }
+    </div>
+    @if (Loading)
+    {
+        <div class="ui-skeleton ui-skeleton-line w-60" style="margin-top:8px;"></div>
+    }
+    else
+    {
+        <div class="ui-stat-value-row">
+            @if (Unavailable)
+            {
+                <span class="ui-stat-value ui-stat-value-unavailable">—</span>
+            }
+            else
+            {
+                <span class="ui-stat-value">@Value</span>
+                @if (!string.IsNullOrEmpty(Unit))
+                {
+                    <span class="ui-stat-unit">@Unit</span>
+                }
+            }
+        </div>
+        @if (!string.IsNullOrEmpty(Delta) && !Unavailable)
+        {
+            <div class="ui-stat-delta @DeltaDirection">@Delta</div>
+        }
+    }
+    @if (Sparkline is not null && !Loading && !Unavailable)
+    {
+        <div class="ui-stat-sparkline">@Sparkline</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public string? Unit { get; set; }
+    [Parameter] public string? Delta { get; set; }
+    [Parameter] public string DeltaDirection { get; set; } = "flat";
+    [Parameter] public string? Info { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool Unavailable { get; set; }
+    [Parameter] public RenderFragment? Sparkline { get; set; }
+}

@@ -1,0 +1,72 @@
+@* TableShell — table wrapper with sticky header plus loading/empty/error
+   states (Style Refactor P1.3). ColumnCount drives the colspan on the state
+   rows, so pass the number of <th> cells the Header renders. Reuses the
+   existing .ui-skeleton/.ui-empty/.ui-callout classes for those states. *@
+<div class="ui-table-wrap">
+    @if (!string.IsNullOrEmpty(Error))
+    {
+        <div class="ui-callout ui-callout-danger">
+            <span class="ui-icon"><Icon Name="alert" Size="18" /></span>
+            <div>
+                <p class="ui-callout-title">Couldn't load data</p>
+                @Error
+            </div>
+        </div>
+    }
+    <table class="ui-table">
+        <caption class="sr-only">@Caption</caption>
+        <thead>
+            <tr>@Header</tr>
+        </thead>
+        <tbody>
+            @if (Loading)
+            {
+                @for (var i = 0; i < SkeletonRows; i++)
+                {
+                    <tr>
+                        <td class="ui-table-state-cell" colspan="@ColumnCount">
+                            <div class="ui-skeleton ui-skeleton-line w-80" style="margin:10px 12px;"></div>
+                        </td>
+                    </tr>
+                }
+            }
+            else if (IsEmpty)
+            {
+                <tr>
+                    <td class="ui-table-state-cell" colspan="@ColumnCount">
+                        <div class="ui-empty">
+                            <div class="ui-empty-icon"><Icon Name="search" Size="20" /></div>
+                            <p class="ui-empty-title">@EmptyTitle</p>
+                            @if (!string.IsNullOrEmpty(EmptyMessage))
+                            {
+                                <p class="ui-empty-body">@EmptyMessage</p>
+                            }
+                        </div>
+                    </td>
+                </tr>
+            }
+            else
+            {
+                @ChildContent
+            }
+        </tbody>
+    </table>
+    @if (Footer is not null)
+    {
+        <div class="ui-table-footer">@Footer</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Caption { get; set; } = "";
+    [Parameter, EditorRequired] public int ColumnCount { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public int SkeletonRows { get; set; } = 5;
+    [Parameter] public bool IsEmpty { get; set; }
+    [Parameter] public string EmptyTitle { get; set; } = "Nothing here yet";
+    [Parameter] public string? EmptyMessage { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public RenderFragment? Header { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+}

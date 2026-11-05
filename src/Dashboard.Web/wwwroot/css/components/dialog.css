@@ -1,0 +1,113 @@
+/* ============================================================================
+   dialog.css — modal dialog primitive (Style Refactor P1.5)
+
+   .modal-overlay/.modal-dialog-custom is the legacy hand-rolled overlay still
+   used by DialogHost (confirm/alert). .ui-dialog is the native <dialog>-based
+   primitive used by the new Dialog.razor — focus trap, Escape, and
+   return-focus are native <dialog> behavior, not CSS. Consumes --ui-* tokens
+   only.
+   ============================================================================ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ui-space-4);
+  background: var(--ui-overlay);
+  backdrop-filter: blur(2px);
+  animation: ui-fade-in 0.15s ease;
+}
+
+@keyframes ui-fade-in { from { opacity: 0; } }
+
+.modal-dialog-custom {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 900px;
+  max-height: calc(100vh - var(--ui-space-7));
+  overflow-y: auto;
+  padding: var(--ui-space-5);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  box-shadow: 0 24px 64px var(--ui-shadow);
+  color: var(--ui-text);
+  animation: ui-pop-in 0.18s ease;
+}
+
+@keyframes ui-pop-in {
+  from { transform: scale(0.97); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.modal-close-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  padding: 4px;
+  background: none;
+  border: 0;
+  color: var(--ui-muted);
+  cursor: pointer;
+}
+
+.modal-close-btn:hover { color: var(--ui-text); }
+
+/* ui-dialog primitive (Dialog.razor, native <dialog>) ------------------------ */
+
+.ui-dialog {
+  padding: 0;
+  width: calc(100% - 32px);
+  max-width: 480px;
+  max-height: calc(100vh - 64px);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: 0 24px 64px var(--ui-shadow);
+}
+
+.ui-dialog::backdrop {
+  background: var(--ui-overlay);
+  backdrop-filter: blur(2px);
+}
+
+.ui-dialog[open] { animation: ui-pop-in 0.18s ease; }
+
+.ui-dialog-md { max-width: 640px; }
+.ui-dialog-lg { max-width: 800px; }
+
+.ui-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ui-dialog-title {
+  margin: 0;
+  font-size: var(--ui-text-md);
+  font-weight: 650;
+}
+
+.ui-dialog-body {
+  padding: 20px;
+  overflow-y: auto;
+  color: var(--ui-text-2);
+  font-size: var(--ui-text-sm);
+}
+
+.ui-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+  padding: 16px 20px;
+  border-top: 1px solid var(--ui-border);
+}

@@ -1,0 +1,36 @@
+/* ============================================================================
+   code-block.css — CodeBlock primitive (Style Refactor P1.5)
+
+   Used by CodeBlock.razor. Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.ui-code-block { position: relative; }
+
+.ui-code-header {
+  padding: 6px 12px;
+  border: 1px solid var(--ui-border);
+  border-bottom: 0;
+  border-radius: var(--ui-radius-sm) var(--ui-radius-sm) 0 0;
+  background: var(--ui-surface-3);
+  color: var(--ui-muted);
+  font-size: var(--ui-text-xs);
+  font-family: var(--ui-font-mono);
+}
+
+.ui-code-header + pre {
+  border-radius: 0 0 var(--ui-radius-sm) var(--ui-radius-sm);
+}
+
+.ui-code-block pre {
+  margin: 0;
+  background: var(--ui-surface-2);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: var(--ui-space-3);
+  font-family: var(--ui-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+
+.ui-code-copy { position: absolute; top: 8px; right: 8px; }

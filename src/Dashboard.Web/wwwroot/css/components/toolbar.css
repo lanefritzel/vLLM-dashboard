@@ -1,0 +1,43 @@
+/* ============================================================================
+   toolbar.css — search/filter/actions band primitive (Style Refactor P1.2)
+
+   Used by Toolbar.razor, sitting above a table or list. Consumes --ui-*
+   tokens only.
+   ============================================================================ */
+
+.ui-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--ui-space-4);
+}
+
+.ui-toolbar-attached {
+  margin-bottom: 0;
+  padding-bottom: var(--ui-space-3);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ui-toolbar-search { flex: 0 1 280px; min-width: 160px; }
+
+.ui-toolbar-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  flex-wrap: wrap;
+}
+
+.ui-toolbar-spacer { flex: 1 1 auto; }
+
+.ui-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  flex: none;
+}
+
+@media (max-width: 768px) {
+  .ui-toolbar-spacer { display: none; }
+  .ui-toolbar-actions { width: 100%; }
+}

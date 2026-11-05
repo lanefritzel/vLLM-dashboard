@@ -75,173 +75,141 @@ else
 {
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger py-2">@_error</div>
+        <Callout Tone="danger">@_error</Callout>
     }
 
     @if (_pendingDeployment is not null && !_swapOpen)
     {
-        <div class="card status-card mb-3">
-            <div class="card-body d-flex align-items-center gap-3 py-2">
-                <span class="dot dot-wait"></span>
-                <div class="flex-grow-1">A swap is in progress on this instance.</div>
-                <button class="btn btn-outline btn-sm" @onclick="@(() => OpenCeremony(_pendingDeployment.Id))">View progress</button>
-            </div>
+        <div class="ui-toolbar" style="margin-bottom: var(--ui-space-3);">
+            <StatusPill Status="swapping" />
+            <span class="text-muted">A swap is in progress on this instance.</span>
+            <div class="ui-toolbar-spacer"></div>
+            <UiButton Variant="secondary" Size="sm" OnClick="@(() => OpenCeremony(_pendingDeployment.Id))">View progress</UiButton>
         </div>
     }
     else if (_activeDeployment is not null && _reconcile?.Status is null or ReconcileStatus.Ok)
     {
-        <div class="card status-card status-up mb-3">
-            <div class="card-body py-3">
-                <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <span class="dot dot-up"></span>
-                    <strong>Ready</strong>
-                    <span class="text-muted">· Serving: @(_activeModel?.Name ?? "—")</span>
-                    <span class="text-muted">· recipe: @(_activeRecipe?.Name ?? "—")</span>
-                    <span class="text-muted">· @_instance.Label</span>
-                </div>
-                <div class="text-muted small mt-1">
-                    proxy: <code>/proxy/@(_instance.ProxySlug)/v1</code>
-                    · served as "@(_activeRecipe?.ServedModelName ?? "main")"
-                    · Uptime @UptimeText()
-                    · VRAM @VramText()
-                    · @ReqPerSecText() req/s
-                </div>
-                <div class="mt-2">
-                    <button class="btn btn-primary btn-sm" @onclick="@(() => OpenCeremony(null))">Swap</button>
-                    <a class="btn btn-outline btn-sm" href="@("/proxy/" + _instance.ProxySlug + "/v1")" target="_blank">Playground</a>
-                    <button class="btn btn-outline btn-sm" @onclick="@StopAsync">Stop</button>
-                    <button class="btn btn-outline btn-sm" disabled="@(!_canRollback)" @onclick="@(() => OpenCeremony(null, rollback: true))">Rollback</button>
-                </div>
-
-                @if (_vramWarning is not null)
-                {
-                    <div class="alert alert-warning py-2 mt-2">
-                        @_vramWarning
-                        <div class="mt-1">
-                            <button class="btn btn-outline btn-sm" @onclick="@RecheckVramAsync">Re-check</button>
-                            <button class="btn btn-outline btn-sm" @onclick="@HardResetAsync">Hard reset container</button>
-                        </div>
-                    </div>
-                }
-                @if (_vramReleasedMessage is not null)
-                {
-                    <div class="alert alert-success py-2 mt-2">@_vramReleasedMessage</div>
-                }
-            </div>
+        <div class="ui-toolbar" style="margin-bottom: 2px;">
+            <StatusPill Status="running" />
+            <span class="text-muted">Serving: @(_activeModel?.Name ?? "—") · recipe: @(_activeRecipe?.Name ?? "—") · @_instance.Label</span>
+            <div class="ui-toolbar-spacer"></div>
+            <UiButton Variant="primary" Size="sm" OnClick="@(() => OpenCeremony(null))">Swap</UiButton>
+            <a class="ui-btn ui-btn-secondary ui-btn-sm" href="@("/proxy/" + _instance.ProxySlug + "/v1")" target="_blank">Playground</a>
+            <UiButton Variant="secondary" Size="sm" OnClick="StopAsync">Stop</UiButton>
+            <UiButton Variant="secondary" Size="sm" Disabled="@(!_canRollback)" OnClick="@(() => OpenCeremony(null, rollback: true))">Rollback</UiButton>
         </div>
+        <p class="ui-page-subtitle" style="margin: 0 0 var(--ui-space-3);">
+            proxy: <code>/proxy/@(_instance.ProxySlug)/v1</code>
+            · served as "@(_activeRecipe?.ServedModelName ?? "main")"
+            · Uptime @UptimeText()
+            · VRAM @VramText()
+            · @ReqPerSecText() req/s
+        </p>
+
+        @if (_vramWarning is not null)
+        {
+            <Callout Tone="warn" Action="@VramWarningActions">@_vramWarning</Callout>
+        }
+        @if (_vramReleasedMessage is not null)
+        {
+            <Callout Tone="success">@_vramReleasedMessage</Callout>
+        }
     }
     else
     {
-        <div class="card status-card mb-3">
-            <div class="card-body py-3">
-                <div class="d-flex align-items-center gap-2">
-                    <span class="dot dot-off"></span>
-                    <strong>No active model — instance is idle</strong>
-                </div>
-                @if (_lastFailed is not null)
-                {
-                    <div class="alert alert-danger py-2 mt-2">
-                        ✗ Last run failed — @(_lastFailed.FailureReason ?? "unknown reason") (code @(_lastFailed.ExitCode?.ToString() ?? "n/a"))
-                    </div>
-                }
-                <div class="mt-2">
-                    @if (_lastWorking is not null)
-                    {
-                        <button class="btn btn-primary btn-sm" disabled="@_redeployBusy" @onclick="@RedeployLastWorkingAsync">
-                            @(_redeployBusy ? "Re-deploying…" : $"Re-deploy last working: {_lastWorkingModelName} · {_lastWorkingRecipeName}")
-                        </button>
-                    }
-                    <button class="btn btn-outline btn-sm" @onclick="@(() => OpenCeremony(null))">Pick a recipe</button>
-                </div>
-
-                @if (_vramWarning is not null)
-                {
-                    <div class="alert alert-warning py-2 mt-2">
-                        @_vramWarning
-                        <div class="mt-1">
-                            <button class="btn btn-outline btn-sm" @onclick="@RecheckVramAsync">Re-check</button>
-                            <button class="btn btn-outline btn-sm" @onclick="@HardResetAsync">Hard reset container</button>
-                        </div>
-                    </div>
-                }
-                @if (_vramReleasedMessage is not null)
-                {
-                    <div class="alert alert-success py-2 mt-2">@_vramReleasedMessage</div>
-                }
-            </div>
+        <div class="ui-toolbar" style="margin-bottom: 2px;">
+            <StatusPill Status="stopped" />
+            <span class="text-muted">No active model — instance is idle.</span>
+            <div class="ui-toolbar-spacer"></div>
+            @if (_lastWorking is not null)
+            {
+                <UiButton Variant="primary" Size="sm" Disabled="@_redeployBusy" OnClick="RedeployLastWorkingAsync">
+                    @(_redeployBusy ? "Re-deploying…" : $"Re-deploy: {_lastWorkingModelName} · {_lastWorkingRecipeName}")
+                </UiButton>
+            }
+            <UiButton Variant="secondary" Size="sm" OnClick="@(() => OpenCeremony(null))">Pick a recipe</UiButton>
         </div>
+
+        @if (_lastFailed is not null)
+        {
+            <Callout Tone="danger">Last run failed — @(_lastFailed.FailureReason ?? "unknown reason") (code @(_lastFailed.ExitCode?.ToString() ?? "n/a"))</Callout>
+        }
+        @if (_vramWarning is not null)
+        {
+            <Callout Tone="warn" Action="@VramWarningActions">@_vramWarning</Callout>
+        }
+        @if (_vramReleasedMessage is not null)
+        {
+            <Callout Tone="success">@_vramReleasedMessage</Callout>
+        }
     }
 
-    @if (_recentDeployments.Count > 0)
-    {
-        <div class="card mb-3">
-            <div class="card-body">
-                <div class="card-title mb-2">Recent swaps</div>
-                <table class="table table-sm">
-                    <thead><tr><th>Model</th><th>Recipe</th><th>Status</th><th>Stopped by</th><th>When</th></tr></thead>
-                    <tbody>
-                        @foreach (var d in _recentDeployments)
-                        {
-                            <tr>
-                                <td>@NameFor(d.ModelId, _models)</td>
-                                <td>@NameFor(d.RecipeId, _recipes)</td>
-                                <td>@d.Status</td>
-                                <td>@(d.StopReason ?? "—")</td>
-                                <td>@((d.StoppedAt ?? d.CreatedAt).ToLocalTime().ToString("MMM d, HH:mm"))</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    }
-
-    <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-        <div class="card-title">Live metrics</div>
-        <div class="d-flex align-items-center gap-2">
-            <span class="text-muted small">Window</span>
-            <select class="form-select window-select" @onchange="@OnWindowChanged">
-                <option value="1" selected="@(_windowMinutes == 1)">1 min</option>
-                <option value="5" selected="@(_windowMinutes == 5)">5 min</option>
-                <option value="30" selected="@(_windowMinutes == 30)">30 min</option>
-            </select>
-        </div>
+    <div class="ui-toolbar" style="margin-bottom: var(--ui-space-3);">
+        <span class="ui-stat-label">Live metrics</span>
+        <div class="ui-toolbar-spacer"></div>
+        <SegmentedControl Items="_windowItems" Value="@_windowMinutes.ToString()" ValueChanged="OnWindowChangedAsync" />
     </div>
 
     @if (_latestSample is null)
     {
-        <div class="card"><div class="card-body text-muted">No traffic in this window.</div></div>
+        <UiPanel><EmptyState Variant="no-data" Description="No traffic in this window." /></UiPanel>
     }
     else
     {
-        <div class="row g-3">
-            <div class="col-lg-6">
-                <div class="card h-100"><div class="card-body">
-                    <div class="d-flex align-items-start justify-content-between gap-2">
-                        <div>
-                            <div class="card-title">Throughput (tok/s)</div>
-                            <div class="d-flex align-items-baseline gap-1">
-                                <span class="kpi-value">@Fmt(_latestSample?.GenTps)</span>
-                                <span class="kpi-unit">tok/s live</span>
-                            </div>
-                        </div>
-                        <div class="gen-stats">
-                            <div title="Peak generation throughput in the last 30 days">▲ @Fmt(_genStats?.Peak)</div>
-                            <div title="Average generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Avg) avg</div>
-                            <div title="Lowest generation throughput while actively generating, last 30 days">@Fmt(_genStats?.Low) low</div>
-                            <a href="javascript:void(0)" class="gen-stats-reset" title="Delete generation history and reset these stats" @onclick="ResetGenStatsAsync">reset</a>
-                        </div>
-                    </div>
-                    <div class="chart-wrap"><canvas id="ov2-throughput"></canvas></div>
-                </div></div>
-            </div>
-            <div class="col-lg-6">
-                <div class="card h-100"><div class="card-body">
-                    <div class="card-title">KV cache usage (%)</div>
-                    <div class="chart-wrap"><canvas id="ov2-kv"></canvas></div>
-                </div></div>
-            </div>
+        <div class="ui-stat-grid" style="margin-bottom: var(--ui-space-3);">
+            <StatCard Label="Throughput" Value="@Fmt(_latestSample?.GenTps)" Unit="tok/s live">
+                <Sparkline><div class="chart-wrap" style="height:100%;margin-bottom:0;"><canvas id="ov2-throughput-spark"></canvas></div></Sparkline>
+            </StatCard>
+            <StatCard Label="Peak (30d)" Value="@Fmt(_genStats?.Peak)" Unit="tok/s" Info="Peak generation throughput, last 30 days" />
+            <StatCard Label="Avg (30d)" Value="@Fmt(_genStats?.Avg)" Unit="tok/s" Info="Average generation throughput while actively generating, last 30 days" />
+            <StatCard Label="Low (30d)" Value="@Fmt(_genStats?.Low)" Unit="tok/s" Info="Lowest generation throughput while actively generating, last 30 days" />
+            <StatCard Label="KV cache" Value="@Fmt(_latestSample?.KvPct)" Unit="%">
+                <Sparkline><div class="chart-wrap" style="height:100%;margin-bottom:0;"><canvas id="ov2-kv-spark"></canvas></div></Sparkline>
+            </StatCard>
         </div>
+        <div class="ui-toolbar" style="margin-bottom: 0;">
+            <UiButton Variant="link" Size="sm" OnClick="ToggleExpandChartAsync">@(_expandChart ? "Hide full chart" : "Show full chart")</UiButton>
+            <a href="javascript:void(0)" class="gen-stats-reset" title="Delete generation history and reset these stats" @onclick="ResetGenStatsAsync">reset stats</a>
+        </div>
+        @if (_expandChart)
+        {
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap: var(--ui-space-4); margin-top: var(--ui-space-3);">
+                <ChartCard Title="Throughput (tok/s)">
+                    <div class="chart-wrap"><canvas id="ov2-throughput"></canvas></div>
+                </ChartCard>
+                <ChartCard Title="KV cache usage (%)">
+                    <div class="chart-wrap"><canvas id="ov2-kv"></canvas></div>
+                </ChartCard>
+            </div>
+        }
+    }
+
+    @if (_recentDeployments.Count > 0)
+    {
+        <div style="height: var(--ui-space-4);"></div>
+        <UiPanel Title="Recent swaps" Flush="true">
+            <TableShell Caption="Recent swaps" ColumnCount="5">
+                <Header>
+                    <th scope="col">Model</th>
+                    <th scope="col">Recipe</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Stopped by</th>
+                    <SortableHeader Label="When" Direction="@(_recentSortAscending ? "ascending" : "descending")" OnSort="ToggleRecentSort" />
+                </Header>
+                <ChildContent>
+                    @foreach (var d in SortedRecentDeployments)
+                    {
+                        <tr>
+                            <td>@NameFor(d.ModelId, _models)</td>
+                            <td>@NameFor(d.RecipeId, _recipes)</td>
+                            <td><StatusPill Status="@d.Status" Size="sm" /></td>
+                            <td>@(d.StopReason ?? "—")</td>
+                            <td>@((d.StoppedAt ?? d.CreatedAt).ToLocalTime().ToString("MMM d, HH:mm"))</td>
+                        </tr>
+                    }
+                </ChildContent>
+            </TableShell>
+        </UiPanel>
     }
 }
 
@@ -288,8 +256,24 @@ else
     private bool _jsReady;
     private int _windowMinutes = 5;
     private string? _chartKey;
+    private string? _expandedChartKey;
+    private bool _expandChart = true;
     private MetricsSample? _latestSample;
     private string? _hubJoinedSourceId;
+    private bool _recentSortAscending;
+
+    private readonly IReadOnlyList<(string Key, string Label)> _windowItems =
+        [("1", "1 min"), ("5", "5 min"), ("30", "30 min")];
+
+    private IEnumerable<Deployment> SortedRecentDeployments =>
+        _recentSortAscending ? _recentDeployments.AsEnumerable().Reverse() : _recentDeployments;
+
+    private void ToggleRecentSort() => _recentSortAscending = !_recentSortAscending;
+
+    private RenderFragment VramWarningActions => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="RecheckVramAsync">Re-check</UiButton>
+        <UiButton Variant="secondary" Size="sm" OnClick="HardResetAsync">Hard reset container</UiButton>
+    </text>;
 
     private static readonly TimeSpan GenStatsWindow = TimeSpan.FromDays(30);
     private GenerationThroughputStats? _genStats;
@@ -633,28 +617,47 @@ else
             await RefreshGenStatsAsync(sourceId, force: true);
         }
 
-        if (_chartKey == sourceId) return;
-        await JS.InvokeVoidAsync("chart_dispose_all");
-
         // chart_create can genuinely fail on its first attempt -- e.g. right
         // after this card's own @if block flips from hidden to visible, the
         // canvas may not have reached the DOM yet even though OnAfterRenderAsync
-        // has already fired. Only latch _chartKey (which blocks all future
-        // retries) once both charts actually exist; otherwise leave it unset
-        // so the next OnAfterRenderAsync call (which already fires on every
-        // render, not just the first) tries again.
-        var throughputOk = await JS.InvokeAsync<bool>("chart_create", "ov2-throughput",
-            new List<Dictionary<string, string>>
-            {
-                new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)" },
-                new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "var(--ui-chart-1)" },
-            }, new { });
-        var kvOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv",
-            new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "var(--ui-chart-6)" } },
-            new { yMin = 0.0, yMax = 100.0 });
+        // has already fired. Only latch the relevant key (which blocks all
+        // future retries) once its charts actually exist; otherwise leave it
+        // unset so the next OnAfterRenderAsync call (which already fires on
+        // every render, not just the first) tries again. The sparkline charts
+        // latch on _chartKey since they're always in the DOM alongside the
+        // StatCard row; the full Chart.js view is its own _expandedChartKey
+        // since it only exists in the DOM once the user expands it -- sharing
+        // one key would mean the sparklines never latch while collapsed.
+        if (_chartKey != sourceId)
+        {
+            await JS.InvokeVoidAsync("chart_dispose_all");
 
-        if (throughputOk && kvOk)
-            _chartKey = sourceId;
+            var throughputSparkOk = await JS.InvokeAsync<bool>("chart_create", "ov2-throughput-spark",
+                new List<Dictionary<string, string>> { new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)" } },
+                new { sparkline = true });
+            var kvSparkOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv-spark",
+                new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "var(--ui-chart-6)" } },
+                new { yMin = 0.0, yMax = 100.0, sparkline = true });
+
+            if (throughputSparkOk && kvSparkOk)
+                _chartKey = sourceId;
+        }
+
+        if (_expandChart && _expandedChartKey != sourceId)
+        {
+            var throughputOk = await JS.InvokeAsync<bool>("chart_create", "ov2-throughput",
+                new List<Dictionary<string, string>>
+                {
+                    new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)" },
+                    new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "var(--ui-chart-1)" },
+                }, new { });
+            var kvOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv",
+                new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "var(--ui-chart-6)" } },
+                new { yMin = 0.0, yMax = 100.0 });
+
+            if (throughputOk && kvOk)
+                _expandedChartKey = sourceId;
+        }
     }
 
     private Task PushToChartsAsync(MetricsSample s)
@@ -665,16 +668,35 @@ else
         {
             ["ov2-throughput"] = new() { ["gen"] = s.GenTps, ["prompt"] = s.PromptTps },
             ["ov2-kv"] = new() { ["kv"] = s.KvPct },
+            ["ov2-throughput-spark"] = new() { ["gen"] = s.GenTps },
+            ["ov2-kv-spark"] = new() { ["kv"] = s.KvPct },
         };
         return JS.InvokeVoidAsync("chart_push_all", label, groups, cap).AsTask();
     }
 
-    private async Task OnWindowChanged(ChangeEventArgs e)
+    private async Task OnWindowChangedAsync(string value)
     {
-        if (int.TryParse(e.Value?.ToString(), out var m) && m is 1 or 5 or 30)
+        if (int.TryParse(value, out var m) && m is 1 or 5 or 30)
             _windowMinutes = m;
         _chartKey = null;
         await EnsureChartsAsync();
+    }
+
+    private async Task ToggleExpandChartAsync()
+    {
+        _expandChart = !_expandChart;
+        if (_expandChart) return;
+
+        _expandedChartKey = null;
+        try
+        {
+            await JS.InvokeVoidAsync("chart_dispose", "ov2-throughput");
+            await JS.InvokeVoidAsync("chart_dispose", "ov2-kv");
+        }
+        catch
+        {
+            // Circuit may already be gone.
+        }
     }
 
     public async ValueTask DisposeAsync()

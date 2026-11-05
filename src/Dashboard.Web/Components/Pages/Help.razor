@@ -12,9 +12,8 @@
     <li><a href="#troubleshooting">Troubleshooting</a></li>
 </ul>
 
-<div class="card mb-4" id="getting-started">
-    <div class="card-body">
-        <div class="card-title">Getting started</div>
+<div style="margin-bottom: var(--ui-space-4);" id="getting-started">
+    <UiPanel Title="Getting started">
         <p>
             The dashboard doesn't start or stop containers itself — each machine runs its own
             <strong>supervisor</strong> (a small service alongside vLLM, started by your own compose file),
@@ -42,12 +41,11 @@
             A fresh install shows a checklist on the Overview page for exactly these steps — it disappears
             for good after your first swap.
         </p>
-    </div>
+    </UiPanel>
 </div>
 
-<div class="card mb-4" id="how-it-works">
-    <div class="card-body">
-        <div class="card-title">How it works</div>
+<div style="margin-bottom: var(--ui-space-4);" id="how-it-works">
+    <UiPanel Title="How it works">
         <ul>
             <li>
                 <strong>No hot-swap, idle-unload, or preload settings</strong> — those were part of an
@@ -74,39 +72,41 @@
                 you when you do this; it still saves the change.
             </li>
         </ul>
-    </div>
+    </UiPanel>
 </div>
 
-<div class="card mb-4" id="walkthrough">
-    <div class="card-body">
-        <div class="card-title">Walkthrough example</div>
+<div style="margin-bottom: var(--ui-space-4);" id="walkthrough">
+    <UiPanel Title="Walkthrough example">
         <p>A concrete example of what to enter on the Servers page for a typical single-box vLLM setup:</p>
-        <table class="table table-sm">
-            <tbody>
-                <tr><td class="text-muted">Server label</td><td>My GPU box</td></tr>
-                <tr><td class="text-muted">GPU name</td><td>e.g. <code>NVIDIA RTX 4090</code>, or anything containing "Intel" for the Intel dtype rule</td></tr>
-                <tr><td class="text-muted">Models directory</td><td><code>/models</code> — shared by every instance on this server</td></tr>
-                <tr><td class="text-muted">Instance label</td><td>primary</td></tr>
-                <tr><td class="text-muted">Proxy slug</td><td><code>primary</code> — becomes <code>/proxy/primary/v1</code></td></tr>
-                <tr><td class="text-muted">vLLM port</td><td><code>9999</code></td></tr>
-                <tr><td class="text-muted">Supervisor URL</td><td><code>http://&lt;servername-or-ip&gt;:8080</code></td></tr>
-                <tr><td class="text-muted">Token</td><td>the shared token your compose file set for that supervisor</td></tr>
-            </tbody>
-        </table>
+        <div class="ui-table-wrap" style="margin-bottom: var(--ui-space-4);">
+            <table class="ui-table">
+                <tbody>
+                    <tr><td class="text-muted">Server label</td><td>My GPU box</td></tr>
+                    <tr><td class="text-muted">GPU name</td><td>e.g. <code>NVIDIA RTX 4090</code>, or anything containing "Intel" for the Intel dtype rule</td></tr>
+                    <tr><td class="text-muted">Models directory</td><td><code>/models</code> — shared by every instance on this server</td></tr>
+                    <tr><td class="text-muted">Instance label</td><td>primary</td></tr>
+                    <tr><td class="text-muted">Proxy slug</td><td><code>primary</code> — becomes <code>/proxy/primary/v1</code></td></tr>
+                    <tr><td class="text-muted">vLLM port</td><td><code>9999</code></td></tr>
+                    <tr><td class="text-muted">Supervisor URL</td><td><code>http://&lt;servername-or-ip&gt;:8080</code></td></tr>
+                    <tr><td class="text-muted">Token</td><td>the shared token your compose file set for that supervisor</td></tr>
+                </tbody>
+            </table>
+        </div>
         <p>Then on <a href="models-recipes">Models &amp; Recipes</a>, for a Hugging Face model:</p>
-        <table class="table table-sm mb-0">
-            <tbody>
-                <tr><td class="text-muted">Repo id</td><td><code>meta-llama/Llama-3.1-8B-Instruct</code></td></tr>
-                <tr><td class="text-muted">Served model name</td><td><code>llama-3.1-8b</code> — whatever your API clients should request; shown again on the Instances page's client snippet</td></tr>
-                <tr><td class="text-muted">Max model length</td><td>Set explicitly rather than leaving blank — the editor shows the model's own reported default as you type</td></tr>
-            </tbody>
-        </table>
-    </div>
+        <div class="ui-table-wrap">
+            <table class="ui-table">
+                <tbody>
+                    <tr><td class="text-muted">Repo id</td><td><code>meta-llama/Llama-3.1-8B-Instruct</code></td></tr>
+                    <tr><td class="text-muted">Served model name</td><td><code>llama-3.1-8b</code> — whatever your API clients should request; shown again on the Instances page's client snippet</td></tr>
+                    <tr><td class="text-muted">Max model length</td><td>Set explicitly rather than leaving blank — the editor shows the model's own reported default as you type</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </UiPanel>
 </div>
 
-<div class="card" id="troubleshooting">
-    <div class="card-body">
-        <div class="card-title">Troubleshooting</div>
+<div id="troubleshooting">
+    <UiPanel Title="Troubleshooting">
         <ul class="mb-0">
             <li>
                 <strong>"Test connection" fails</strong> — confirm the supervisor URL is reachable from this
@@ -133,5 +133,5 @@
                 model, or idle, depending on how far the swap got).
             </li>
         </ul>
-    </div>
+    </UiPanel>
 </div>

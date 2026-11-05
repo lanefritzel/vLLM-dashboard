@@ -1,0 +1,43 @@
+@* Chip — toggle-style filter chip or static tag, with an optional count badge
+   (Style Refactor P1.3). Set Static for a non-interactive tag (renders a
+   span, not a button). *@
+@if (Static)
+{
+    <span class="ui-chip ui-chip-static @VariantClass">
+        @ChildContent
+        @if (Count is not null)
+        {
+            <span class="ui-chip-count">@Count</span>
+        }
+    </span>
+}
+else
+{
+    <button type="button" class="ui-chip @VariantClass" aria-pressed="@Active" @onclick="OnClick">
+        @ChildContent
+        @if (Count is not null)
+        {
+            <span class="ui-chip-count">@Count</span>
+        }
+    </button>
+}
+
+@code {
+    [Parameter] public string Variant { get; set; } = "neutral";
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public bool Static { get; set; }
+    [Parameter] public int? Count { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string VariantClass => Active
+        ? "ui-chip-active"
+        : Variant.ToLowerInvariant() switch
+        {
+            "success" => "ui-chip-success",
+            "warning" => "ui-chip-warn",
+            "danger" => "ui-chip-danger",
+            "info" => "ui-chip-info",
+            _ => "",
+        };
+}

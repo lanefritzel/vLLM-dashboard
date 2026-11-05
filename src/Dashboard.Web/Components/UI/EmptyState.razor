@@ -1,0 +1,45 @@
+@* EmptyState — centered icon/title/description/action, rendered inside a
+   panel or TableShell's state cell (Style Refactor P1.4). Variant only picks
+   the default icon/title; override either via the matching parameter. *@
+<div class="ui-empty">
+    <div class="ui-empty-icon"><Icon Name="@IconName" Size="28" /></div>
+    <p class="ui-empty-title">@(Title ?? DefaultTitle)</p>
+    @if (!string.IsNullOrEmpty(Description))
+    {
+        <p class="ui-empty-body">@Description</p>
+    }
+    @if (PrimaryAction is not null || SecondaryAction is not null)
+    {
+        <div class="ui-empty-actions">
+            @PrimaryAction
+            @SecondaryAction
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>no-data | no-results | no-instance | error | no-permission.</summary>
+    [Parameter] public string Variant { get; set; } = "no-data";
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public RenderFragment? PrimaryAction { get; set; }
+    [Parameter] public RenderFragment? SecondaryAction { get; set; }
+
+    private string IconName => Variant.ToLowerInvariant() switch
+    {
+        "no-results" => "search",
+        "no-instance" => "instances",
+        "error" => "x-circle",
+        "no-permission" => "user",
+        _ => "search",
+    };
+
+    private string DefaultTitle => Variant.ToLowerInvariant() switch
+    {
+        "no-results" => "No results",
+        "no-instance" => "No instance selected",
+        "error" => "Something went wrong",
+        "no-permission" => "You don't have access",
+        _ => "Nothing here yet",
+    };
+}

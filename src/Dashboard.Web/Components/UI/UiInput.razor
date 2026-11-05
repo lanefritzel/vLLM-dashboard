@@ -1,0 +1,24 @@
+@* UiInput — single-line text input (Style Refactor P1.2). Supports @bind-Value.
+   Set Invalid to match the Error on the enclosing UiField so aria-describedby
+   points at its error text (id "{Id}-error"). *@
+<input class="ui-input"
+       id="@Id"
+       type="@Type"
+       value="@Value"
+       placeholder="@Placeholder"
+       disabled="@Disabled"
+       aria-invalid="@(Invalid ? "true" : null)"
+       aria-describedby="@(Invalid ? $"{Id}-error" : null)"
+       @oninput="@(e => ValueChanged.InvokeAsync(e.Value?.ToString() ?? ""))"
+       @attributes="AdditionalAttributes" />
+
+@code {
+    [Parameter, EditorRequired] public string Id { get; set; } = "";
+    [Parameter] public string Type { get; set; } = "text";
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Invalid { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; } = new();
+}

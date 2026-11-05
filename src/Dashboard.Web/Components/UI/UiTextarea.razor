@@ -1,0 +1,19 @@
+@* UiTextarea — multi-line text input (Style Refactor P1.2). Supports @bind-Value. *@
+<textarea class="ui-textarea"
+          id="@Id"
+          placeholder="@Placeholder"
+          disabled="@Disabled"
+          aria-invalid="@(Invalid ? "true" : null)"
+          aria-describedby="@(Invalid ? $"{Id}-error" : null)"
+          @oninput="@(e => ValueChanged.InvokeAsync(e.Value?.ToString() ?? ""))"
+          @attributes="AdditionalAttributes">@Value</textarea>
+
+@code {
+    [Parameter, EditorRequired] public string Id { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Invalid { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; } = new();
+}

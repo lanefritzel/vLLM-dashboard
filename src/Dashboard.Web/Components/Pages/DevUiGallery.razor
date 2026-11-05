@@ -1,0 +1,504 @@
+@page "/dev/ui"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Web.Components.Shared
+@inject IJSRuntime JS
+@inject IDialogService Dialogs
+@inject IToastService Toasts
+
+<PageTitle>UI Gallery</PageTitle>
+
+<div class="gallery-shell">
+    <div class="gallery-toolbar">
+        <div>
+            <h1 class="page-title" style="margin-bottom:2px;">Component Gallery</h1>
+            <p class="ui-page-subtitle" style="margin:0;">Dev-only — P1.2–P1.6 primitives, not linked from the app nav.</p>
+        </div>
+        <SegmentedControl Items="_themeItems" Value="_theme" ValueChanged="SetThemeAsync" />
+    </div>
+
+    @* ---------------------------------------------------------------- Buttons *@
+    <section class="gallery-section" id="buttons">
+        <h2>Buttons</h2>
+        <p class="gallery-section-note">UiButton — variants × sizes, loading (keeps width, blocks clicks), disabled.</p>
+        <div class="gallery-row">
+            <UiButton Variant="primary">Primary</UiButton>
+            <UiButton Variant="secondary">Secondary</UiButton>
+            <UiButton Variant="ghost">Ghost</UiButton>
+            <UiButton Variant="danger">Danger</UiButton>
+            <UiButton Variant="link">Link</UiButton>
+        </div>
+        <div class="gallery-row">
+            <UiButton Variant="primary" Size="sm">Small</UiButton>
+            <UiButton Variant="primary">Medium</UiButton>
+            <UiButton Variant="primary" Size="lg">Large</UiButton>
+        </div>
+        <div class="gallery-row">
+            <UiButton Variant="primary" Loading="true">Saving</UiButton>
+            <UiButton Variant="secondary" Disabled="true">Disabled</UiButton>
+        </div>
+    </section>
+
+    @* ----------------------------------------------------------------- Fields *@
+    <section class="gallery-section" id="fields">
+        <h2>Fields</h2>
+        <p class="gallery-section-note">UiField wraps UiInput/UiSelect/UiTextarea — label, hint, required, error, disabled.</p>
+        <div class="gallery-grid">
+            <UiField Label="Model name" For="gal-name" Hint="Used in API calls">
+                <UiInput Id="gal-name" @bind-Value="_fieldText" />
+            </UiField>
+            <UiField Label="Required field" For="gal-req" Required="true">
+                <UiInput Id="gal-req" @bind-Value="_fieldText" />
+            </UiField>
+            <UiField Label="With an error" For="gal-err" Error="This field is required">
+                <UiInput Id="gal-err" Value="" ValueChanged="@(_ => { })" Invalid="true" />
+            </UiField>
+            <UiField Label="Disabled" For="gal-dis">
+                <UiInput Id="gal-dis" Value="Can't touch this" ValueChanged="@(_ => { })" Disabled="true" />
+            </UiField>
+            <UiField Label="Select" For="gal-select">
+                <UiSelect Id="gal-select" @bind-Value="_fieldSelect">
+                    <option value="a">Option A</option>
+                    <option value="b">Option B</option>
+                    <option value="c">A much longer option label to check wrapping</option>
+                </UiSelect>
+            </UiField>
+            <UiField Label="Textarea" For="gal-textarea" Hint="Multi-line">
+                <UiTextarea Id="gal-textarea" @bind-Value="_fieldText" />
+            </UiField>
+        </div>
+    </section>
+
+    @* ----------------------------------------------------------------- Panels *@
+    <section class="gallery-section" id="panels">
+        <h2>Panels</h2>
+        <p class="gallery-section-note">UiPanel — default/inset/interactive, header with actions, flush body.</p>
+        <div class="gallery-grid">
+            <UiPanel Title="Default panel" Description="With a description line">
+                Body content goes here.
+            </UiPanel>
+            <UiPanel Title="With actions" HeaderActions="@HeaderActionsFragment">
+                Body content goes here.
+            </UiPanel>
+            <UiPanel Title="Inset variant" Variant="inset">
+                Body content goes here.
+            </UiPanel>
+            <UiPanel Title="Interactive variant" Variant="interactive">
+                Hover/focus this panel.
+            </UiPanel>
+        </div>
+    </section>
+
+    @* ------------------------------------------------------------- Page header *@
+    <section class="gallery-section" id="page-header">
+        <h2>Page header</h2>
+        <p class="gallery-section-note">PageHeader — title, count pill, subtitle, actions (wrap at 390px), tabs slot.</p>
+        <UiPanel Flush="true">
+            <div style="padding: var(--ui-space-4) var(--ui-space-5);">
+                <PageHeader Title="Deployments" Count="12" Subtitle="A longer subtitle to check wrapping behavior at narrow widths">
+                    <Actions>
+                        <UiButton Variant="secondary" Size="sm">Refresh</UiButton>
+                        <UiButton Variant="primary" Size="sm">New deployment</UiButton>
+                    </Actions>
+                    <Tabs>
+                        <Tabs Items="_tabItems" ActiveKey="_activeTab" ActiveKeyChanged="@(k => _activeTab = k)" />
+                    </Tabs>
+                </PageHeader>
+            </div>
+        </UiPanel>
+    </section>
+
+    @* ------------------------------------------------------------------ Toolbar *@
+    <section class="gallery-section" id="toolbar">
+        <h2>Toolbar</h2>
+        <p class="gallery-section-note">Toolbar — search/filters/actions band, wraps under 768px.</p>
+        <Toolbar Attached="true">
+            <Search>
+                <UiInput Id="gal-toolbar-search" Value="" ValueChanged="@(_ => { })" Placeholder="Search…" />
+            </Search>
+            <Filters>
+                <Chip Variant="neutral">All statuses</Chip>
+                <Chip Variant="info" Active="true">Running</Chip>
+            </Filters>
+            <Actions>
+                <UiButton Variant="secondary" Size="sm">Export</UiButton>
+            </Actions>
+        </Toolbar>
+    </section>
+
+    @* -------------------------------------------------------------------- Tables *@
+    <section class="gallery-section" id="tables">
+        <h2>Tables</h2>
+        <p class="gallery-section-note">TableShell + SortableHeader — data/empty/loading/error states, numeric columns, expandable row.</p>
+        <SegmentedControl Items="_tableStateItems" Value="_tableState" ValueChanged="@(v => _tableState = v)" />
+        <div style="margin-top: var(--ui-space-3);">
+            <TableShell Caption="Sample deployments" ColumnCount="4"
+                        Loading="@(_tableState == "loading")"
+                        IsEmpty="@(_tableState == "empty")"
+                        Error="@(_tableState == "error" ? "The supervisor didn't respond in time." : null)"
+                        EmptyTitle="No deployments yet"
+                        EmptyMessage="Deployments you start will show up here.">
+                <Header>
+                    <SortableHeader Label="Model" Direction="@(_sortDir)" OnSort="ToggleSort" />
+                    <SortableHeader Label="Status" />
+                    <th scope="col" class="num">Tokens/s</th>
+                    <th scope="col"></th>
+                </Header>
+                <ChildContent>
+                    @if (_tableState == "data")
+                    {
+                        <tr>
+                            <td @onclick="@(() => _expandedRow = _expandedRow == 1 ? 0 : 1)">
+                                <button type="button" class="ui-row-expand-btn" aria-expanded="@(_expandedRow == 1 ? "true" : "false")" @onclick="@(() => _expandedRow = _expandedRow == 1 ? 0 : 1)">
+                                    <Icon Name="chevron-right" Size="14" />
+                                </button>
+                                a-very-long-model-name-that-should-truncate-cleanly-without-breaking-row-height
+                            </td>
+                            <td><StatusPill Status="running" /></td>
+                            <td class="num">47.5</td>
+                            <td><span class="ui-row-actions"><UiButton Variant="ghost" Size="sm">Stop</UiButton></span></td>
+                        </tr>
+                        @if (_expandedRow == 1)
+                        {
+                            <tr class="ui-row-detail">
+                                <td colspan="4">Expanded detail content for the row above.</td>
+                            </tr>
+                        }
+                        <tr>
+                            <td>qwen3.8-vllm</td>
+                            <td><StatusPill Status="starting" /></td>
+                            <td class="num">0.0</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>fake-model</td>
+                            <td><StatusPill Status="failed" /></td>
+                            <td class="num">—</td>
+                            <td></td>
+                        </tr>
+                    }
+                </ChildContent>
+            </TableShell>
+        </div>
+    </section>
+
+    @* --------------------------------------------------------------- Status pills *@
+    <section class="gallery-section" id="pills">
+        <h2>Status pills</h2>
+        <p class="gallery-section-note">Every StatusPresentation mapping — never color-only, text always ships with the dot/icon.</p>
+        <div class="gallery-row">
+            @foreach (var status in _allStatuses)
+            {
+                <StatusPill Status="@status" />
+            }
+        </div>
+    </section>
+
+    @* ---------------------------------------------------------------------- Chips *@
+    <section class="gallery-section" id="chips">
+        <h2>Chips</h2>
+        <div class="gallery-row">
+            <Chip Variant="neutral">Neutral</Chip>
+            <Chip Variant="success">Success</Chip>
+            <Chip Variant="info">Info</Chip>
+            <Chip Variant="warning">Warning</Chip>
+            <Chip Variant="danger">Danger</Chip>
+            <Chip Active="true">Active</Chip>
+            <Chip Count="12">With count</Chip>
+            <Chip Static="true">Static tag</Chip>
+        </div>
+    </section>
+
+    @* ------------------------------------------------------------------ Stat cards *@
+    <section class="gallery-section" id="stat-cards">
+        <h2>Stat cards</h2>
+        <p class="gallery-section-note">Grid at repeat(auto-fit, minmax(180px,1fr)) — loading and unavailable states included.</p>
+        <div class="ui-stat-grid">
+            <StatCard Label="Throughput" Value="47.5" Unit="tok/s" Delta="+12%" DeltaDirection="up" />
+            <StatCard Label="KV cache" Value="63" Unit="%" Delta="-4%" DeltaDirection="down" Info="Share of KV cache currently in use" />
+            <StatCard Label="Uptime" Value="27h 43m" DeltaDirection="flat" />
+            <StatCard Label="Loading example" Loading="true" />
+            <StatCard Label="Unavailable example" Unavailable="true" />
+        </div>
+    </section>
+
+    @* -------------------------------------------------------------------- Callouts *@
+    <section class="gallery-section" id="callouts">
+        <h2>Callouts</h2>
+        <p class="gallery-section-note">Persistent page-level messages — not for transient success; use Toast for that.</p>
+        <Callout Tone="info" Title="Heads up">A short informational message.</Callout>
+        <Callout Tone="success" Title="All good">Everything is operating normally.</Callout>
+        <Callout Tone="warn" Title="VRAM running low">Consider stopping an idle deployment before starting another.</Callout>
+        <Callout Tone="danger" Title="Swap failed">The health check never came back healthy within the timeout window. This is a longer body of text to confirm long-text wrapping looks right inside the callout.</Callout>
+        <Callout Tone="neutral" Action="@CalloutActionFragment">This legacy page still uses the old selector.</Callout>
+    </section>
+
+    @* ----------------------------------------------------------------- Empty states *@
+    <section class="gallery-section" id="empty-states">
+        <h2>Empty states</h2>
+        <div class="gallery-grid">
+            <UiPanel Flush="true"><EmptyState Variant="no-data" PrimaryAction="@EmptyPrimaryFragment" /></UiPanel>
+            <UiPanel Flush="true"><EmptyState Variant="no-results" Description="Try a different search term." /></UiPanel>
+            <UiPanel Flush="true"><EmptyState Variant="no-instance" Description="Pick an instance from the selector above." /></UiPanel>
+            <UiPanel Flush="true"><EmptyState Variant="error" Description="Reload the page or check the logs." /></UiPanel>
+            <UiPanel Flush="true"><EmptyState Variant="no-permission" /></UiPanel>
+        </div>
+    </section>
+
+    @* -------------------------------------------------------------------- Skeletons *@
+    <section class="gallery-section" id="skeletons">
+        <h2>Skeletons</h2>
+        <p class="gallery-section-note">Shimmer is disabled under prefers-reduced-motion automatically.</p>
+        <div class="gallery-row" style="align-items:center;">
+            <Skeleton Variant="circle" />
+            <div style="width:220px;">
+                <Skeleton Variant="line" Width="80%" />
+                <Skeleton Variant="line" Width="60%" />
+                <Skeleton Variant="line" Width="40%" />
+            </div>
+            <Skeleton Variant="block" Width="160px" Height="60px" />
+        </div>
+    </section>
+
+    @* ----------------------------------------------------------------------- Toasts *@
+    <section class="gallery-section" id="toasts">
+        <h2>Toasts</h2>
+        <p class="gallery-section-note">Success/info auto-dismiss ~5s; warn/danger persist until dismissed. Hover a toast to pause its timer.</p>
+        <div class="gallery-row">
+            <UiButton Variant="secondary" Size="sm" OnClick="@(() => Toasts.Show("Recipe saved.", "success", "Saved"))">Trigger success</UiButton>
+            <UiButton Variant="secondary" Size="sm" OnClick="@(() => Toasts.Show("A new version is available.", "info", "Heads up"))">Trigger info</UiButton>
+            <UiButton Variant="secondary" Size="sm" OnClick="@(() => Toasts.Show("Health check is taking longer than usual.", "warn", "Still waiting"))">Trigger warn</UiButton>
+            <UiButton Variant="secondary" Size="sm" OnClick="@(() => Toasts.Show("Deployment failed to start.", "danger", "Error"))">Trigger danger</UiButton>
+        </div>
+    </section>
+
+    @* ---------------------------------------------------------------------- Dialogs *@
+    <section class="gallery-section" id="dialogs">
+        <h2>Dialogs</h2>
+        <p class="gallery-section-note">Native &lt;dialog&gt; — focus trap, Escape, and return-focus-to-trigger are all built in; click the trigger, then press Escape and confirm focus lands back on it.</p>
+        <div class="gallery-row">
+            <UiButton Variant="secondary" OnClick="@(() => _dialogSmOpen = true)">Open small dialog</UiButton>
+            <UiButton Variant="secondary" OnClick="@(() => _dialogLgOpen = true)">Open large dialog</UiButton>
+            <UiButton Variant="danger" OnClick="@(() => _dialogDestructiveOpen = true)">Delete server…</UiButton>
+        </div>
+        <Dialog Title="Example dialog" Size="sm" Open="_dialogSmOpen" OpenChanged="@(v => _dialogSmOpen = v)"
+                Footer="@DialogSmFooter">
+            A small dialog with header, body, and footer.
+        </Dialog>
+        <Dialog Title="A longer dialog" Size="lg" Open="_dialogLgOpen" OpenChanged="@(v => _dialogLgOpen = v)"
+                Footer="@DialogLgFooter">
+            <p>This is the large (800px) size, body scrolls when content overflows.</p>
+            <CodeBlock Code="dotnet build src/Dashboard.Web" Language="bash" />
+        </Dialog>
+        <Dialog Title="Delete tes.home?" Size="sm" Open="_dialogDestructiveOpen" OpenChanged="@(v => _dialogDestructiveOpen = v)"
+                Footer="@DialogDestructiveFooter">
+            This stops any running deployment on this server and removes it from the dashboard. This can't be undone.
+        </Dialog>
+    </section>
+
+    @* ---------------------------------------------------------------------- Drawers *@
+    <section class="gallery-section" id="drawers">
+        <h2>Drawers</h2>
+        <p class="gallery-section-note">Mark it dirty, then try to close — the unsaved-changes guard reuses IDialogService.</p>
+        <div class="gallery-row">
+            <UiButton Variant="secondary" OnClick="@(() => _drawerOpen = true)">Open drawer</UiButton>
+            <label style="display:flex;align-items:center;gap:6px;font-size:var(--ui-text-sm);">
+                <input type="checkbox" @bind="_drawerDirty" /> Mark dirty
+            </label>
+        </div>
+        <Drawer Title="Edit recipe" Open="_drawerOpen" OpenChanged="@(v => _drawerOpen = v)" Dirty="_drawerDirty"
+                Footer="@DrawerFooter">
+            <UiField Label="Recipe name" For="gal-drawer-name">
+                <UiInput Id="gal-drawer-name" @bind-Value="_fieldText" />
+            </UiField>
+            <p>Long-form editors like this belong in a drawer; short confirmations belong in a Dialog.</p>
+        </Drawer>
+    </section>
+
+    @* ------------------------------------------------------------------------- Tabs *@
+    <section class="gallery-section" id="tabs">
+        <h2>Tabs &amp; segmented control</h2>
+        <p class="gallery-section-note">Tabs is for navigation (arrow keys move focus); SegmentedControl is for ranges/filters.</p>
+        <Tabs Items="_tabItems" ActiveKey="_activeTab" ActiveKeyChanged="@(k => _activeTab = k)" />
+        <p style="margin: var(--ui-space-3) 0;">Active: <strong>@_activeTab</strong></p>
+        <SegmentedControl Items="_windowItems" Value="_window" ValueChanged="@(v => _window = v)" />
+    </section>
+
+    @* ------------------------------------------------------------------------- Code *@
+    <section class="gallery-section" id="code">
+        <h2>Code &amp; terminal</h2>
+        <CodeBlock Language="bash" Code="docker compose -f deploy/docker-compose.yml up -d" />
+        <div style="height:var(--ui-space-4);"></div>
+        <TerminalPane Title="supervisor" Status="running" Lines="_terminalLines" AllowDownload="true" DownloadFileName="supervisor.log" />
+    </section>
+
+    @* --------------------------------------------------------------------- Timeline *@
+    <section class="gallery-section" id="timeline">
+        <h2>Swap timeline</h2>
+        <SwapTimeline Steps="_timelineSteps" LogsHref="#code" />
+    </section>
+
+    @* --------------------------------------------------------------------- Progress *@
+    <section class="gallery-section" id="progress">
+        <h2>Progress</h2>
+        <div class="gallery-grid">
+            <div><ProgressBar Value="64" Label="Pulling image" /></div>
+            <div><ProgressBar Label="Starting container" /></div>
+        </div>
+    </section>
+
+    @* ------------------------------------------------------------------- Chart card *@
+    <section class="gallery-section" id="chart-card">
+        <h2>Chart card</h2>
+        <p class="gallery-section-note">Toggle the theme switcher above — grid, ticks, tooltip, and dataset colors update in place via charts.js' themechange listener, no reload.</p>
+        <div style="max-width:480px;">
+            <ChartCard Title="Throughput" Subtitle="Last 5 minutes" LastUpdated="just now" SampleCount="@_chartSampleCount">
+                <div class="chart-wrap" style="height:100%;margin-bottom:0;">
+                    <canvas id="gallery-chart"></canvas>
+                </div>
+            </ChartCard>
+        </div>
+    </section>
+
+    @* ----------------------------------------------------------------- Smoke checklist *@
+    <section class="gallery-section" id="checklist">
+        <h2>Phase 1 smoke checklist</h2>
+        <UiPanel>
+            <div class="gallery-checklist">
+                @foreach (var item in _checklist)
+                {
+                    <label>
+                        <input type="checkbox" @bind="item.Checked" />
+                        @item.Text
+                    </label>
+                }
+            </div>
+        </UiPanel>
+    </section>
+</div>
+
+@code {
+    private readonly IReadOnlyList<(string Key, string Label)> _themeItems = [("dark", "Dark"), ("light", "Light")];
+    private readonly IReadOnlyList<(string Key, string Label)> _tableStateItems =
+        [("data", "Data"), ("empty", "Empty"), ("loading", "Loading"), ("error", "Error")];
+    private readonly IReadOnlyList<(string Key, string Label)> _tabItems =
+        [("overview", "Overview"), ("logs", "Logs"), ("history", "History")];
+    private readonly IReadOnlyList<(string Key, string Label)> _windowItems =
+        [("5m", "5 min"), ("1h", "1 hour"), ("24h", "24 hours")];
+
+    private readonly string[] _allStatuses =
+    [
+        "ready", "starting", "swapping", "stopping", "stopped", "failed",
+        "unreachable", "degraded", "needs setup", "unknown",
+    ];
+
+    private readonly List<string> _terminalLines =
+    [
+        "[12:00:01] INFO  supervisor started, watching /models",
+        "[12:00:02] INFO  loaded recipe qwen3.8-vllm-recipe",
+        "[12:00:04] INFO  pulling image vllm/vllm-openai:latest",
+        "[12:00:41] INFO  container started, waiting for health check",
+        "[12:01:10] WARN  health check attempt 1/10 failed: connection refused",
+        "[12:01:40] INFO  health check passed",
+        "[12:01:40] INFO  ready, serving on /proxy/qwen3-test/v1",
+    ];
+
+    private readonly List<SwapTimeline.SwapTimelineStep> _timelineSteps =
+    [
+        new("Queued", "completed", "0:00"),
+        new("Stopping current", "completed", "0:02"),
+        new("Pulling image", "current", "0:14"),
+        new("Starting container", "pending"),
+        new("Health check", "pending"),
+        new("Ready", "pending"),
+    ];
+
+    private sealed class ChecklistItem(string text) { public string Text { get; } = text; public bool Checked { get; set; } }
+
+    private readonly List<ChecklistItem> _checklist =
+    [
+        new("/dev/ui is reachable only for an authorized user and absent from primary nav"),
+        new("Every primitive from P1.2–P1.6 appears with all variants and key states"),
+        new("Gallery works in dark and light without reload"),
+        new("Dialog and drawer focus-return checks pass"),
+        new("Chart example updates colors on theme change"),
+        new("No body horizontal scroll at 390px; table overflow stays inside its wrapper"),
+        new("No console errors or missing icon/font requests"),
+        new("Keyboard-only pass reaches every control with visible focus"),
+    ];
+
+    private string _theme = "dark";
+    private string _fieldText = "";
+    private string _fieldSelect = "a";
+    private string _tableState = "data";
+    private string? _sortDir;
+    private int _expandedRow;
+    private string _activeTab = "overview";
+    private string _window = "1h";
+    private bool _dialogSmOpen;
+    private bool _dialogLgOpen;
+    private bool _dialogDestructiveOpen;
+    private bool _drawerOpen;
+    private bool _drawerDirty;
+    private bool _chartCreated;
+    private int _chartSampleCount;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _chartCreated) return;
+
+        var ok = await JS.InvokeAsync<bool>("chart_create", "gallery-chart",
+            new List<Dictionary<string, string>>
+            {
+                new() { ["key"] = "tok", ["label"] = "tok/s", ["color"] = "var(--ui-chart-2)" },
+            }, new { });
+        if (!ok) return;
+
+        _chartCreated = true;
+        var rnd = new Random(7);
+        var value = 20.0;
+        for (var i = 0; i < 24; i++)
+        {
+            value = Math.Max(0, value + rnd.Next(-6, 7));
+            await JS.InvokeVoidAsync("chart_push", "gallery-chart", i.ToString(), new Dictionary<string, double?> { ["tok"] = value }, 24);
+        }
+        _chartSampleCount = 24;
+        StateHasChanged();
+    }
+
+    private void ToggleSort() => _sortDir = _sortDir switch
+    {
+        null => "ascending",
+        "ascending" => "descending",
+        _ => null,
+    };
+
+    private async Task SetThemeAsync(string theme)
+    {
+        _theme = theme;
+        await JS.InvokeVoidAsync("applyTheme", theme);
+    }
+
+    private RenderFragment HeaderActionsFragment => @<UiButton Variant="ghost" Size="sm">Action</UiButton>;
+    private RenderFragment CalloutActionFragment => @<UiButton Variant="link" Size="sm">Open legacy selector docs</UiButton>;
+    private RenderFragment EmptyPrimaryFragment => @<UiButton Variant="primary" Size="sm">Create one</UiButton>;
+
+    private RenderFragment DialogSmFooter => @<text>
+        <UiButton Variant="secondary" OnClick="@(() => _dialogSmOpen = false)">Cancel</UiButton>
+        <UiButton Variant="primary" OnClick="@(() => _dialogSmOpen = false)">Save</UiButton>
+    </text>;
+
+    private RenderFragment DialogLgFooter => @<text>
+        <UiButton Variant="secondary" OnClick="@(() => _dialogLgOpen = false)">Close</UiButton>
+    </text>;
+
+    private RenderFragment DialogDestructiveFooter => @<text>
+        <UiButton Variant="secondary" OnClick="@(() => _dialogDestructiveOpen = false)">Cancel</UiButton>
+        <UiButton Variant="danger" OnClick="@(() => _dialogDestructiveOpen = false)">Delete server</UiButton>
+    </text>;
+
+    private RenderFragment DrawerFooter => @<text>
+        <UiButton Variant="secondary" OnClick="@(() => { _drawerDirty = false; _drawerOpen = false; })">Cancel</UiButton>
+        <UiButton Variant="primary" OnClick="@(() => { _drawerDirty = false; _drawerOpen = false; })">Save</UiButton>
+    </text>;
+}

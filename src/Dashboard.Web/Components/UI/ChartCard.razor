@@ -1,0 +1,86 @@
+@* ChartCard — card shell for a charts.js line chart (Style Refactor P1.6).
+   The canvas itself stays caller content (so the caller keeps its own id for
+   charts.js' createChart/chart_push calls) — this just supplies the
+   consistent header/body/footer/empty/loading chrome and a same-height
+   skeleton so the card never collapses while loading. *@
+<div class="ui-panel ui-chart-card">
+    <div class="ui-chart-header">
+        <div>
+            <h3 class="ui-chart-title">@Title</h3>
+            @if (!string.IsNullOrEmpty(Subtitle))
+            {
+                <p class="ui-chart-subtitle">@Subtitle</p>
+            }
+        </div>
+        @if (WindowControl is not null)
+        {
+            <div class="ui-chart-header-controls">@WindowControl</div>
+        }
+    </div>
+    @if (LegendToggles is not null)
+    {
+        <div class="ui-chart-legend-toggles">@LegendToggles</div>
+    }
+    <div class="ui-chart-card-body" style="height:@Height;" role="img" aria-label="@(AriaLabel ?? $"{Title} chart")">
+        @if (Loading)
+        {
+            <div class="ui-skeleton ui-chart-card-skeleton"></div>
+        }
+        else if (Empty)
+        {
+            <div class="ui-empty">
+                <div class="ui-empty-icon"><Icon Name="history" Size="24" /></div>
+                <p class="ui-empty-title">@(EmptyMessage ?? "No data in this window")</p>
+            </div>
+        }
+        else
+        {
+            @ChildContent
+        }
+    </div>
+    @if (DataTable is not null)
+    {
+        <div class="sr-only">@DataTable</div>
+    }
+    @if (LastUpdated is not null || SampleCount is not null || ViewDataHref is not null)
+    {
+        <div class="ui-chart-footer">
+            <span>
+                @if (LastUpdated is not null)
+                {
+                    <text>Updated @LastUpdated</text>
+                }
+                @if (SampleCount is not null)
+                {
+                    <text> · @SampleCount samples</text>
+                }
+            </span>
+            @if (ViewDataHref is not null)
+            {
+                <a href="@ViewDataHref">View data</a>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public RenderFragment? WindowControl { get; set; }
+    [Parameter] public RenderFragment? LegendToggles { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool Empty { get; set; }
+    [Parameter] public string? EmptyMessage { get; set; }
+
+    /// <summary>220–260px per spec; default 240px.</summary>
+    [Parameter] public string Height { get; set; } = "240px";
+    [Parameter] public string? AriaLabel { get; set; }
+
+    /// <summary>Visually hidden data table (or a CSV download link) covering
+    /// the same series, for screen readers and non-visual consumption.</summary>
+    [Parameter] public RenderFragment? DataTable { get; set; }
+    [Parameter] public string? LastUpdated { get; set; }
+    [Parameter] public int? SampleCount { get; set; }
+    [Parameter] public string? ViewDataHref { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

@@ -20,77 +20,78 @@
 
 @if (_instance is null)
 {
-    <div class="card"><div class="card-body">
-        <p class="text-muted mb-0">No instance configured yet.</p>
-    </div></div>
+    <UiPanel><EmptyState Variant="no-instance" Description="Register one on the Servers page." /></UiPanel>
 }
 else
 {
-    <div class="card mb-3">
-        <div class="card-body">
-            <form @onsubmit="@RunAsync" @onsubmit:preventDefault="true" class="row g-3">
-                <div class="col-md-9">
-                    <label class="form-label">Prompt</label>
-                    <textarea class="form-control" rows="3" @bind="_prompt"></textarea>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">Temperature</label>
-                    <input class="form-control" type="number" min="0" max="2" step="0.1" @bind="_temperature" />
-                </div>
-                <div class="col-md-12 d-flex gap-2">
-                    <button type="submit" class="btn btn-primary btn-sm" disabled="@_busy">@(_busy ? "Running…" : "Send")</button>
-                    <button type="button" class="btn btn-outline btn-sm" disabled="@_smokeBusy" @onclick="@RunSmokeTestAsync">
-                        @(_smokeBusy ? "Testing…" : "Run smoke test")
-                    </button>
-                    @if (_smokeResult is not null)
-                    {
-                        <span class="text-muted small align-self-center">@_smokeResult</span>
-                    }
-                </div>
-            </form>
-        </div>
-    </div>
+    <UiPanel>
+        <form id="playground-form" @onsubmit="RunAsync" @onsubmit:preventDefault="true" class="row g-3">
+            <div class="col-md-9">
+                <UiField Label="Prompt" For="pg-prompt">
+                    <UiTextarea Id="pg-prompt" Value="@_prompt" ValueChanged="@(v => _prompt = v)" />
+                </UiField>
+            </div>
+            <div class="col-md-3">
+                <UiField Label="Temperature" For="pg-temperature">
+                    <UiInput Id="pg-temperature" Type="number" Value="@_temperature.ToString()" ValueChanged="@(v => _temperature = double.TryParse(v, out var n) ? n : _temperature)" />
+                </UiField>
+            </div>
+            <div class="col-md-12" style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                <UiButton Type="submit" Variant="primary" Size="sm" Disabled="_busy">@(_busy ? "Running…" : "Send")</UiButton>
+                <UiButton Variant="secondary" Size="sm" Disabled="_smokeBusy" OnClick="RunSmokeTestAsync">
+                    @(_smokeBusy ? "Testing…" : "Run smoke test")
+                </UiButton>
+                @if (_smokeResult is not null)
+                {
+                    <span class="text-muted small">@_smokeResult</span>
+                }
+            </div>
+        </form>
+    </UiPanel>
+
+    <div style="height: var(--ui-space-3);"></div>
 
     @if (_error is not null)
     {
-        <div class="alert alert-danger py-2">@_error</div>
+        <Callout Tone="danger">@_error</Callout>
     }
 
     @if (_responseText.Length > 0 || _busy)
     {
-        <div class="card traffic-card">
-            <div class="card-body">
-                <div class="d-flex align-items-center gap-3 flex-wrap mb-2">
-                    <span class="text-muted small">TTFT @TtftText()</span>
-                    <span class="text-muted small">Total @TotalText()</span>
-                    <span class="text-muted small">@TokPerSecText()</span>
-                    @if (_busy)
-                    {
-                        <span class="text-muted small">streaming…</span>
-                    }
-                </div>
-
-                @if (_reasoningText.Length > 0)
+        <UiPanel>
+            <div style="display:flex; flex-wrap:wrap; gap: var(--ui-space-2); align-items:center; margin-bottom: var(--ui-space-3);">
+                <Chip Static="true">TTFT @TtftText()</Chip>
+                <Chip Static="true">Total @TotalText()</Chip>
+                @if (!string.IsNullOrEmpty(TokPerSecText()))
                 {
-                    <details class="mb-2">
-                        <summary class="text-muted small" style="cursor:pointer">Thinking</summary>
-                        <pre class="probe-output traffic-reasoning">@_reasoningText.ToString()</pre>
-                    </details>
+                    <Chip Static="true">@TokPerSecText()</Chip>
                 }
-
-                <div class="text-muted small mb-1">Response</div>
-                <pre class="probe-output traffic-response">@(_responseText.Length > 0 ? _responseText.ToString() : "…")</pre>
-
-                <details class="mt-2">
-                    <summary class="text-muted small" style="cursor:pointer">Raw request</summary>
-                    <pre class="probe-output small">@_rawRequest</pre>
-                </details>
-                <details class="mt-1">
-                    <summary class="text-muted small" style="cursor:pointer">Raw response (SSE)</summary>
-                    <pre class="probe-output small">@_rawResponse.ToString()</pre>
-                </details>
+                @if (_busy)
+                {
+                    <StatusPill Status="starting" LabelOverride="streaming…" Size="sm" />
+                }
             </div>
-        </div>
+
+            @if (_reasoningText.Length > 0)
+            {
+                <details class="mb-2">
+                    <summary class="text-muted small" style="cursor:pointer">Thinking</summary>
+                    <pre class="probe-output traffic-reasoning">@_reasoningText.ToString()</pre>
+                </details>
+            }
+
+            <div class="ui-label" style="margin-bottom: 6px;">Response</div>
+            <pre class="probe-output traffic-response">@(_responseText.Length > 0 ? _responseText.ToString() : "…")</pre>
+
+            <details class="mt-2">
+                <summary class="text-muted small" style="cursor:pointer">Raw request</summary>
+                <div class="mt-1"><CodeBlock Language="json" Code="@_rawRequest" /></div>
+            </details>
+            <details class="mt-1">
+                <summary class="text-muted small" style="cursor:pointer">Raw response (SSE)</summary>
+                <div class="mt-1"><CodeBlock Language="sse" Code="@_rawResponse.ToString()" /></div>
+            </details>
+        </UiPanel>
     }
 }
 

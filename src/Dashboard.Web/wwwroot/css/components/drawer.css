@@ -1,0 +1,70 @@
+/* ============================================================================
+   drawer.css — right-side sheet primitive (Style Refactor P1.5)
+
+   Used by Drawer.razor. Full-screen below 768px per spec. Consumes --ui-*
+   tokens only.
+   ============================================================================ */
+
+.ui-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  background: var(--ui-overlay);
+  backdrop-filter: blur(2px);
+}
+
+.ui-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 220;
+  display: flex;
+  flex-direction: column;
+  width: 680px;
+  max-width: 100%;
+  border-left: 1px solid var(--ui-border-strong);
+  background: var(--ui-surface);
+  box-shadow: -16px 0 48px var(--ui-shadow);
+  color: var(--ui-text);
+  animation: ui-drawer-in 0.2s ease;
+  outline: none;
+}
+
+@keyframes ui-drawer-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.ui-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ui-drawer-title {
+  margin: 0;
+  font-size: var(--ui-text-md);
+  font-weight: 650;
+}
+
+.ui-drawer-body {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.ui-drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+  padding: 14px 20px;
+  border-top: 1px solid var(--ui-border);
+}
+
+@media (max-width: 768px) {
+  .ui-drawer { width: 100%; }
+}

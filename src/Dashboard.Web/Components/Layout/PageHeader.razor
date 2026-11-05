@@ -1,0 +1,41 @@
+@* PageHeader — page title row with count pill, actions, and tabs slot
+   (Style Refactor P1.2). The count pill reuses .ui-chip-count from the
+   chips section of components.css. *@
+<header>
+    @if (Breadcrumb is not null)
+    {
+        <nav class="ui-page-breadcrumb" aria-label="Breadcrumb">@Breadcrumb</nav>
+    }
+    <div class="ui-page-header">
+        <div>
+            <h1 class="ui-page-title">
+                @Title
+                @if (Count is not null)
+                {
+                    <span class="ui-chip-count">@Count</span>
+                }
+            </h1>
+            @if (Subtitle is not null)
+            {
+                <p class="ui-page-subtitle">@Subtitle</p>
+            }
+        </div>
+        @if (Actions is not null)
+        {
+            <div class="ui-page-actions">@Actions</div>
+        }
+    </div>
+    @if (Tabs is not null)
+    {
+        <div class="ui-page-tabs">@Tabs</div>
+    }
+</header>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public int? Count { get; set; }
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public RenderFragment? Breadcrumb { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+    [Parameter] public RenderFragment? Tabs { get; set; }
+}

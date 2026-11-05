@@ -1,0 +1,48 @@
+@* UiPanel — surfaced container with optional header/footer (Style Refactor
+   P1.2). Use Flush for a panel that wraps a TableShell (P1.3) so the table
+   doesn't get double padding. Don't nest panels more than one level. *@
+<div class="ui-panel @VariantClass">
+    @if (Title is not null || HeaderActions is not null)
+    {
+        <div class="ui-panel-header">
+            <div>
+                @if (Title is not null)
+                {
+                    <div class="ui-panel-title">@Title</div>
+                }
+                @if (Description is not null)
+                {
+                    <div class="ui-panel-description">@Description</div>
+                }
+            </div>
+            @if (HeaderActions is not null)
+            {
+                <div class="ui-panel-actions">@HeaderActions</div>
+            }
+        </div>
+    }
+    <div class="@(Flush ? "ui-panel-body-flush" : "ui-panel-body")">
+        @ChildContent
+    </div>
+    @if (Footer is not null)
+    {
+        <div class="ui-panel-footer">@Footer</div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public RenderFragment? HeaderActions { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public bool Flush { get; set; }
+    [Parameter] public string Variant { get; set; } = "default";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string VariantClass => Variant.ToLowerInvariant() switch
+    {
+        "inset" => "ui-panel-inset",
+        "interactive" => "ui-panel-interactive",
+        _ => "",
+    };
+}

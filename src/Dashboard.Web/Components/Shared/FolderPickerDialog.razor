@@ -1,51 +1,48 @@
 @using Dashboard.Core.Abstractions
 @inject IFilesystemBrowser Browser
 
-<div class="modal-overlay" @onclick="@Cancel">
-    <div class="modal-dialog-custom" style="max-width: 560px;" @onclick:stopPropagation="true">
-        <div class="d-flex align-items-center justify-content-between mb-3">
-            <div class="card-title mb-0">@Title</div>
-            <button type="button" class="modal-close-btn" @onclick="@Cancel" aria-label="Close">✕</button>
+@* Native <dialog> (Style Refactor D3) -- this picker is always opened from
+   inside another dialog (Server/AddModelDialog's "Browse…"), and the old
+   .modal-overlay div rendered BEHIND a native <dialog>'s top-layer backdrop,
+   making it invisible/unclickable once those dialogs moved to Dialog.razor. *@
+<Dialog Title="@Title" Size="sm" Open="true" OpenChanged="@(open => { if (!open) _ = Cancel(); })"
+        Footer="@(Browser.IsAvailable ? FooterActions : null)">
+    @if (!Browser.IsAvailable)
+    {
+        <Callout Tone="danger">
+            @Browser.RootPath isn't mounted into this container, so it can't be browsed here. Type the path manually instead.
+        </Callout>
+    }
+    else
+    {
+        <p class="text-muted small mb-2" style="word-break: break-all;">@_result?.CurrentPath</p>
+
+        <div style="max-height: 320px; overflow-y: auto; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); padding: 0.25rem;">
+            @if (_result?.CanGoUp == true)
+            {
+                <button type="button" class="ui-btn-link d-block text-start w-100" @onclick="@(() => Navigate(_result.ParentPath))">.. (up)</button>
+            }
+            @if (_result is { Subfolders.Count: 0 })
+            {
+                <p class="text-muted small p-2" style="margin:0;">No subfolders here.</p>
+            }
+            @if (_result is not null)
+            {
+                @foreach (var folder in _result.Subfolders)
+                {
+                    <button type="button" class="ui-btn-link d-block text-start w-100" @onclick="@(() => Navigate(folder.FullPath))">📁 @folder.Name</button>
+                }
+            }
         </div>
-
-        @if (!Browser.IsAvailable)
-        {
-            <div class="alert alert-danger py-2">
-                @Browser.RootPath isn't mounted into this container, so it can't be browsed here. Type the path manually instead.
-            </div>
-            <button type="button" class="btn btn-secondary btn-sm" @onclick="@Cancel">Close</button>
-        }
-        else
-        {
-            <div class="text-muted small mb-2" style="word-break: break-all;">@_result?.CurrentPath</div>
-
-            <div style="max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.25rem;">
-                @if (_result?.CanGoUp == true)
-                {
-                    <button type="button" class="ui-btn-link d-block text-start w-100" @onclick="@(() => Navigate(_result.ParentPath))">.. (up)</button>
-                }
-                @if (_result is { Subfolders.Count: 0 })
-                {
-                    <div class="text-muted small p-2">No subfolders here.</div>
-                }
-                @if (_result is not null)
-                {
-                    @foreach (var folder in _result.Subfolders)
-                    {
-                        <button type="button" class="ui-btn-link d-block text-start w-100" @onclick="@(() => Navigate(folder.FullPath))">📁 @folder.Name</button>
-                    }
-                }
-            </div>
-
-            <div class="mt-3">
-                <button type="button" class="btn btn-primary btn-sm" @onclick="@SelectCurrentAsync">Select this folder</button>
-                <button type="button" class="btn btn-secondary btn-sm" @onclick="@Cancel">Cancel</button>
-            </div>
-        }
-    </div>
-</div>
+    }
+</Dialog>
 
 @code {
+    private RenderFragment FooterActions => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="Cancel">Cancel</UiButton>
+        <UiButton Variant="primary" Size="sm" OnClick="SelectCurrentAsync">Select this folder</UiButton>
+    </text>;
+
     /// <summary>Reusable navigable folder picker (vs. a free-text path field) --
     /// first used by the Server modal's ModelsDir and AddModelDialog's local weights
     /// path, backed by whatever IFilesystemBrowser has mounted (MODELS_BROWSE_ROOT).</summary>

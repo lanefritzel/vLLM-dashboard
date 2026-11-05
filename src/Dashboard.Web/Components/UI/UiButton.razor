@@ -1,0 +1,45 @@
+@* UiButton — primary/secondary/ghost/danger/link action button (Style Refactor P1.2).
+   Icon-only usage (no ChildContent) needs an explicit aria-label via AdditionalAttributes. *@
+<button type="@Type"
+        class="@($"ui-btn ui-btn-{Variant.ToLowerInvariant()}{SizeClass}")"
+        disabled="@(Disabled || Loading)"
+        aria-busy="@(Loading ? "true" : null)"
+        @onclick="OnClick"
+        @attributes="AdditionalAttributes">
+    @if (Loading)
+    {
+        <span class="ui-spinner" aria-hidden="true"></span>
+    }
+    else if (Icon is not null)
+    {
+        @Icon
+    }
+    @if (ChildContent is not null)
+    {
+        <span>@ChildContent</span>
+    }
+    @if (!Loading && IconAfter is not null)
+    {
+        @IconAfter
+    }
+</button>
+
+@code {
+    [Parameter] public string Variant { get; set; } = "secondary";
+    [Parameter] public string Size { get; set; } = "md";
+    [Parameter] public RenderFragment? Icon { get; set; }
+    [Parameter] public RenderFragment? IconAfter { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string Type { get; set; } = "button";
+    [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; } = new();
+
+    private string SizeClass => Size.ToLowerInvariant() switch
+    {
+        "sm" => " ui-btn-sm",
+        "lg" => " ui-btn-lg",
+        _ => "",
+    };
+}

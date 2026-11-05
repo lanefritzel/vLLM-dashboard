@@ -107,6 +107,9 @@ builder.Services.AddHttpClient("proxy", c => c.Timeout = Timeout.InfiniteTimeSpa
 // dialog (if any) is its own, never shared across users.
 builder.Services.AddScoped<Dashboard.Web.Components.Shared.IDialogService, Dashboard.Web.Components.Shared.DialogService>();
 
+// Transient toast notifications — scoped for the same reason as IDialogService.
+builder.Services.AddScoped<Dashboard.Web.Components.Shared.IToastService, Dashboard.Web.Components.Shared.ToastService>();
+
 // Singletons (no DB scope captured).
 builder.Services.AddSingleton<IConfigStore, ConfigStore>();
 builder.Services.AddSingleton<ISampleStore, SampleStore>();

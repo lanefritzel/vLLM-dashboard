@@ -21,87 +21,79 @@
 }
 else if (_instance is null)
 {
-    <div class="card"><div class="card-body">
-        <p class="text-muted mb-0">No instance configured yet.</p>
-    </div></div>
+    <UiPanel><EmptyState Variant="no-instance" Description="Register one on the Servers page." /></UiPanel>
 }
 else
 {
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger py-2">@_error</div>
+        <Callout Tone="danger">@_error</Callout>
     }
 
-    <div class="card mb-3">
-        <div class="card-body">
-            <div class="row g-2 align-items-end">
-                <div class="col-md-3">
-                    <label class="form-label">Status</label>
-                    <select class="form-select" @bind="_statusFilter">
-                        <option value="all">All</option>
-                        <option value="active">Active</option>
-                        <option value="failed">Failed</option>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Search (model/recipe name)</label>
-                    <input class="form-control" @bind="_nameSearch" @bind:event="oninput" placeholder="Filter by name…" />
-                </div>
-            </div>
-        </div>
-    </div>
+    <Toolbar Attached="true">
+        <Filters>
+            <SegmentedControl Items="_statusFilterItems" Value="_statusFilter" ValueChanged="@(v => _statusFilter = v)" />
+        </Filters>
+        <Search>
+            <UiInput Id="deploy-search" Value="@_nameSearch" ValueChanged="@(v => _nameSearch = v)" Placeholder="Filter by model/recipe name…" />
+        </Search>
+    </Toolbar>
 
-    <div class="card">
-        <div class="card-body">
-            <table class="table table-sm">
-                <thead><tr><th>#</th><th>Recipe</th><th>Model</th><th>Status</th><th>Started</th><th>Duration</th><th>Stopped by</th><th></th></tr></thead>
-                <tbody>
-                    @foreach (var d in Filtered())
-                    {
-                        var failed = d.Status is "failed" || d.FailureReason is not null;
-                        <tr class="@(failed ? "deployment-row-failed" : "")" @onclick="@(() => ToggleExpand(d.Id))" style="cursor:pointer;">
-                            <td>@d.Id</td>
-                            <td>@NameFor(d.RecipeId, _recipes)</td>
-                            <td>@NameFor(d.ModelId, _models)</td>
-                            <td>@d.Status</td>
-                            <td>@(d.StartedAt?.ToLocalTime().ToString("MMM d, HH:mm") ?? "—")</td>
-                            <td>@DurationText(d)</td>
-                            <td>@(d.StopReason ?? "—")</td>
-                            <td class="text-end">
-                                <button class="btn btn-outline btn-sm" @onclick="@(() => RedeployAsync(d.Id))" @onclick:stopPropagation="true">Redeploy this</button>
-                            </td>
-                        </tr>
-                        @if (_expandedId == d.Id)
-                        {
-                            <tr>
-                                <td colspan="8">
-                                    <div class="small">
-                                        <div><strong>args_snapshot:</strong> <code>@d.ArgsSnapshot</code></div>
-                                        @if (d.FailureReason is not null)
-                                        {
-                                            <div class="mt-1"><strong>Failure:</strong> @d.FailureReason (exit code @(d.ExitCode?.ToString() ?? "n/a"))</div>
-                                        }
-                                        @if (!string.IsNullOrEmpty(d.LogTail))
-                                        {
-                                            <details class="mt-1">
-                                                <summary style="cursor:pointer">Log tail</summary>
-                                                <pre class="small">@d.LogTail</pre>
-                                            </details>
-                                        }
-                                        <div class="mt-1"><a href="@("logs")">View full log on the Logs page →</a></div>
-                                    </div>
-                                </td>
-                            </tr>
-                        }
-                    }
-                    @if (Filtered().Count == 0)
-                    {
-                        <tr><td colspan="8" class="text-muted">No deployments match this filter.</td></tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <TableShell Caption="Deployments" ColumnCount="8" IsEmpty="@(Filtered().Count == 0)" EmptyTitle="No deployments match this filter">
+        <Header>
+            <th scope="col">#</th>
+            <th scope="col">Recipe</th>
+            <th scope="col">Model</th>
+            <th scope="col">Status</th>
+            <th scope="col">Started</th>
+            <th scope="col">Duration</th>
+            <th scope="col">Stopped by</th>
+            <th scope="col"></th>
+        </Header>
+        <ChildContent>
+            @foreach (var d in Filtered())
+            {
+                <tr>
+                    <td>@d.Id</td>
+                    <td>@NameFor(d.RecipeId, _recipes)</td>
+                    <td>@NameFor(d.ModelId, _models)</td>
+                    <td><StatusPill Status="@d.Status" Size="sm" /></td>
+                    <td>@(d.StartedAt?.ToLocalTime().ToString("MMM d, HH:mm") ?? "—")</td>
+                    <td>@DurationText(d)</td>
+                    <td>@(d.StopReason ?? "—")</td>
+                    <td>
+                        <span class="ui-row-actions">
+                            <UiButton Variant="ghost" Size="sm" OnClick="@(() => RedeployAsync(d.Id))">Redeploy this</UiButton>
+                            <button type="button" class="ui-row-expand-btn" aria-expanded="@(_expandedId == d.Id ? "true" : "false")" aria-label="Toggle details" @onclick="@(() => ToggleExpand(d.Id))">
+                                <Icon Name="chevron-right" Size="14" />
+                            </button>
+                        </span>
+                    </td>
+                </tr>
+                @if (_expandedId == d.Id)
+                {
+                    <tr class="ui-row-detail">
+                        <td colspan="8">
+                            <CodeBlock Language="args_snapshot" Code="@d.ArgsSnapshot" />
+                            @if (d.FailureReason is not null)
+                            {
+                                <div style="margin-top: var(--ui-space-2);">
+                                    <Callout Tone="danger">Failure: @d.FailureReason (exit code @(d.ExitCode?.ToString() ?? "n/a"))</Callout>
+                                </div>
+                            }
+                            @if (!string.IsNullOrEmpty(d.LogTail))
+                            {
+                                <div style="margin-top: var(--ui-space-2);">
+                                    <CodeBlock Language="log tail" Code="@d.LogTail" />
+                                </div>
+                            }
+                            <p style="margin: var(--ui-space-2) 0 0;"><a href="@("logs")">View full log on the Logs page →</a></p>
+                        </td>
+                    </tr>
+                }
+            }
+        </ChildContent>
+    </TableShell>
 }
 
 @code {
@@ -116,6 +108,9 @@ else
     private string _statusFilter = "all";
     private string _nameSearch = "";
     private int? _expandedId;
+
+    private readonly IReadOnlyList<(string Key, string Label)> _statusFilterItems =
+        [("all", "All"), ("active", "Active"), ("failed", "Failed")];
 
     protected override async Task OnInitializedAsync()
     {

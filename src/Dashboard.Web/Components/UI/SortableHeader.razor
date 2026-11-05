@@ -1,0 +1,20 @@
+@* SortableHeader — <th> with a sort toggle button (Style Refactor P1.3).
+   aria-sort lives on the <th> itself so screen readers get the column's
+   current order; the button makes it keyboard-activatable. *@
+<th scope="col" aria-sort="@(Direction ?? "none")" class="@(Numeric ? "num" : "")">
+    <button type="button" class="ui-sort" @onclick="HandleClick">
+        @Label
+        <span class="ui-sort-icon">
+            <Icon Name="chevron-down" Size="16" />
+        </span>
+    </button>
+</th>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public string? Direction { get; set; }
+    [Parameter] public bool Numeric { get; set; }
+    [Parameter] public EventCallback OnSort { get; set; }
+
+    private Task HandleClick() => OnSort.InvokeAsync();
+}
