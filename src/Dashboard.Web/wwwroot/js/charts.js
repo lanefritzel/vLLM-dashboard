@@ -66,6 +66,21 @@
     return el ? el.getContext('2d') : null;
   }
 
+  // Per-chart hidden-series state, persisted per browser so a legend click
+  // (e.g. hiding "prompt" on the throughput chart) survives a page reload.
+  function hiddenStorageKey(id) { return 'ui_chart_hidden:' + id; }
+
+  function loadHiddenKeys(id) {
+    try {
+      var raw = localStorage.getItem(hiddenStorageKey(id));
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) { return []; }
+  }
+
+  function saveHiddenKeys(id, keys) {
+    try { localStorage.setItem(hiddenStorageKey(id), JSON.stringify(keys)); } catch (e) { /* storage unavailable */ }
+  }
+
   // Create a line chart. `series` = [{key,label,color}]; `opts` = {yMin,yMax,
   // beginAtZero,xGrid,yTicksLimit,sparkline}. `sparkline: true` hides axes
   // and the legend for a StatCard-sized mini chart (Style Refactor D2) --
@@ -79,7 +94,7 @@
     if (!c) return false;
     if (charts[id]) { try { charts[id].destroy(); } catch (e) {} delete charts[id]; }
     var pal = colors();
-    var hiddenKeys = (opts && opts.hidden) || [];
+    var hiddenKeys = (opts && opts.hidden) || loadHiddenKeys(id);
     var singleSeries = series.length === 1;
     var datasets = series.map(function (s) {
       var col = resolveColor(s.color) || pal.accent;
@@ -119,7 +134,28 @@
           }, y)
         },
         plugins: {
-          legend: { display: !sparkline, labels: { color: pal.text, boxWidth: 12 } },
+          legend: {
+            display: !sparkline,
+            labels: { color: pal.text, boxWidth: 12 },
+            // Same toggle Chart.js does by default -- reimplemented so the
+            // resulting hidden-series set can be persisted per browser.
+            onClick: function (e, legendItem, legend) {
+              var ci = legend.chart;
+              var index = legendItem.datasetIndex;
+              if (ci.isDatasetVisible(index)) {
+                ci.hide(index);
+                legendItem.hidden = true;
+              } else {
+                ci.show(index);
+                legendItem.hidden = false;
+              }
+              var hiddenNow = ci.data.datasets
+                .map(function (d, i) { return { key: d.key, visible: ci.isDatasetVisible(i) }; })
+                .filter(function (x) { return !x.visible; })
+                .map(function (x) { return x.key; });
+              saveHiddenKeys(id, hiddenNow);
+            }
+          },
           tooltip: tooltipTheme(pal)
         }
       }
