@@ -39,11 +39,10 @@ public sealed class SwapService : ISwapService
     private readonly IServerService _servers;
     private readonly IDeploymentService _deployments;
     private readonly ISupervisorClient _supervisorClient;
-    private readonly ISupervisorTokenProvider _tokenProvider;
 
     public SwapService(
         IInstanceService instances, IModelService models, IRecipeService recipes, IServerService servers,
-        IDeploymentService deployments, ISupervisorClient supervisorClient, ISupervisorTokenProvider tokenProvider)
+        IDeploymentService deployments, ISupervisorClient supervisorClient)
     {
         _instances = instances;
         _models = models;
@@ -51,14 +50,12 @@ public sealed class SwapService : ISwapService
         _servers = servers;
         _deployments = deployments;
         _supervisorClient = supervisorClient;
-        _tokenProvider = tokenProvider;
     }
 
     public async Task<SwapResult> SwapAsync(
         int instanceId, int modelId, int recipeId, bool acknowledgeServedNameChange = false, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = await RequireTokenAsync(instanceId, ct);
         var model = await _models.GetAsync(modelId, ct) ?? throw new KeyNotFoundException($"No model with id {modelId}.");
         var recipe = await _recipes.GetAsync(recipeId, ct) ?? throw new KeyNotFoundException($"No recipe with id {recipeId}.");
         var server = await _servers.GetAsync(recipe.ServerId, ct) ?? throw new KeyNotFoundException($"No server with id {recipe.ServerId}.");
@@ -104,13 +101,12 @@ public sealed class SwapService : ISwapService
         }, ct);
 
         // 4 - ask the supervisor. The outcome arrives later via push/catch-up.
-        return await DeployAsync(instance, token, deployment.Id, built.Argv, built.Env, ct);
+        return await DeployAsync(instance, deployment.Id, built.Argv, built.Env, ct);
     }
 
     public async Task<SwapResult> RollbackAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = await RequireTokenAsync(instanceId, ct);
         var active = await _deployments.GetActiveAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to roll back on this instance -- no active deployment.");
 
@@ -136,7 +132,7 @@ public sealed class SwapService : ISwapService
             ArgsSnapshot = previous.ArgsSnapshot, Status = "pending", PendingStopReason = "rollback",
         }, ct);
 
-        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct);
+        return await DeployAsync(instance, deployment.Id, argv, env: null, ct);
     }
 
     public async Task<SwapResult> RedeployAsync(int deploymentId, CancellationToken ct = default)
@@ -144,7 +140,6 @@ public sealed class SwapService : ISwapService
         var source = await _deployments.GetAsync(deploymentId, ct)
             ?? throw new KeyNotFoundException($"No deployment with id {deploymentId}.");
         var instance = await RequireInstanceAsync(source.InstanceId, ct);
-        var token = await RequireTokenAsync(source.InstanceId, ct);
 
         var argv = JsonSerializer.Deserialize<List<string>>(source.ArgsSnapshot)
             ?? throw new InvalidOperationException($"Deployment {source.Id}'s args_snapshot could not be read.");
@@ -155,14 +150,13 @@ public sealed class SwapService : ISwapService
             ArgsSnapshot = source.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
-        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct);
+        return await DeployAsync(instance, deployment.Id, argv, env: null, ct);
     }
 
     public async Task<SupervisorStopResult> StopAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = await RequireTokenAsync(instanceId, ct);
-        var result = await _supervisorClient.StopAsync(instance.AdminUrl!, token, ct);
+        var result = await _supervisorClient.StopAsync(instance.AdminUrl!, ct);
 
         var now = DateTime.UtcNow;
         var active = await _deployments.GetActiveAsync(instanceId, ct);
@@ -178,11 +172,10 @@ public sealed class SwapService : ISwapService
     public async Task<SwapResult> CancelAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = await RequireTokenAsync(instanceId, ct);
         var pending = await _deployments.GetPendingAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to cancel on this instance -- no deploy in flight.");
 
-        var result = await _supervisorClient.CancelAsync(instance.AdminUrl!, token, pending.Id.ToString(), ct);
+        var result = await _supervisorClient.CancelAsync(instance.AdminUrl!, pending.Id.ToString(), ct);
 
         var now = DateTime.UtcNow;
         await _deployments.TransitionAsync(pending.Id, status: "stopped", stopReason: "cancelled", stoppedAt: now, ct: ct);
@@ -206,7 +199,6 @@ public sealed class SwapService : ISwapService
     public async Task<SwapResult> RestartAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = await RequireTokenAsync(instanceId, ct);
         var active = await _deployments.GetActiveAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to restart on this instance -- no active deployment.");
 
@@ -219,13 +211,12 @@ public sealed class SwapService : ISwapService
             ArgsSnapshot = active.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
-        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct, restart: true);
+        return await DeployAsync(instance, deployment.Id, argv, env: null, ct, restart: true);
     }
 
     public async Task<SwapResult> ForceRedeployAsync(int instanceId, CancellationToken ct = default)
     {
         var instance = await RequireInstanceAsync(instanceId, ct);
-        var token = await RequireTokenAsync(instanceId, ct);
         var active = await _deployments.GetActiveAsync(instanceId, ct)
             ?? throw new InvalidOperationException("Nothing to fix on this instance -- no active deployment recorded.");
 
@@ -243,23 +234,23 @@ public sealed class SwapService : ISwapService
             ArgsSnapshot = active.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
-        return await DeployAsync(instance, token, deployment.Id, argv, env: null, ct);
+        return await DeployAsync(instance, deployment.Id, argv, env: null, ct);
     }
 
     /// <summary>Step 4 shared by Swap/Rollback/Restart: ask the supervisor,
     /// and return "pending" immediately -- the event applier (push, falling
     /// back to catch-up) resolves the actual outcome asynchronously (P10b).</summary>
     private async Task<SwapResult> DeployAsync(
-        Instance instance, string token, int deploymentId, IReadOnlyList<string> argv,
+        Instance instance, int deploymentId, IReadOnlyList<string> argv,
         IReadOnlyDictionary<string, string>? env, CancellationToken ct, bool restart = false)
     {
         try
         {
             if (restart)
-                await _supervisorClient.RestartAsync(instance.AdminUrl!, token, deploymentId.ToString(), ct);
+                await _supervisorClient.RestartAsync(instance.AdminUrl!, deploymentId.ToString(), ct);
             else
                 await _supervisorClient.DeployAsync(
-                    instance.AdminUrl!, token, argv, env, deploymentId.ToString(), DefaultHealthTimeout.TotalSeconds, smoke: null, ct: ct);
+                    instance.AdminUrl!, argv, env, deploymentId.ToString(), DefaultHealthTimeout.TotalSeconds, smoke: null, ct: ct);
         }
         catch (Exception)
         {
@@ -278,7 +269,4 @@ public sealed class SwapService : ISwapService
         return instance;
     }
 
-    private async Task<string> RequireTokenAsync(int instanceId, CancellationToken ct) =>
-        await _tokenProvider.GetTokenAsync(instanceId, ct)
-            ?? throw new InvalidOperationException($"No supervisor token is configured for instance {instanceId}.");
 }

@@ -1,13 +1,14 @@
-"""The admin API (P02 + P03a). GET /admin/health needs no token -- every
-other /admin/* route requires `Authorization: Bearer <SUPERVISOR_TOKEN>`
-(doc 5); missing/wrong gets 401. Never served on the vLLM port.
+"""The admin API (P02 + P03a). No token/auth of any kind -- the server this
+binds to (supervisor.py) only ever listens on 127.0.0.1, so this is never
+reachable from anywhere but the same host the dashboard itself runs on.
+Never served on the vLLM port.
 """
 from __future__ import annotations
 
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .deploy_runner import DeployInProgressError, DeployRunner, NoDeployInProgressError, NotServingError
@@ -46,21 +47,10 @@ class StartDownloadRequest(BaseModel):
     filename: Optional[str] = None
 
 
-def _require_token(token: Optional[str]):
-    async def dependency(request: Request) -> None:
-        expected = f"Bearer {token}" if token else None
-        actual = request.headers.get("Authorization")
-        if not expected or actual != expected:
-            raise HTTPException(status_code=401, detail="missing or invalid bearer token")
-
-    return dependency
-
-
 def create_app(
     process_manager: ProcessManager,
     deploy_runner: DeployRunner,
     state_store: StateStore,
-    supervisor_token: Optional[str],
     download_manager: Optional[DownloadManager] = None,
 ) -> FastAPI:
     # Optional so every existing caller/test that doesn't care about
@@ -70,7 +60,7 @@ def create_app(
     # properly-configured instance explicitly).
     download_manager = download_manager or DownloadManager(HfClient())
     app = FastAPI()
-    admin = APIRouter(dependencies=[Depends(_require_token(supervisor_token))])
+    admin = APIRouter()
 
     @app.get("/admin/health")
     def health() -> dict:

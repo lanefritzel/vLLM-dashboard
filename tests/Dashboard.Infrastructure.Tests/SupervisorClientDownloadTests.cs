@@ -72,7 +72,7 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
         var adminUrl = await StartFakeAdminAsync();
         var client = NewClient();
 
-        var result = await client.InspectDownloadAsync(adminUrl, "unused-token", "org/repo");
+        var result = await client.InspectDownloadAsync(adminUrl, "org/repo");
 
         Assert.Equal(2, result.Files.Count);
         Assert.Equal(123456, result.Files[0].Size);
@@ -86,7 +86,7 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
         var adminUrl = await StartFakeAdminAsync();
         var client = NewClient();
 
-        var downloadId = await client.StartDownloadAsync(adminUrl, "unused-token", "org/repo", "my-model");
+        var downloadId = await client.StartDownloadAsync(adminUrl, "org/repo", "my-model");
 
         Assert.Equal("dl-1", downloadId);
     }
@@ -97,7 +97,7 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
         var adminUrl = await StartFakeAdminAsync();
         var client = NewClient();
 
-        var status = await client.GetDownloadAsync(adminUrl, "unused-token", "dl-1");
+        var status = await client.GetDownloadAsync(adminUrl, "dl-1");
 
         Assert.Equal("done", status.Status);
         Assert.Equal(100.0, status.ProgressPct);
@@ -112,6 +112,6 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
         var adminUrl = await StartFakeAdminAsync();
         var client = NewClient();
 
-        await client.CancelDownloadAsync(adminUrl, "unused-token", "dl-1");
+        await client.CancelDownloadAsync(adminUrl, "dl-1");
     }
 }

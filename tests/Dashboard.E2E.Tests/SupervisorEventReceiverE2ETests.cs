@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Text;
 using Dashboard.Infrastructure.Persistence.V2;
 using Microsoft.EntityFrameworkCore;
@@ -24,7 +23,7 @@ public class SupervisorEventReceiverE2ETests
 
     public SupervisorEventReceiverE2ETests(DashboardAppFixture fixture) => _fixture = fixture;
 
-    private async Task<(Instance Instance, Deployment Deployment)> SeedAsync(string token)
+    private async Task<(Instance Instance, Deployment Deployment)> SeedAsync()
     {
         using var db = _fixture.NewDbContext();
         await db.DeploymentsV2.ExecuteDeleteAsync();
@@ -40,7 +39,7 @@ public class SupervisorEventReceiverE2ETests
         var instance = new Instance
         {
             ServerId = server.Id, Label = "primary", ProxySlug = $"slug-{Guid.NewGuid():N}",
-            AdminUrl = "http://127.0.0.1:1", AdminTokenEnc = _fixture.EncryptTokenForApp(token),
+            AdminUrl = "http://127.0.0.1:1",
         };
         db.InstancesV2.Add(instance);
 
@@ -67,11 +66,9 @@ public class SupervisorEventReceiverE2ETests
     [Fact]
     public async Task StatePush_WithTheSupervisorsRealSnakeCaseWireShape_Returns200AndApplies()
     {
-        const string token = "e2e-receiver-token";
-        var (_, deployment) = await SeedAsync(token);
+        var (_, deployment) = await SeedAsync();
 
         using var client = new HttpClient { BaseAddress = new Uri(_fixture.BaseUrl) };
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         // Deliberately a raw string literal, not a C# object serialized through
         // any .NET JSON options -- this is exactly the bytes the real Python
@@ -93,11 +90,9 @@ public class SupervisorEventReceiverE2ETests
     [Fact]
     public async Task LogPush_WithTheSupervisorsRealSnakeCaseWireShape_Returns200()
     {
-        const string token = "e2e-receiver-token-2";
-        var (_, deployment) = await SeedAsync(token);
+        var (_, deployment) = await SeedAsync();
 
         using var client = new HttpClient { BaseAddress = new Uri(_fixture.BaseUrl) };
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var json = $$"""
             {"deployment_id": "{{deployment.Id}}", "seq": 1, "ts": 1700000000.0, "kind": "log", "lines": ["hello from vllm"]}

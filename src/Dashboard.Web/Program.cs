@@ -131,7 +131,6 @@ builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IInstanceS
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IModelService, Dashboard.Infrastructure.Persistence.V2.ModelService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IRecipeService, Dashboard.Infrastructure.Persistence.V2.RecipeService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IDeploymentService, Dashboard.Infrastructure.Persistence.V2.DeploymentService>();
-builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorTokenProvider, Dashboard.Infrastructure.Persistence.V2.InstanceTokenProvider>();
 
 // Swap orchestration (P10a).
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorClient, Dashboard.Infrastructure.Supervisor.SupervisorClient>();
@@ -147,6 +146,7 @@ builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.BootReconc
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IBootReconciler>(sp => sp.GetRequiredService<Dashboard.Infrastructure.Persistence.V2.BootReconciler>());
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IReconcileActions>(sp => sp.GetRequiredService<Dashboard.Infrastructure.Persistence.V2.BootReconciler>());
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IMinimalDockerClient, Dashboard.Infrastructure.Docker.MinimalDockerClient>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IFilesystemBrowser, Dashboard.Infrastructure.Filesystem.LocalFilesystemBrowser>();
 
 // First-run onboarding checklist (P15b).
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IOnboardingService, Dashboard.Infrastructure.Persistence.V2.OnboardingService>();
@@ -199,18 +199,19 @@ app.MapHub<MetricsHub>("/metrics-hub").RequireAuthorization();
 app.MapHub<Dashboard.Infrastructure.Proxy.TrafficHub>("/traffic-hub").RequireAuthorization();
 app.MapHub<Dashboard.Infrastructure.Events.DeploymentHub>("/deployment-hub").RequireAuthorization();
 
-// Supervisor event receiver (P10b) -- machine-to-machine, bearer-token
-// authenticated, NOT under /proxy and NOT the cookie login (doc 5): it's
-// reachable on the published port, so the per-instance token check (not
-// RequireAuthorization, which is the dashboard's own cookie auth) is the
-// only protection.
+// Supervisor event receiver (P10b) -- machine-to-machine, NOT under /proxy
+// and NOT the cookie login (doc 5): it's reachable on the published port
+// (unlike the supervisor's own admin API, which only binds 127.0.0.1), so it
+// still needs a check -- loopback-only, not RequireAuthorization (the
+// dashboard's own cookie auth), since the only caller is ever the supervisor
+// running alongside this same host.
 app.MapPost("/internal/supervisor-events", async (
     HttpContext context,
     Dashboard.Core.Supervisor.SupervisorPushEvent evt,
     Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiver receiver) =>
 {
-    var authHeader = context.Request.Headers.Authorization.ToString();
-    var result = await receiver.HandleAsync(evt, authHeader, context.RequestAborted);
+    var isLoopback = System.Net.IPAddress.IsLoopback(context.Connection.RemoteIpAddress ?? System.Net.IPAddress.None);
+    var result = await receiver.HandleAsync(evt, isLoopback, context.RequestAborted);
     return result switch
     {
         Dashboard.Infrastructure.Persistence.V2.SupervisorEventReceiverResult.Ok => Results.Ok(),

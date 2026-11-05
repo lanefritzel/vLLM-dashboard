@@ -1,0 +1,74 @@
+@using Dashboard.Core.Abstractions
+@inject IFilesystemBrowser Browser
+
+<div class="modal-overlay" @onclick="@Cancel">
+    <div class="modal-dialog-custom" style="max-width: 560px;" @onclick:stopPropagation="true">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <div class="card-title mb-0">@Title</div>
+            <button type="button" class="modal-close-btn" @onclick="@Cancel" aria-label="Close">✕</button>
+        </div>
+
+        @if (!Browser.IsAvailable)
+        {
+            <div class="alert alert-danger py-2">
+                @Browser.RootPath isn't mounted into this container, so it can't be browsed here. Type the path manually instead.
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" @onclick="@Cancel">Close</button>
+        }
+        else
+        {
+            <div class="text-muted small mb-2" style="word-break: break-all;">@_result?.CurrentPath</div>
+
+            <div style="max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.25rem;">
+                @if (_result?.CanGoUp == true)
+                {
+                    <button type="button" class="ui-btn-link d-block text-start w-100" @onclick="@(() => Navigate(_result.ParentPath))">.. (up)</button>
+                }
+                @if (_result is { Subfolders.Count: 0 })
+                {
+                    <div class="text-muted small p-2">No subfolders here.</div>
+                }
+                @if (_result is not null)
+                {
+                    @foreach (var folder in _result.Subfolders)
+                    {
+                        <button type="button" class="ui-btn-link d-block text-start w-100" @onclick="@(() => Navigate(folder.FullPath))">📁 @folder.Name</button>
+                    }
+                }
+            </div>
+
+            <div class="mt-3">
+                <button type="button" class="btn btn-primary btn-sm" @onclick="@SelectCurrentAsync">Select this folder</button>
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="@Cancel">Cancel</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Reusable navigable folder picker (vs. a free-text path field) --
+    /// first used by the Server modal's ModelsDir and AddModelDialog's local weights
+    /// path, backed by whatever IFilesystemBrowser has mounted (MODELS_BROWSE_ROOT).</summary>
+    [Parameter] public string Title { get; set; } = "Choose a folder";
+    [Parameter] public string? StartPath { get; set; }
+    [Parameter] public EventCallback<string> OnSelected { get; set; }
+    [Parameter] public EventCallback OnCancelled { get; set; }
+
+    private FolderBrowseResult? _result;
+
+    protected override void OnInitialized()
+    {
+        if (Browser.IsAvailable)
+            _result = Browser.ListFolders(StartPath);
+    }
+
+    private void Navigate(string? path) => _result = Browser.ListFolders(path);
+
+    private async Task SelectCurrentAsync()
+    {
+        if (_result is null) return;
+        await OnSelected.InvokeAsync(_result.CurrentPath);
+    }
+
+    private async Task Cancel() => await OnCancelled.InvokeAsync();
+}

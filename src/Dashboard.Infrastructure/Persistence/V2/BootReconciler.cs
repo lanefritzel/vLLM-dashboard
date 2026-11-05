@@ -16,17 +16,15 @@ public sealed class BootReconciler : IBootReconciler, IReconcileActions
     private readonly IInstanceService _instances;
     private readonly IDeploymentService _deployments;
     private readonly ISupervisorClient _supervisorClient;
-    private readonly ISupervisorTokenProvider _tokenProvider;
 
     public BootReconciler(
         IServerService servers, IInstanceService instances, IDeploymentService deployments,
-        ISupervisorClient supervisorClient, ISupervisorTokenProvider tokenProvider)
+        ISupervisorClient supervisorClient)
     {
         _servers = servers;
         _instances = instances;
         _deployments = deployments;
         _supervisorClient = supervisorClient;
-        _tokenProvider = tokenProvider;
     }
 
     public async Task<IReadOnlyList<ReconcileState>> ReconcileAllAsync(CancellationToken ct = default)
@@ -61,15 +59,12 @@ public sealed class BootReconciler : IBootReconciler, IReconcileActions
             };
         }
 
-        var token = await _tokenProvider.GetTokenAsync(instanceId, ct);
         var dbActive = await _deployments.GetActiveAsync(instanceId, ct);
 
         SupervisorStatus status;
         try
         {
-            if (token is null)
-                throw new InvalidOperationException($"No supervisor token is configured for instance {instanceId}.");
-            status = await _supervisorClient.GetStatusAsync(instance.AdminUrl, token, ct);
+            status = await _supervisorClient.GetStatusAsync(instance.AdminUrl, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

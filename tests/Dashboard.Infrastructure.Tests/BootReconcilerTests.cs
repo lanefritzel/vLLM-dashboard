@@ -33,11 +33,6 @@ public class BootReconcilerTests : IAsyncDisposable
             await _container.DisposeAsync();
     }
 
-    private sealed class FixedTokenProvider : ISupervisorTokenProvider
-    {
-        public Task<string?> GetTokenAsync(int instanceId, CancellationToken ct = default) => Task.FromResult<string?>(SupervisorImageFixture.Token);
-    }
-
     private async Task<(IBootReconciler Reconciler, IReconcileActions Actions, ISwapService Swap, IDeploymentEventApplier Applier, IServiceScopeFactory ScopeFactory, string AdminUrl)>
         NewReconcilerAsync()
     {
@@ -49,7 +44,6 @@ public class BootReconcilerTests : IAsyncDisposable
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
         services.AddHttpClient("supervisor");
         services.AddSignalR();
-        services.AddSingleton<ISupervisorTokenProvider, FixedTokenProvider>();
         services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
         services.AddSingleton<IServerService, ServerService>();
         services.AddSingleton<IInstanceService, InstanceService>();
@@ -111,12 +105,12 @@ public class BootReconcilerTests : IAsyncDisposable
     }
 
     private static async Task<Deployment> DriveToTerminalAsync(
-        IServiceScopeFactory scopeFactory, IDeploymentEventApplier applier, string adminUrl, string token, int deploymentId)
+        IServiceScopeFactory scopeFactory, IDeploymentEventApplier applier, string adminUrl, int deploymentId)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
-            await applier.CatchUpAsync(deploymentId, adminUrl, token, CancellationToken.None);
+            await applier.CatchUpAsync(deploymentId, adminUrl, CancellationToken.None);
             var deployment = await GetAsync(scopeFactory, deploymentId);
             if (deployment!.Status != "pending")
                 return deployment;
@@ -133,7 +127,7 @@ public class BootReconcilerTests : IAsyncDisposable
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
 
         var swapped = await swap.SwapAsync(instance.Id, model.Id, recipe.Id);
-        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, swapped.DeploymentId!.Value);
+        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, swapped.DeploymentId!.Value);
 
         var state = await reconciler.ReconcileInstanceAsync(instance.Id);
         Assert.Equal(ReconcileStatus.Ok, state.Status);
@@ -169,7 +163,7 @@ public class BootReconcilerTests : IAsyncDisposable
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
 
         var swapped = await swap.SwapAsync(instance.Id, model.Id, recipe.Id);
-        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, swapped.DeploymentId!.Value);
+        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, swapped.DeploymentId!.Value);
 
         // Stop the supervisor directly (bypassing SwapService) so the DB's
         // own "active" row is left stale -- exactly the scenario the page
@@ -209,7 +203,7 @@ public class BootReconcilerTests : IAsyncDisposable
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
 
         var swapped = await swap.SwapAsync(instance.Id, model.Id, recipe.Id);
-        var row = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, swapped.DeploymentId!.Value);
+        var row = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, swapped.DeploymentId!.Value);
         Assert.Equal("active", row.Status);
 
         // Simulate the DB having lost track entirely -- stale-forget the row
@@ -247,7 +241,7 @@ public class BootReconcilerTests : IAsyncDisposable
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
 
         var first = await swap.SwapAsync(instance.Id, modelA.Id, recipe.Id);
-        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, first.DeploymentId!.Value);
+        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, first.DeploymentId!.Value);
         Assert.Equal("active", firstRow.Status);
 
         // Give the DB a DIFFERENT "active" row with a DIFFERENT argv (never
@@ -288,7 +282,7 @@ public class BootReconcilerTests : IAsyncDisposable
 
         var fixResult = await swap.ForceRedeployAsync(instance.Id);
         Assert.Equal("pending", fixResult.Outcome);
-        var fixedRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, fixResult.DeploymentId!.Value);
+        var fixedRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, fixResult.DeploymentId!.Value);
         Assert.Equal("active", fixedRow.Status);
 
         var fixedState = await reconciler.ReconcileInstanceAsync(instance.Id);

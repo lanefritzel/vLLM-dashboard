@@ -45,7 +45,7 @@ public class ServersPageE2ETests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task TestConnection_WrongToken_ShowsClearError_RightToken_ShowsSummary_AndSavingEnablesSwap()
+    public async Task TestConnection_ShowsSummary_AndSavingEnablesSwap()
     {
         await WipeV2TablesAsync();
         _container = await _supervisorImage.StartContainerAsync();
@@ -64,13 +64,15 @@ public class ServersPageE2ETests : IAsyncDisposable
         var instanceDialog = page.Locator(".modal-dialog-custom");
         await instanceDialog.Locator("label:has-text('Label') + input").FillAsync("primary");
         await instanceDialog.Locator("label:has-text('Proxy slug') + input").FillAsync("slug-" + Guid.NewGuid().ToString("n"));
-        await instanceDialog.Locator("label:has-text('Supervisor URL') + input").FillAsync(adminUrl);
-        await instanceDialog.Locator("label:has-text('Token') + input").FillAsync("the-wrong-token");
+        var adminUrlInput = instanceDialog.Locator("label:has-text('Supervisor URL') + input");
+        await adminUrlInput.FillAsync(adminUrl);
+        // Blazor's @bind commits on blur (onchange) -- the Supervisor URL field is
+        // the one whose value enables "Test connection", so without an explicit
+        // blur here nothing ever un-disables that button for Playwright's click to
+        // land on (a disabled target can't itself receive the focus-stealing
+        // mousedown that would blur the previous field).
+        await adminUrlInput.PressAsync("Tab");
 
-        await instanceDialog.Locator("button:has-text('Test connection')").ClickAsync();
-        await instanceDialog.Locator(".alert-danger:has-text('wrong token')").WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
-
-        await instanceDialog.Locator("label:has-text('Token') + input").FillAsync(SupervisorImageFixture.Token);
         await instanceDialog.Locator("button:has-text('Test connection')").ClickAsync();
         await instanceDialog.Locator(".alert-success:has-text('Connected')").WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
 
@@ -97,7 +99,7 @@ public class ServersPageE2ETests : IAsyncDisposable
             db.InstancesV2.Add(new Instance
             {
                 ServerId = server.Id, Label = "primary", ProxySlug = $"slug-{Guid.NewGuid():N}",
-                AdminUrl = adminUrl, AdminTokenEnc = _fixture.EncryptTokenForApp(SupervisorImageFixture.Token),
+                AdminUrl = adminUrl,
             });
             await db.SaveChangesAsync();
         }
@@ -186,40 +188,5 @@ public class ServersPageE2ETests : IAsyncDisposable
 
         await page.ReloadAsync(new PageReloadOptions { WaitUntil = WaitUntilState.NetworkIdle });
         Assert.Equal(0, await page.Locator("text=Get started").CountAsync());
-    }
-
-    [Fact]
-    public async Task TheToken_IsNotVisibleInThePageSource_AfterSaving()
-    {
-        await WipeV2TablesAsync();
-        _container = await _supervisorImage.StartContainerAsync();
-        var adminUrl = SupervisorImageFixture.AdminUrl(_container);
-        const string secretToken = "super-secret-token-xyz-not-the-real-one";
-
-        var page = await _fixture.NewLoggedInPageAsync();
-        await page.GotoAsync(_fixture.BaseUrl + "/servers", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
-
-        await page.ClickAsync("button:has-text('+ Add server')");
-        var serverDialog = page.Locator(".modal-dialog-custom");
-        await serverDialog.Locator("input").First.FillAsync("srv-" + Guid.NewGuid().ToString("n"));
-        await serverDialog.Locator("button:has-text('Save')").ClickAsync();
-        await serverDialog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden });
-
-        await page.ClickAsync("button:has-text('+ Add instance')");
-        var instanceDialog = page.Locator(".modal-dialog-custom");
-        await instanceDialog.Locator("label:has-text('Label') + input").FillAsync("primary");
-        await instanceDialog.Locator("label:has-text('Proxy slug') + input").FillAsync("slug-" + Guid.NewGuid().ToString("n"));
-        await instanceDialog.Locator("label:has-text('Supervisor URL') + input").FillAsync(adminUrl);
-        await instanceDialog.Locator("label:has-text('Token') + input").FillAsync(secretToken);
-        await instanceDialog.Locator("button:has-text('Save')").ClickAsync();
-        await instanceDialog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden });
-
-        var html = await page.ContentAsync();
-        Assert.DoesNotContain(secretToken, html);
-
-        using var db = _fixture.NewDbContext();
-        var stored = await db.InstancesV2.Select(i => i.AdminTokenEnc).FirstAsync();
-        Assert.NotNull(stored);
-        Assert.DoesNotContain(secretToken, stored);
     }
 }

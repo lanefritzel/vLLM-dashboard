@@ -11,7 +11,6 @@
 @inject IRecipeService Recipes
 @inject IDeploymentService Deployments
 @inject ISupervisorClient SupervisorClient
-@inject ISupervisorTokenProvider TokenProvider
 @inject IHttpClientFactory HttpClientFactory
 @inject NavigationManager Nav
 
@@ -228,18 +227,12 @@ else
             _smokeResult = "No supervisor registered on this instance.";
             return;
         }
-        var token = await TokenProvider.GetTokenAsync(_instance.Id);
-        if (token is null)
-        {
-            _smokeResult = "No supervisor token configured.";
-            return;
-        }
         _smokeBusy = true;
         _smokeResult = null;
         StateHasChanged();
         try
         {
-            var result = await SupervisorClient.SmokeTestAsync(_instance.AdminUrl, token);
+            var result = await SupervisorClient.SmokeTestAsync(_instance.AdminUrl);
             _smokeResult = result.Ok ? $"✓ passed ({result.Ms:0} ms)" : $"✗ failed: {result.Excerpt}";
         }
         catch (Exception ex)

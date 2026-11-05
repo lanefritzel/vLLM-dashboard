@@ -37,6 +37,12 @@ services:
       Kestrel__Endpoints__Https__Url: "https://+:8445"
       Kestrel__Endpoints__Https__Certificate__Path: /certs/tes.home.pem
       Kestrel__Endpoints__Https__Certificate__KeyPath: /certs/tes.home.key
+      # Mount the same host directory below as the supervisor's own
+      # MODELS_ROOT (same path on both sides) to let the Servers/Add-model
+      # folder picker browse real paths. Omit both this var and the volume
+      # below to fall back to a plain text field -- IFilesystemBrowser
+      # degrades gracefully when nothing is mounted at MODELS_BROWSE_ROOT.
+      MODELS_BROWSE_ROOT: /models
     ports:
       - "8080:8080"
       - "8445:8445"
@@ -44,6 +50,8 @@ services:
       - dataprotection:/data
       # Host directory holding the cert/key issued by your home CA.
       - ../certs:/certs:ro
+      # Host models root, read-only -- must match the supervisor's own mount.
+      # - /path/to/your/models:/models:ro
 
 volumes:
   pgdata:

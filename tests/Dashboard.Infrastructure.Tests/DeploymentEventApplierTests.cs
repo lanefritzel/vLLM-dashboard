@@ -18,7 +18,6 @@ namespace Dashboard.Infrastructure.Tests;
 public class DeploymentEventApplierTests(PostgresFixture postgres)
 {
     private const string UnusedAdminUrl = "http://unused.invalid";
-    private const string UnusedToken = "unused-token";
 
     private async Task<(IDeploymentEventApplier Applier, IServiceScopeFactory ScopeFactory)> NewApplierAsync()
     {
@@ -77,8 +76,8 @@ public class DeploymentEventApplierTests(PostgresFixture postgres)
         var (_, _, _, _, deployment) = await SeedPendingDeploymentAsync(scopeFactory);
 
         var evt = new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "state", State = "starting" };
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, UnusedToken, evt, CancellationToken.None);
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, UnusedToken, evt, CancellationToken.None); // redelivered
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, evt, CancellationToken.None);
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, evt, CancellationToken.None); // redelivered
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -94,7 +93,7 @@ public class DeploymentEventApplierTests(PostgresFixture postgres)
 
         var report = new Dictionary<string, object?> { ["reason"] = "out_of_memory", ["exit_code"] = 137, ["log_tail"] = "CUDA OOM" };
         var evt = new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "report", Report = report };
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, UnusedToken, evt, CancellationToken.None);
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, evt, CancellationToken.None);
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -111,7 +110,7 @@ public class DeploymentEventApplierTests(PostgresFixture postgres)
         var (_, _, _, _, deployment) = await SeedPendingDeploymentAsync(scopeFactory);
 
         var evt = new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "log", Lines = ["hello", "world"] };
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, UnusedToken, evt, CancellationToken.None);
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, evt, CancellationToken.None);
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -132,7 +131,7 @@ public class DeploymentEventApplierTests(PostgresFixture postgres)
 
         var detail = new Dictionary<string, object?> { ["reason"] = "bad_args", ["exit_code"] = 2, ["log_tail"] = "unrecognized arguments" };
         var evt = new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "state", State = "failed", Detail = detail };
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, UnusedToken, evt, CancellationToken.None);
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, evt, CancellationToken.None);
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

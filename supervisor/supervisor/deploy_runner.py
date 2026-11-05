@@ -118,7 +118,7 @@ class DeployRunner:
     ) -> None:
         self._process_manager = process_manager
         self._state_store = state_store
-        self._event_pusher = event_pusher or EventPusher(url=None, token=None)
+        self._event_pusher = event_pusher or EventPusher(url=None)
         self._gpu_backend = gpu_backend or GpuBackend()  # the base class IS the "generic" no-op backend
         self._archive = archive or DeploymentArchive()
         self._state = "idle"

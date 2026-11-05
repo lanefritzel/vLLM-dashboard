@@ -11,7 +11,6 @@
 @inject IInstanceService Instances
 @inject IDeploymentService Deployments
 @inject ISupervisorClient SupervisorClient
-@inject ISupervisorTokenProvider TokenProvider
 
 <PageTitle>Logs — vLLM Dashboard</PageTitle>
 
@@ -104,24 +103,20 @@ else
 
                 if (id is not null && instance.AdminUrl is not null)
                 {
-                    var token = await TokenProvider.GetTokenAsync(instance.Id, ct);
-                    if (token is not null)
+                    var text = await SupervisorClient.GetDeploymentLogsAsync(
+                        instance.AdminUrl, id.Value.ToString(), MaxLines, ct);
+                    var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    _lines.Clear();
+                    _lines.AddRange(lines);
+                    await InvokeAsync(async () =>
                     {
-                        var text = await SupervisorClient.GetDeploymentLogsAsync(
-                            instance.AdminUrl, token, id.Value.ToString(), MaxLines, ct);
-                        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                        _lines.Clear();
-                        _lines.AddRange(lines);
-                        await InvokeAsync(async () =>
+                        StateHasChanged();
+                        if (_followTail)
                         {
-                            StateHasChanged();
-                            if (_followTail)
-                            {
-                                try { await JS.InvokeVoidAsync("logs_scroll_bottom", "logs-console"); }
-                                catch { /* JS not ready */ }
-                            }
-                        });
-                    }
+                            try { await JS.InvokeVoidAsync("logs_scroll_bottom", "logs-console"); }
+                            catch { /* JS not ready */ }
+                        }
+                    });
                 }
             }
             catch (OperationCanceledException)

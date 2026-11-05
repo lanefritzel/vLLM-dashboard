@@ -58,9 +58,6 @@ public class PlaygroundLiveTrafficE2ETests : IAsyncDisposable
         {
             ServerId = server.Id, Label = "primary", ProxySlug = $"slug-{Guid.NewGuid():N}",
             AdminUrl = adminUrl, Host = "127.0.0.1", Port = inferencePort,
-            // Must be the REAL supervisor's own token (P15b: tokens are now
-            // per-instance, encrypted -- the real container still checks it).
-            AdminTokenEnc = _fixture.EncryptTokenForApp(SupervisorImageFixture.Token),
         };
         db.InstancesV2.Add(instance);
 

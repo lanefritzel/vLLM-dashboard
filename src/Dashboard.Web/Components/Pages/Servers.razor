@@ -4,11 +4,10 @@
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Supervisor
 @using Dashboard.Infrastructure.Persistence.V2
-@using Microsoft.AspNetCore.DataProtection
+@using Dashboard.Web.Components.Shared
 @inject IServerService ServersSvc
 @inject IInstanceService Instances
 @inject ISupervisorClient SupervisorClient
-@inject IDataProtectionProvider DataProtection
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
 
 <PageTitle>Servers — vLLM Dashboard</PageTitle>
@@ -116,7 +115,10 @@ else
                 </div>
                 <div class="col-md-12">
                     <label class="form-label">Models directory</label>
-                    <input class="form-control" @bind="_svModelsDir" placeholder="/models" />
+                    <div class="d-flex gap-2">
+                        <input class="form-control" @bind="_svModelsDir" placeholder="/models" />
+                        <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _showModelsDirPicker = true)">Browse…</button>
+                    </div>
                 </div>
                 <div class="col-md-12">
                     <button type="submit" class="btn btn-primary btn-sm">Save</button>
@@ -125,6 +127,13 @@ else
             </form>
         </div>
     </div>
+}
+
+@if (_showModelsDirPicker)
+{
+    <FolderPickerDialog Title="Choose the models directory" StartPath="@_svModelsDir"
+        OnSelected="@(path => { _svModelsDir = path; _showModelsDirPicker = false; })"
+        OnCancelled="@(() => _showModelsDirPicker = false)" />
 }
 
 @if (_editingInstance is not null)
@@ -163,10 +172,6 @@ else
                 <div class="col-md-8">
                     <label class="form-label">Supervisor URL</label>
                     <input class="form-control" @bind="_inAdminUrl" placeholder="http://host:8080" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Token</label>
-                    <input class="form-control" type="password" @bind="_inToken" placeholder="@(_instanceIsNew ? "" : "leave blank to keep current")" autocomplete="new-password" />
                 </div>
                 <div class="col-md-12">
                     <button type="button" class="btn btn-outline btn-sm" disabled="@(_testBusy || string.IsNullOrWhiteSpace(_inAdminUrl))" @onclick="@TestConnectionAsync">
@@ -222,6 +227,7 @@ else
     private int _svGpuCount = 1;
     private int? _svGpuMemGb;
     private string _svModelsDir = "/models";
+    private bool _showModelsDirPicker;
 
     private Instance? _editingInstance;
     private int _editingInstanceServerId;
@@ -232,7 +238,6 @@ else
     private string _inContainerName = "";
     private int _inPollIntervalMs = 1000;
     private string _inAdminUrl = "";
-    private string _inToken = "";
 
     private bool _testBusy;
     private bool _testOk;
@@ -322,7 +327,7 @@ else
         _editingInstance = new Instance { ServerId = server.Id };
         _instanceIsNew = true;
         _inLabel = ""; _inProxySlug = ""; _inPort = 9999; _inContainerName = ""; _inPollIntervalMs = 1000;
-        _inAdminUrl = ""; _inToken = "";
+        _inAdminUrl = "";
         _testResult = null;
         _autoStartOn = null;
     }
@@ -338,7 +343,6 @@ else
         _inContainerName = instance.ContainerName ?? "";
         _inPollIntervalMs = instance.PollIntervalMs;
         _inAdminUrl = instance.AdminUrl ?? "";
-        _inToken = "";
         _testResult = null;
         // null ("checking…") until RefreshAutoStartAsync resolves the real value --
         // showing a guessed default here would flash the wrong state on every open.
@@ -349,11 +353,10 @@ else
 
     private async Task RefreshAutoStartAsync(Instance instance)
     {
-        var token = await ResolveTokenForTestAsync(instance);
-        if (instance.AdminUrl is null || token is null) return;
+        if (instance.AdminUrl is null) return;
         try
         {
-            var value = await SupervisorClient.GetAutoStartAsync(instance.AdminUrl, token);
+            var value = await SupervisorClient.GetAutoStartAsync(instance.AdminUrl);
             _autoStartOn = value != "off";
             StateHasChanged();
         }
@@ -380,26 +383,11 @@ else
                 return;
             }
 
-            var token = string.IsNullOrEmpty(_inToken) && _editingInstance?.AdminTokenEnc is not null
-                ? await ResolveTokenForTestAsync(_editingInstance)
-                : _inToken;
-            if (string.IsNullOrEmpty(token))
-            {
-                _testOk = false;
-                _testResult = "Reachable, but no token was given to authenticate with.";
-                return;
-            }
-
-            var status = await SupervisorClient.GetStatusAsync(_inAdminUrl.Trim(), token);
-            var gpu = await SupervisorClient.GetGpuAsync(_inAdminUrl.Trim(), token);
+            var status = await SupervisorClient.GetStatusAsync(_inAdminUrl.Trim());
+            var gpu = await SupervisorClient.GetGpuAsync(_inAdminUrl.Trim());
             var currentModel = status.Child?.Argv is { Count: > 0 } argv ? string.Join(" ", argv.TakeLast(2)) : "idle";
             _testOk = true;
             _testResult = $"Connected. GPU: {gpu.Vendor} ({gpu.TotalMb ?? 0} MB total) · supervisor state: {status.State} · {currentModel}";
-        }
-        catch (SupervisorApiException ex) when (ex.StatusCode == 401 || ex.StatusCode == 403)
-        {
-            _testOk = false;
-            _testResult = "Wrong token -- the supervisor rejected it.";
         }
         catch (Exception ex)
         {
@@ -413,28 +401,13 @@ else
         }
     }
 
-    private async Task<string?> ResolveTokenForTestAsync(Instance instance)
-    {
-        if (instance.AdminTokenEnc is null) return null;
-        try
-        {
-            return DataProtection.CreateProtector(InstanceTokenProvider.Purpose).Unprotect(instance.AdminTokenEnc);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     private async Task OnAutoStartToggledAsync(ChangeEventArgs e)
     {
         if (_editingInstance?.AdminUrl is null) return;
         var on = e.Value is bool b && b;
-        var token = await ResolveTokenForTestAsync(_editingInstance);
-        if (token is null) return;
         try
         {
-            await SupervisorClient.SetAutoStartAsync(_editingInstance.AdminUrl, token, on ? "last_good" : "off");
+            await SupervisorClient.SetAutoStartAsync(_editingInstance.AdminUrl, on ? "last_good" : "off");
             _autoStartOn = on;
         }
         catch (Exception ex)
@@ -455,12 +428,8 @@ else
                 PollIntervalMs = Math.Max(100, _inPollIntervalMs),
                 AdminUrl = string.IsNullOrWhiteSpace(_inAdminUrl) ? null : _inAdminUrl.Trim(),
                 Host = _editingInstance.Host,
-                AdminTokenEnc = _editingInstance.AdminTokenEnc,
                 IsActive = true,
             };
-
-            if (!string.IsNullOrEmpty(_inToken))
-                instance.AdminTokenEnc = DataProtection.CreateProtector(InstanceTokenProvider.Purpose).Protect(_inToken);
 
             if (_instanceIsNew)
             {

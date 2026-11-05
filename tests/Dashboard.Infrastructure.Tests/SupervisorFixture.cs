@@ -15,7 +15,6 @@ namespace Dashboard.Infrastructure.Tests;
 /// fresh Postgres DB starts counting from 1 again).</summary>
 public sealed class SupervisorImageFixture : IAsyncLifetime
 {
-    public const string Token = "test-token";
     public const int AdminPort = 8080;
 
     private IFutureDockerImage? _image;
@@ -54,8 +53,15 @@ public sealed class SupervisorImageFixture : IAsyncLifetime
     {
         var builder = new ContainerBuilder(_image!)
             .WithPortBinding(AdminPort, true)
-            .WithEnvironment("SUPERVISOR_TOKEN", Token)
             .WithEnvironment("ADMIN_PORT", AdminPort.ToString())
+            // supervisor.py defaults this to 127.0.0.1 (correct for a real,
+            // network_mode: host deployment) -- but this fixture runs the
+            // image in an ordinary bridge-networked container, where a
+            // loopback-bound process is unreachable even through Docker's
+            // own published port (confirmed directly: the connection gets
+            // reset, not just slow). Fine to open up here: this is an
+            // ephemeral per-test network, not a real deployment.
+            .WithEnvironment("ADMIN_BIND_HOST", "0.0.0.0")
             .WithEnvironment("AUTO_START", "off")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(AdminPort).ForPath("/admin/health")));
         if (inferencePort is { } port)

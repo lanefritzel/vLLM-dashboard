@@ -36,9 +36,14 @@ services:
       retries: 10
     networks:
       - p16a-net
-    # Internal only -- never published, same as production.
-    expose:
-      - "5432"
+    # Published to loopback only, on a port distinct from the live stack's own
+    # postgres (which may also be running on 5432) -- the dashboard below now
+    # reaches this over 127.0.0.1 instead of the bridge network's DNS name,
+    # since it had to move to network_mode: host for an unrelated reason (see
+    # that service's own comment) and host networking can't mix with a
+    # service still living on this bridge network.
+    ports:
+      - "127.0.0.1:15432:5432"
 
   dashboard:
     build:
@@ -49,29 +54,45 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
+      ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=15432;Database=dashboard;Username=dashboard;Password=dashboard"
       ASPNETCORE_ENVIRONMENT: Production
+      # Deliberately NOT 8080/8445 -- those are the live dashboard's ports;
+      # kept distinct so there's no collision even if the live stack comes
+      # back up mid-test. No HTTPS for this smoke test (no cert needed).
+      # With network_mode: host below, this binds directly on the host --
+      # there's no Compose port-mapping step to do it instead. Must override
+      # Kestrel__Endpoints__Http__Url specifically, not ASPNETCORE_URLS --
+      # the Dockerfile bakes the former into the image as its own env var,
+      # and it wins over ASPNETCORE_URLS when both are set (confirmed the
+      # hard way: with only ASPNETCORE_URLS set here, the container kept
+      # listening on 8080 anyway, host-network-colliding with the live
+      # stack's own dashboard and crash-looping on bind failure).
+      Kestrel__Endpoints__Http__Url: "http://+:18080"
       DATAPROTECTION_KEYS_DIR: /data/dataprotection
       # No hot-swap DockerOrchestrator path needed anymore -- registration
       # happens through the Servers page (P15b) against the supervisor below.
       DOCKER_HOST: ""
-    networks:
-      - p16a-net
-    ports:
-      # Deliberately NOT 8080/8445 -- those are the live dashboard's ports;
-      # kept distinct so there's no collision even if the live stack comes
-      # back up mid-test. No HTTPS for this smoke test (no cert needed).
-      - "18080:8080"
+      # Same mount point the supervisor below gets, read-only here too --
+      # lets the Servers/Add-model folder picker browse real paths instead
+      # of a free-text field a user can fat-finger.
+      MODELS_BROWSE_ROOT: /models
+    # The supervisor's admin API binds to 127.0.0.1 only (not configurable
+    # from the published image -- see supervisor.py's ADMIN_BIND_HOST), which
+    # only means "this host's real loopback" if the dashboard shares that
+    # same network namespace. On the bridge network this service used to sit
+    # on, "the host" was reachable only via a NAT'd gateway alias
+    # (host.docker.internal), which is a different interface than loopback as
+    # far as a loopback-bound socket is concerned -- confirmed directly, that
+    # path gets a connection reset, not just a slow timeout. network_mode:
+    # host makes this container's 127.0.0.1 the literal same loopback the
+    # supervisor binds to, matching the real target topology anyway (see
+    # llm-stack-example.yml, which runs the whole stack this way). When
+    # registering the instance on the Servers page, the admin URL is now
+    # simply http://127.0.0.1:18001 -- no more host.docker.internal alias.
+    network_mode: host
     volumes:
       - p16a-dataprotection:/data
-    # The dashboard sits on this compose's own bridge network, but the
-    # supervisor below uses network_mode: host (it needs the real GPU
-    # device), so it has no bridge-network DNS name -- reach it via the
-    # host's own loopback through this gateway alias. When registering the
-    # instance on the Servers page, use http://host.docker.internal:18001
-    # as its admin URL, not 127.0.0.1 (that would mean the container itself).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - /home/lanef/hf-models:/models:ro
 
   supervisor:
     build:
@@ -100,7 +121,6 @@ services:
     init: true
     environment:
       ADMIN_PORT: "18001"
-      SUPERVISOR_TOKEN: "e8ed9e75a7177bc999b7facf758936161214c43b50e6e87d"
       # Supervisor is on host network -- the dashboard's published port is
       # reachable via localhost on the same host.
       DASHBOARD_EVENT_URL: "http://127.0.0.1:18080/internal/supervisor-events"
