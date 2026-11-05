@@ -15,12 +15,12 @@ public interface IDeploymentEventApplier
     /// .../events?after=), then applies <paramref name="evt"/> itself.
     /// Idempotent -- a duplicate or already-covered seq is a no-op.</summary>
     Task ApplyWithGapCatchUpAsync(
-        int deploymentId, string adminUrl, string token, SupervisorPushEvent evt, CancellationToken ct = default);
+        int deploymentId, string adminUrl, SupervisorPushEvent evt, CancellationToken ct = default);
 
     /// <summary>Catch-up with no specific incoming event -- fetches and
     /// applies everything newer than this deployment's own LastSeenSeq.
     /// Used by the startup/periodic catch-up service for deployments still
     /// "pending" (doc 5: "also catch up on dashboard start and periodically
     /// while a deployment is pending").</summary>
-    Task CatchUpAsync(int deploymentId, string adminUrl, string token, CancellationToken ct = default);
+    Task CatchUpAsync(int deploymentId, string adminUrl, CancellationToken ct = default);
 }

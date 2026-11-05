@@ -41,7 +41,17 @@ from supervisor.state import RETRY_CAP, StateStore, decide_boot_action
 BOOT_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("BOOT_HEALTH_TIMEOUT_SECONDS", "900"))
 RETRY_DELAY_SECONDS = 2.0
 ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8000"))  # TBD per doc 5 -- any free port works; firmed up by P15b
-SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")  # unset -- and every /admin/* route except /health 401s
+# Loopback by default -- real deployments use network_mode: host, where this
+# IS the host's own 127.0.0.1, making the admin API unreachable from the LAN
+# with zero config. Only ever overridden by the test suite's own
+# SupervisorImageFixture, which launches this in an ordinary bridge-networked
+# container: a process bound to 127.0.0.1 there is unreachable even through
+# Docker's own published port (confirmed directly: a bridge-mapped port to a
+# loopback-bound process resets the connection, it doesn't just time out) --
+# that fixture passes ADMIN_BIND_HOST=0.0.0.0 to stay reachable from the host
+# test process, which is fine there since it's an ephemeral per-test network,
+# not a real deployment exposed to anything.
+ADMIN_BIND_HOST = os.environ.get("ADMIN_BIND_HOST", "127.0.0.1")
 DASHBOARD_EVENT_URL = os.environ.get("DASHBOARD_EVENT_URL")  # unset -- event push disabled cleanly (P03c)
 HF_TOKEN = os.environ.get("HF_TOKEN")  # P08: env var only, never the DB or an API body
 MODELS_ROOT = os.environ.get("MODELS_ROOT", "/models")  # compose mounts the host models root here
@@ -95,7 +105,7 @@ async def run_boot_sequence(deploy_runner: DeployRunner, process_manager: Proces
 async def main_async() -> None:
     state_store = StateStore()
     process_manager = ProcessManager()
-    event_pusher = EventPusher(url=DASHBOARD_EVENT_URL, token=SUPERVISOR_TOKEN)
+    event_pusher = EventPusher(url=DASHBOARD_EVENT_URL)
     gpu_backend = detect_backend()  # once, at start (doc 5) -- nvidia-smi, then Intel sysfs, else generic
     print(f"supervisor: GPU backend detected -- {gpu_backend.vendor}", flush=True)
     deploy_runner = DeployRunner(process_manager, state_store, event_pusher, gpu_backend)
@@ -103,8 +113,15 @@ async def main_async() -> None:
 
     await run_boot_sequence(deploy_runner, process_manager, state_store)
 
-    app = create_app(process_manager, deploy_runner, state_store, SUPERVISOR_TOKEN, download_manager)
-    config = uvicorn.Config(app, host="0.0.0.0", port=ADMIN_PORT, log_level="info")
+    app = create_app(process_manager, deploy_runner, state_store, download_manager)
+    # ADMIN_BIND_HOST defaults to loopback: the dashboard always runs on this
+    # same host (network_mode: host) and reaches this over 127.0.0.1, so the
+    # admin API -- which can deploy/stop/redeploy models -- is never
+    # reachable from the LAN by default. That's what actually protects it;
+    # there used to be a bearer-token check on top, but once this can't be
+    # reached from anywhere but this machine, a password here was protecting
+    # against nothing that local shell/Docker access doesn't already grant.
+    config = uvicorn.Config(app, host=ADMIN_BIND_HOST, port=ADMIN_PORT, log_level="info")
     await uvicorn.Server(config).serve()
 
 

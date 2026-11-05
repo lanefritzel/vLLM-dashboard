@@ -13,31 +13,30 @@ public enum SupervisorEventReceiverResult
 
 /// <summary>The receiver endpoint's own logic (P10b, doc 5), pulled out of
 /// Program.cs's minimal API route so it's unit-testable without a full web
-/// host. "Authenticated with the shared bearer token ... It is reachable on
-/// the published port, so the token check is the protection -- reject
-/// without it": the token checked is whichever instance the event's own
-/// deployment_id resolves to, via <see cref="ISupervisorTokenProvider"/> --
-/// not a single global secret, since different instances could have
-/// different tokens.</summary>
+/// host. Reachable on the dashboard's own published port (unlike the
+/// supervisor's loopback-only admin API), so it still needs a check -- this
+/// used to be a per-instance bearer token; now it's "did this request
+/// actually come from this same machine" (<paramref name="isLoopback"/> in
+/// <see cref="HandleAsync"/>), since a supervisor always runs alongside the
+/// dashboard on one host and pushes to it over 127.0.0.1.</summary>
 public sealed class SupervisorEventReceiver
 {
     private readonly IDeploymentService _deployments;
     private readonly IInstanceService _instances;
-    private readonly ISupervisorTokenProvider _tokenProvider;
     private readonly IDeploymentEventApplier _applier;
 
-    public SupervisorEventReceiver(
-        IDeploymentService deployments, IInstanceService instances, ISupervisorTokenProvider tokenProvider,
-        IDeploymentEventApplier applier)
+    public SupervisorEventReceiver(IDeploymentService deployments, IInstanceService instances, IDeploymentEventApplier applier)
     {
         _deployments = deployments;
         _instances = instances;
-        _tokenProvider = tokenProvider;
         _applier = applier;
     }
 
-    public async Task<SupervisorEventReceiverResult> HandleAsync(SupervisorPushEvent evt, string? authorizationHeader, CancellationToken ct = default)
+    public async Task<SupervisorEventReceiverResult> HandleAsync(SupervisorPushEvent evt, bool isLoopback, CancellationToken ct = default)
     {
+        if (!isLoopback)
+            return SupervisorEventReceiverResult.Unauthorized;
+
         if (!int.TryParse(evt.DeploymentId, out var deploymentId))
             return SupervisorEventReceiverResult.BadRequest;
 
@@ -46,11 +45,10 @@ public sealed class SupervisorEventReceiver
             return SupervisorEventReceiverResult.NotFound;
 
         var instance = await _instances.GetAsync(deployment.InstanceId, ct);
-        var expectedToken = instance is null ? null : await _tokenProvider.GetTokenAsync(instance.Id, ct);
-        if (string.IsNullOrEmpty(expectedToken) || authorizationHeader != $"Bearer {expectedToken}")
-            return SupervisorEventReceiverResult.Unauthorized;
+        if (instance?.AdminUrl is null)
+            return SupervisorEventReceiverResult.NotFound;
 
-        await _applier.ApplyWithGapCatchUpAsync(deploymentId, instance!.AdminUrl!, expectedToken, evt, ct);
+        await _applier.ApplyWithGapCatchUpAsync(deploymentId, instance.AdminUrl, evt, ct);
         return SupervisorEventReceiverResult.Ok;
     }
 }

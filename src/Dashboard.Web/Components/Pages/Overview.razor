@@ -16,7 +16,6 @@
 @inject IDeploymentService Deployments
 @inject ISwapService Swap
 @inject ISupervisorClient SupervisorClient
-@inject ISupervisorTokenProvider TokenProvider
 @inject IJSRuntime JS
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
 @inject IOnboardingService Onboarding
@@ -400,11 +399,9 @@ else
     private async Task RefreshGpuAsync()
     {
         if (_instance?.AdminUrl is null) { _gpuInfo = null; return; }
-        var token = await TokenProvider.GetTokenAsync(_instance.Id);
-        if (token is null) { _gpuInfo = null; return; }
         try
         {
-            _gpuInfo = await SupervisorClient.GetGpuAsync(_instance.AdminUrl, token);
+            _gpuInfo = await SupervisorClient.GetGpuAsync(_instance.AdminUrl);
         }
         catch
         {

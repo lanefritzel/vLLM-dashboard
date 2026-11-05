@@ -8,7 +8,6 @@
 @inject IDeploymentService Deployments
 @inject ISwapService Swap
 @inject ISupervisorClient SupervisorClient
-@inject ISupervisorTokenProvider TokenProvider
 @inject IJSRuntime JS
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
 @inject IBootReconciler Reconciler
@@ -277,16 +276,12 @@
             {
                 if (Instance.AdminUrl is not null)
                 {
-                    var token = await TokenProvider.GetTokenAsync(Instance.Id, ct);
-                    if (token is not null)
-                    {
-                        var text = await SupervisorClient.GetDeploymentLogsAsync(
-                            Instance.AdminUrl, token, deploymentId.ToString(), 200, ct);
-                        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                        _logLines.Clear();
-                        _logLines.AddRange(lines);
-                        await InvokeAsync(StateHasChanged);
-                    }
+                    var text = await SupervisorClient.GetDeploymentLogsAsync(
+                        Instance.AdminUrl, deploymentId.ToString(), 200, ct);
+                    var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    _logLines.Clear();
+                    _logLines.AddRange(lines);
+                    await InvokeAsync(StateHasChanged);
                 }
             }
             catch (OperationCanceledException)
@@ -546,11 +541,9 @@
     private async Task RunSmokeTestAsync()
     {
         if (Instance.AdminUrl is null) return;
-        var token = await TokenProvider.GetTokenAsync(Instance.Id);
-        if (token is null) return;
         try
         {
-            var result = await SupervisorClient.SmokeTestAsync(Instance.AdminUrl, token);
+            var result = await SupervisorClient.SmokeTestAsync(Instance.AdminUrl);
             await Dialogs.AlertAsync(result.Ok ? "Smoke test passed." : "Smoke test failed: " + result.Excerpt);
         }
         catch (Exception ex)

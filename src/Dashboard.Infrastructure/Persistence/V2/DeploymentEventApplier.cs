@@ -38,7 +38,7 @@ public sealed class DeploymentEventApplier : IDeploymentEventApplier
     private SemaphoreSlim LockFor(int deploymentId) => _locks.GetOrAdd(deploymentId, static _ => new SemaphoreSlim(1, 1));
 
     public async Task ApplyWithGapCatchUpAsync(
-        int deploymentId, string adminUrl, string token, SupervisorPushEvent evt, CancellationToken ct = default)
+        int deploymentId, string adminUrl, SupervisorPushEvent evt, CancellationToken ct = default)
     {
         var gate = LockFor(deploymentId);
         await gate.WaitAsync(ct);
@@ -52,7 +52,7 @@ public sealed class DeploymentEventApplier : IDeploymentEventApplier
             // advances for every kind, not just the "state" events stored in
             // deployment_events -- see that column's own doc comment.
             if (evt.Seq > deployment.LastSeenSeq + 1)
-                await FetchAndApplyGapAsync(deploymentId, adminUrl, token, afterSeq: deployment.LastSeenSeq, beforeSeq: evt.Seq, ct);
+                await FetchAndApplyGapAsync(deploymentId, adminUrl, afterSeq: deployment.LastSeenSeq, beforeSeq: evt.Seq, ct);
 
             await ApplyAsync(deploymentId, evt, ct);
         }
@@ -62,7 +62,7 @@ public sealed class DeploymentEventApplier : IDeploymentEventApplier
         }
     }
 
-    public async Task CatchUpAsync(int deploymentId, string adminUrl, string token, CancellationToken ct = default)
+    public async Task CatchUpAsync(int deploymentId, string adminUrl, CancellationToken ct = default)
     {
         var gate = LockFor(deploymentId);
         await gate.WaitAsync(ct);
@@ -71,7 +71,7 @@ public sealed class DeploymentEventApplier : IDeploymentEventApplier
             var deployment = await _deployments.GetAsync(deploymentId, ct);
             if (deployment is null)
                 return;
-            await FetchAndApplyGapAsync(deploymentId, adminUrl, token, afterSeq: deployment.LastSeenSeq, beforeSeq: int.MaxValue, ct);
+            await FetchAndApplyGapAsync(deploymentId, adminUrl, afterSeq: deployment.LastSeenSeq, beforeSeq: int.MaxValue, ct);
         }
         finally
         {
@@ -84,9 +84,9 @@ public sealed class DeploymentEventApplier : IDeploymentEventApplier
     /// supervisor never stores "report"/"log" pushes in its own per-deployment
     /// event list, only pushes them); those rely on the supervisor's own
     /// push-retry-until-acked semantics to eventually arrive instead.</summary>
-    private async Task FetchAndApplyGapAsync(int deploymentId, string adminUrl, string token, int afterSeq, int beforeSeq, CancellationToken ct)
+    private async Task FetchAndApplyGapAsync(int deploymentId, string adminUrl, int afterSeq, int beforeSeq, CancellationToken ct)
     {
-        var missing = await _supervisorClient.GetEventsAsync(adminUrl, token, deploymentId.ToString(), afterSeq, ct);
+        var missing = await _supervisorClient.GetEventsAsync(adminUrl, deploymentId.ToString(), afterSeq, ct);
         foreach (var missed in missing.Where(e => e.Seq < beforeSeq).OrderBy(e => e.Seq))
             await ApplyStateEventAsync(deploymentId, missed.Seq, missed.State, missed.Detail, ct);
     }

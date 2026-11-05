@@ -56,11 +56,6 @@ public sealed class DashboardAppFixture : IAsyncLifetime
         startInfo.EnvironmentVariables["ASPNETCORE_URLS"] = BaseUrl;
         startInfo.EnvironmentVariables["ConnectionStrings__DefaultConnection"] = _postgres.GetConnectionString();
         startInfo.EnvironmentVariables["DetailedErrors"] = "true";
-        // Fixed, per-fixture key directory (P15b): the launched app's own
-        // InstanceTokenProvider decrypts Instance.AdminTokenEnc with ASP.NET
-        // Data Protection, so a test that wants to seed a working token must
-        // encrypt it with a protector pointed at this SAME directory --
-        // see EncryptTokenForApp.
         Directory.CreateDirectory(_dataProtectionDir);
         startInfo.EnvironmentVariables["DATAPROTECTION_KEYS_DIR"] = _dataProtectionDir;
 
@@ -94,22 +89,6 @@ public sealed class DashboardAppFixture : IAsyncLifetime
         await _postgres.DisposeAsync();
 
         try { Directory.Delete(_dataProtectionDir, recursive: true); } catch { /* best effort */ }
-    }
-
-    /// <summary>Encrypts a token the same way the launched app's own
-    /// InstanceTokenProvider will decrypt it: same key directory (this
-    /// fixture's own, via DATAPROTECTION_KEYS_DIR), same application name,
-    /// same purpose string. A test seeding Instance.AdminTokenEnc directly
-    /// via NewDbContext() must go through this, not a dummy encrypted-looking
-    /// string, or the running app will fail to decrypt it and silently treat
-    /// the instance as having no token at all.</summary>
-    public string EncryptTokenForApp(string token)
-    {
-        var provider = Microsoft.AspNetCore.DataProtection.DataProtectionProvider.Create(
-            new DirectoryInfo(_dataProtectionDir),
-            builder => builder.SetApplicationName("vllm-dashboard"));
-        var protector = provider.CreateProtector(Dashboard.Infrastructure.Persistence.V2.InstanceTokenProvider.Purpose);
-        return protector.Protect(token);
     }
 
     /// <summary>A short-lived <see cref="AppDbContext"/> against the same

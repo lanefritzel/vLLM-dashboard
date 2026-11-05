@@ -3,9 +3,9 @@
 @using Dashboard.Core.Models
 @using Dashboard.Core.Supervisor
 @using Dashboard.Infrastructure.Persistence.V2
+@using Dashboard.Web.Components.Shared
 @inject IModelService Models
 @inject ISupervisorClient SupervisorClient
-@inject ISupervisorTokenProvider TokenProvider
 @inject IHuggingFaceModelLookup HfLookup
 
 <div class="modal-overlay" @onclick="@RequestCancelIfIdle">
@@ -43,7 +43,10 @@
             <div class="row g-3 mt-1">
                 <div class="col-md-12">
                     <label class="form-label">Weights path (on the server's disk)</label>
-                    <input class="form-control" @bind="_localPath" @bind:event="oninput" placeholder="/models/hf-cache/my-model" disabled="@IsBusy" />
+                    <div class="d-flex gap-2">
+                        <input class="form-control" @bind="_localPath" @bind:event="oninput" placeholder="/models/hf-cache/my-model" disabled="@IsBusy" />
+                        <button type="button" class="btn btn-outline btn-sm" disabled="@IsBusy" @onclick="@(() => _showPathPicker = true)">Browse…</button>
+                    </div>
                 </div>
                 <div class="col-md-12">
                     <button type="button" class="btn btn-primary btn-sm" disabled="@(!CanSaveLocal || IsBusy)" @onclick="@SaveLocalAsync">Save</button>
@@ -142,6 +145,13 @@
     </div>
 </div>
 
+@if (_showPathPicker)
+{
+    <FolderPickerDialog Title="Choose the weights folder" StartPath="@_localPath"
+        OnSelected="@(path => { _localPath = path; _showPathPicker = false; })"
+        OnCancelled="@(() => _showPathPicker = false)" />
+}
+
 @code {
     [Parameter] public Instance? Instance { get; set; }
     [Parameter] public EventCallback<Model> OnSaved { get; set; }
@@ -151,6 +161,7 @@
     private string _name = "";
     private string _source = "huggingface";
     private string _localPath = "";
+    private bool _showPathPicker;
     private string _repoId = "";
     private string? _error;
 
@@ -196,12 +207,6 @@
     private async Task InspectAsync()
     {
         if (Instance?.AdminUrl is null) return;
-        var token = await TokenProvider.GetTokenAsync(Instance.Id);
-        if (token is null)
-        {
-            _inspectError = "No supervisor token configured for this instance.";
-            return;
-        }
 
         _inspecting = true;
         _inspectError = null;
@@ -210,7 +215,7 @@
         StateHasChanged();
         try
         {
-            _inspected = await SupervisorClient.InspectDownloadAsync(Instance.AdminUrl, token, _repoId.Trim());
+            _inspected = await SupervisorClient.InspectDownloadAsync(Instance.AdminUrl, _repoId.Trim());
             _hfLookup = await HfLookup.LookupAsync(_repoId.Trim());
         }
         catch (Exception ex)
@@ -235,15 +240,13 @@
     private async Task StartDownloadAsync()
     {
         if (Instance?.AdminUrl is null) return;
-        var token = await TokenProvider.GetTokenAsync(Instance.Id);
-        if (token is null) return;
 
         _error = null;
         try
         {
-            _downloadId = await SupervisorClient.StartDownloadAsync(Instance.AdminUrl, token, _repoId.Trim(), _name.Trim());
+            _downloadId = await SupervisorClient.StartDownloadAsync(Instance.AdminUrl, _repoId.Trim(), _name.Trim());
             _pollCts = new CancellationTokenSource();
-            _ = PollDownloadAsync(Instance.AdminUrl, token, _downloadId, _pollCts.Token);
+            _ = PollDownloadAsync(Instance.AdminUrl, _downloadId, _pollCts.Token);
         }
         catch (Exception ex)
         {
@@ -251,13 +254,13 @@
         }
     }
 
-    private async Task PollDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct)
+    private async Task PollDownloadAsync(string adminUrl, string downloadId, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                _downloadStatus = await SupervisorClient.GetDownloadAsync(adminUrl, token, downloadId, ct);
+                _downloadStatus = await SupervisorClient.GetDownloadAsync(adminUrl, downloadId, ct);
             }
             catch (OperationCanceledException)
             {
@@ -285,13 +288,11 @@
     private async Task CancelDownloadAsync()
     {
         if (Instance?.AdminUrl is null || _downloadId is null) return;
-        var token = await TokenProvider.GetTokenAsync(Instance.Id);
-        if (token is null) return;
 
         _pollCts?.Cancel();
         try
         {
-            await SupervisorClient.CancelDownloadAsync(Instance.AdminUrl, token, _downloadId);
+            await SupervisorClient.CancelDownloadAsync(Instance.AdminUrl, _downloadId);
         }
         catch (Exception ex)
         {

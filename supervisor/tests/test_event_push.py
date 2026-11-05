@@ -17,7 +17,6 @@ from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore
 
 FAKE_VLLM = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
-TOKEN = "test-token"
 
 
 def run(coro):
@@ -26,7 +25,7 @@ def run(coro):
 
 def new_runner(tmp_path, url: str) -> tuple[DeployRunner, ProcessManager, EventPusher]:
     pm = ProcessManager()
-    pusher = EventPusher(url=url, token=TOKEN)
+    pusher = EventPusher(url=url)
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), pusher, archive=DeploymentArchive(tmp_path))
     return runner, pm, pusher
 
@@ -104,7 +103,10 @@ def test_failing_deploy_pushes_failed_state_and_a_separate_report(tmp_path):
         stub.stop()
 
 
-def test_every_push_carries_the_bearer_token(tmp_path):
+def test_every_push_has_no_auth_header(tmp_path):
+    # Loopback-only change: the dashboard's event receiver is reached over
+    # 127.0.0.1 same as the admin API, so pushes no longer carry a bearer
+    # token at all -- this just confirms nothing still tries to.
     stub = RecordingStub()
     try:
         runner, pm, pusher = new_runner(tmp_path, stub.url)
@@ -125,7 +127,7 @@ def test_every_push_carries_the_bearer_token(tmp_path):
 
         assert len(stub.requests) > 0
         for r in stub.requests:
-            assert r["headers"].get("Authorization") == f"Bearer {TOKEN}"
+            assert "Authorization" not in r["headers"]
     finally:
         stub.stop()
 
@@ -180,7 +182,7 @@ def test_deploy_completes_while_stub_is_down_and_delivers_once_it_restarts(tmp_p
 
 def test_disabled_when_url_unset_makes_no_network_calls(tmp_path):
     pm = ProcessManager()
-    pusher = EventPusher(url=None, token=TOKEN)
+    pusher = EventPusher(url=None)
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), pusher, archive=DeploymentArchive(tmp_path))
     port = free_port()
 
@@ -202,7 +204,7 @@ def test_disabled_when_url_unset_makes_no_network_calls(tmp_path):
 def test_queue_full_drops_oldest_log_items_but_never_state_or_report():
     # port 1: nothing listens there -- every send attempt just fails/retries,
     # so pushed items sit in the queue for these assertions to inspect.
-    pusher = EventPusher(url="http://127.0.0.1:1", token=TOKEN, max_queue_size=5)
+    pusher = EventPusher(url="http://127.0.0.1:1", max_queue_size=5)
 
     for i in range(3):
         pusher.push(PushItem("d1", i, time.time(), "log", {"lines": [f"line{i}"]}, droppable=True))

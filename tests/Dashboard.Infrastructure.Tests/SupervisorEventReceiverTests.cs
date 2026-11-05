@@ -8,19 +8,16 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Dashboard.Infrastructure.Tests;
 
-/// <summary>P10b's Definition of done: "missing/wrong token -> 401 and
-/// nothing written." Exercises SupervisorEventReceiver directly (the logic
-/// Program.cs's minimal API route delegates to) rather than a full web
-/// host.</summary>
+/// <summary>"Not from this machine -> 401 and nothing written." Exercises
+/// SupervisorEventReceiver directly (the logic Program.cs's minimal API route
+/// delegates to) rather than a full web host. Used to gate on a per-instance
+/// bearer token; now gates on the caller being loopback (<c>isLoopback</c>),
+/// since the supervisor always runs alongside the dashboard on one host and
+/// Program.cs derives that flag from the request's own remote IP.</summary>
 [Collection("Postgres")]
 public class SupervisorEventReceiverTests(PostgresFixture postgres)
 {
-    private sealed class FixedTokenProvider(string? token) : ISupervisorTokenProvider
-    {
-        public Task<string?> GetTokenAsync(int instanceId, CancellationToken ct = default) => Task.FromResult(token);
-    }
-
-    private async Task<(SupervisorEventReceiver Receiver, IServiceScopeFactory ScopeFactory)> NewReceiverAsync(string? token)
+    private async Task<(SupervisorEventReceiver Receiver, IServiceScopeFactory ScopeFactory)> NewReceiverAsync()
     {
         var connectionString = await postgres.CreateFreshDatabaseAsync();
         var services = new ServiceCollection();
@@ -32,7 +29,6 @@ public class SupervisorEventReceiverTests(PostgresFixture postgres)
         services.AddSingleton<IInstanceService, InstanceService>();
         services.AddSingleton<ISupervisorClient, SupervisorClient>();
         services.AddSingleton<IDeploymentEventApplier, DeploymentEventApplier>();
-        services.AddSingleton<ISupervisorTokenProvider>(new FixedTokenProvider(token));
         services.AddSingleton<SupervisorEventReceiver>();
         var provider = services.BuildServiceProvider();
 
@@ -72,13 +68,13 @@ public class SupervisorEventReceiverTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task MissingToken_Returns401AndWritesNothing()
+    public async Task NotLoopback_Returns401AndWritesNothing()
     {
-        var (receiver, scopeFactory) = await NewReceiverAsync(token: "the-real-token");
+        var (receiver, scopeFactory) = await NewReceiverAsync();
         var deployment = await SeedPendingDeploymentAsync(scopeFactory);
 
         var evt = new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "state", State = "starting" };
-        var result = await receiver.HandleAsync(evt, authorizationHeader: null);
+        var result = await receiver.HandleAsync(evt, isLoopback: false);
 
         Assert.Equal(SupervisorEventReceiverResult.Unauthorized, result);
         using var scope = scopeFactory.CreateScope();
@@ -87,28 +83,13 @@ public class SupervisorEventReceiverTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task WrongToken_Returns401AndWritesNothing()
+    public async Task Loopback_Returns200AndApplies()
     {
-        var (receiver, scopeFactory) = await NewReceiverAsync(token: "the-real-token");
+        var (receiver, scopeFactory) = await NewReceiverAsync();
         var deployment = await SeedPendingDeploymentAsync(scopeFactory);
 
         var evt = new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "state", State = "starting" };
-        var result = await receiver.HandleAsync(evt, authorizationHeader: "Bearer wrong-token");
-
-        Assert.Equal(SupervisorEventReceiverResult.Unauthorized, result);
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        Assert.Equal(0, await db.DeploymentEventsV2.CountAsync());
-    }
-
-    [Fact]
-    public async Task CorrectToken_Returns200AndApplies()
-    {
-        var (receiver, scopeFactory) = await NewReceiverAsync(token: "the-real-token");
-        var deployment = await SeedPendingDeploymentAsync(scopeFactory);
-
-        var evt = new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "state", State = "starting" };
-        var result = await receiver.HandleAsync(evt, authorizationHeader: "Bearer the-real-token");
+        var result = await receiver.HandleAsync(evt, isLoopback: true);
 
         Assert.Equal(SupervisorEventReceiverResult.Ok, result);
         using var scope = scopeFactory.CreateScope();
@@ -119,10 +100,10 @@ public class SupervisorEventReceiverTests(PostgresFixture postgres)
     [Fact]
     public async Task UnknownDeploymentId_Returns404()
     {
-        var (receiver, _) = await NewReceiverAsync(token: "the-real-token");
+        var (receiver, _) = await NewReceiverAsync();
 
         var evt = new SupervisorPushEvent { DeploymentId = "999999", Seq = 1, Kind = "state", State = "starting" };
-        var result = await receiver.HandleAsync(evt, authorizationHeader: "Bearer the-real-token");
+        var result = await receiver.HandleAsync(evt, isLoopback: true);
 
         Assert.Equal(SupervisorEventReceiverResult.NotFound, result);
     }

@@ -41,11 +41,6 @@ public class SwapServiceTests : IAsyncDisposable
             await _container.DisposeAsync();
     }
 
-    private sealed class FixedTokenProvider : ISupervisorTokenProvider
-    {
-        public Task<string?> GetTokenAsync(int instanceId, CancellationToken ct = default) => Task.FromResult<string?>(SupervisorImageFixture.Token);
-    }
-
     private async Task<(ISwapService Swap, IDeploymentEventApplier Applier, IServiceScopeFactory ScopeFactory, string AdminUrl)> NewSwapServiceAsync()
     {
         _container = await _supervisorImage.StartContainerAsync();
@@ -56,7 +51,6 @@ public class SwapServiceTests : IAsyncDisposable
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
         services.AddHttpClient("supervisor");
         services.AddSignalR(); // for IHubContext<DeploymentHub> -- no real clients connect in these tests
-        services.AddSingleton<ISupervisorTokenProvider, FixedTokenProvider>();
         services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
         services.AddSingleton<IServerService, ServerService>();
         services.AddSingleton<IInstanceService, InstanceService>();
@@ -132,13 +126,13 @@ public class SwapServiceTests : IAsyncDisposable
     /// publicly reachable endpoint for the container to push to from this
     /// test process. Returns the final row.</summary>
     private static async Task<Deployment> DriveToTerminalAsync(
-        IServiceScopeFactory scopeFactory, IDeploymentEventApplier applier, string adminUrl, string token, int deploymentId,
+        IServiceScopeFactory scopeFactory, IDeploymentEventApplier applier, string adminUrl, int deploymentId,
         TimeSpan? timeout = null)
     {
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
         while (DateTime.UtcNow < deadline)
         {
-            await applier.CatchUpAsync(deploymentId, adminUrl, token, CancellationToken.None);
+            await applier.CatchUpAsync(deploymentId, adminUrl, CancellationToken.None);
             var deployment = await GetAsync(scopeFactory, deploymentId);
             if (deployment!.Status != "pending")
                 return deployment;
@@ -156,7 +150,7 @@ public class SwapServiceTests : IAsyncDisposable
 
         var first = await swap.SwapAsync(instance.Id, modelA.Id, recipeA.Id);
         Assert.Equal("pending", first.Outcome);
-        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, first.DeploymentId!.Value);
+        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, first.DeploymentId!.Value);
         Assert.Equal("active", firstRow.Status);
         var argv = JsonSerializer.Deserialize<List<string>>(firstRow.ArgsSnapshot)!;
         Assert.Contains("--served-model-name", argv);
@@ -173,7 +167,7 @@ public class SwapServiceTests : IAsyncDisposable
 
         var second = await swap.SwapAsync(instance.Id, modelB.Id, recipeA.Id);
         Assert.Equal("pending", second.Outcome);
-        var secondRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, second.DeploymentId!.Value);
+        var secondRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, second.DeploymentId!.Value);
         Assert.Equal("active", secondRow.Status);
 
         var reloadedFirst = await GetAsync(scopeFactory, firstRow.Id);
@@ -190,7 +184,7 @@ public class SwapServiceTests : IAsyncDisposable
         var recipeB = await AddRecipeAsync(scopeFactory, server.Id, "recipe-b", "other");
 
         var first = await swap.SwapAsync(instance.Id, model.Id, recipeA.Id);
-        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, first.DeploymentId!.Value);
+        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, first.DeploymentId!.Value);
 
         var ex = await Assert.ThrowsAsync<ServedNameChangeRequiresAcknowledgementException>(
             () => swap.SwapAsync(instance.Id, model.Id, recipeB.Id));
@@ -199,7 +193,7 @@ public class SwapServiceTests : IAsyncDisposable
 
         var acknowledged = await swap.SwapAsync(instance.Id, model.Id, recipeB.Id, acknowledgeServedNameChange: true);
         Assert.Equal("pending", acknowledged.Outcome);
-        var row = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, acknowledged.DeploymentId!.Value);
+        var row = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, acknowledged.DeploymentId!.Value);
         Assert.Equal("active", row.Status);
     }
 
@@ -213,12 +207,12 @@ public class SwapServiceTests : IAsyncDisposable
             scopeFactory, server.Id, "crash", "main", extraArgsJson: """[{"key":"fake-crash","value":null}]""");
 
         var first = await swap.SwapAsync(instance.Id, model.Id, goodRecipe.Id);
-        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, first.DeploymentId!.Value);
+        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, first.DeploymentId!.Value);
         Assert.Equal("active", firstRow.Status);
 
         var second = await swap.SwapAsync(instance.Id, model.Id, crashRecipe.Id);
         Assert.Equal("pending", second.Outcome);
-        var secondRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, second.DeploymentId!.Value);
+        var secondRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, second.DeploymentId!.Value);
 
         Assert.Equal("failed", secondRow.Status);
         Assert.Equal("process_exited", secondRow.FailureReason);
@@ -240,7 +234,7 @@ public class SwapServiceTests : IAsyncDisposable
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
 
         var first = await swap.SwapAsync(instance.Id, model.Id, recipe.Id);
-        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, first.DeploymentId!.Value);
+        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, first.DeploymentId!.Value);
 
         var countBefore = await CountDeploymentsAsync(scopeFactory, instance.Id);
         var second = await swap.SwapAsync(instance.Id, model.Id, recipe.Id);
@@ -257,7 +251,7 @@ public class SwapServiceTests : IAsyncDisposable
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
 
         var first = await swap.SwapAsync(instance.Id, modelA.Id, recipe.Id);
-        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, first.DeploymentId!.Value);
+        var firstRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, first.DeploymentId!.Value);
 
         Model modelB;
         using (var scope = scopeFactory.CreateScope())
@@ -268,11 +262,11 @@ public class SwapServiceTests : IAsyncDisposable
             await db.SaveChangesAsync();
         }
         var second = await swap.SwapAsync(instance.Id, modelB.Id, recipe.Id);
-        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, second.DeploymentId!.Value);
+        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, second.DeploymentId!.Value);
 
         var rollback = await swap.RollbackAsync(instance.Id);
         Assert.Equal("pending", rollback.Outcome);
-        var rollbackRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, rollback.DeploymentId!.Value);
+        var rollbackRow = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, rollback.DeploymentId!.Value);
         Assert.Equal("active", rollbackRow.Status);
         Assert.Equal(firstRow.ArgsSnapshot, rollbackRow.ArgsSnapshot);
 
@@ -289,7 +283,7 @@ public class SwapServiceTests : IAsyncDisposable
         var (server, instance, model) = await SeedAsync(scopeFactory, adminUrl);
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
         var deployed = await swap.SwapAsync(instance.Id, model.Id, recipe.Id);
-        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, deployed.DeploymentId!.Value);
+        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, deployed.DeploymentId!.Value);
 
         await swap.StopAsync(instance.Id);
 
@@ -307,7 +301,7 @@ public class SwapServiceTests : IAsyncDisposable
         var (server, instance, modelA) = await SeedAsync(scopeFactory, adminUrl);
         var recipe = await AddRecipeAsync(scopeFactory, server.Id, "default", "main");
         var first = await swap.SwapAsync(instance.Id, modelA.Id, recipe.Id);
-        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, first.DeploymentId!.Value);
+        await DriveToTerminalAsync(scopeFactory, applier, adminUrl, first.DeploymentId!.Value);
 
         Model modelB;
         using (var scope = scopeFactory.CreateScope())
@@ -350,7 +344,7 @@ public class SwapServiceTests : IAsyncDisposable
             scopeFactory, server.Id, "default", "main", extraArgsJson: """[{"key":"fake-exit-after","value":"2"}]""");
 
         var deployed = await swap.SwapAsync(instance.Id, model.Id, recipe.Id);
-        var row = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, SupervisorImageFixture.Token, deployed.DeploymentId!.Value);
+        var row = await DriveToTerminalAsync(scopeFactory, applier, adminUrl, deployed.DeploymentId!.Value);
         Assert.Equal("active", row.Status);
 
         // The fake child exits on its own ~2s after reaching ready -- the
@@ -362,7 +356,7 @@ public class SwapServiceTests : IAsyncDisposable
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
         while (DateTime.UtcNow < deadline)
         {
-            await applier.CatchUpAsync(deployed.DeploymentId.Value, adminUrl, SupervisorImageFixture.Token, CancellationToken.None);
+            await applier.CatchUpAsync(deployed.DeploymentId.Value, adminUrl, CancellationToken.None);
             reloaded = await GetAsync(scopeFactory, deployed.DeploymentId.Value);
             if (reloaded!.Status == "stopped")
                 break;

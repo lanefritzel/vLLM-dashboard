@@ -108,13 +108,13 @@ public class DeploymentHubTests(PostgresFixture postgres) : IAsyncDisposable
 
         await connection.InvokeAsync("JoinDeployment", deployment.Id);
 
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, "http://unused.invalid", "unused",
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, "http://unused.invalid",
             new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 1, Kind = "state", State = "starting" },
             CancellationToken.None);
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, "http://unused.invalid", "unused",
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, "http://unused.invalid",
             new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 2, Kind = "log", Lines = ["hello"] },
             CancellationToken.None);
-        await applier.ApplyWithGapCatchUpAsync(deployment.Id, "http://unused.invalid", "unused",
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, "http://unused.invalid",
             new SupervisorPushEvent { DeploymentId = deployment.Id.ToString(), Seq = 3, Kind = "state", State = "loading" },
             CancellationToken.None);
 

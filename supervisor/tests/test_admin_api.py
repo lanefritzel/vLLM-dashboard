@@ -1,6 +1,11 @@
-"""Auth + HTTP-layer behavior of the admin API (P03a) via FastAPI's
-TestClient -- fast, in-process, no real sockets for most of these (the
-/admin/deploy happy-path -> real-child tests live in test_deploy_runner.py).
+"""HTTP-layer behavior of the admin API (P03a) via FastAPI's TestClient --
+fast, in-process, no real sockets for most of these (the /admin/deploy
+happy-path -> real-child tests live in test_deploy_runner.py).
+
+No auth of any kind as of the loopback-only change: supervisor.py binds this
+API to 127.0.0.1 only, so it's never reachable from anywhere but the same
+host the dashboard runs on -- a bearer token was protecting against LAN
+exposure that no longer exists, not against anything these tests simulate.
 """
 import sys
 from pathlib import Path
@@ -16,41 +21,29 @@ from supervisor.log_store import DeploymentArchive
 from supervisor.process_manager import ProcessManager
 from supervisor.state import StateStore, SupervisorState
 
-TOKEN = "test-token"
-
 
 def new_client(tmp_path, download_manager=None) -> TestClient:
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN, download_manager)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), download_manager)
     return TestClient(app)
 
 
 def auth_headers() -> dict:
-    return {"Authorization": f"Bearer {TOKEN}"}
+    # Kept as a call site rather than ripping it out of every request below --
+    # there is no auth any more, so this is deliberately a no-op.
+    return {}
 
 
-def test_health_needs_no_token(tmp_path):
+def test_health_is_reachable(tmp_path):
     client = new_client(tmp_path)
     resp = client.get("/admin/health")
     assert resp.status_code == 200
 
 
-def test_status_without_token_is_401(tmp_path):
+def test_status_with_no_auth_header_is_200(tmp_path):
     client = new_client(tmp_path)
     resp = client.get("/admin/status")
-    assert resp.status_code == 401
-
-
-def test_status_with_wrong_token_is_401(tmp_path):
-    client = new_client(tmp_path)
-    resp = client.get("/admin/status", headers={"Authorization": "Bearer nope"})
-    assert resp.status_code == 401
-
-
-def test_status_with_correct_token_is_200(tmp_path):
-    client = new_client(tmp_path)
-    resp = client.get("/admin/status", headers=auth_headers())
     assert resp.status_code == 200
     body = resp.json()
     assert body["state"] == "idle"
@@ -58,7 +51,7 @@ def test_status_with_correct_token_is_200(tmp_path):
     assert body["smoke_ok"] is None
 
 
-def test_every_admin_route_except_health_requires_auth(tmp_path):
+def test_admin_routes_never_401_for_auth_reasons(tmp_path):
     client = new_client(tmp_path)
     for method, path in [
         ("GET", "/admin/status"),
@@ -76,7 +69,7 @@ def test_every_admin_route_except_health_requires_auth(tmp_path):
         ("DELETE", "/admin/downloads/x"),
     ]:
         resp = client.request(method, path, json={} if method in ("POST", "PUT") else None)
-        assert resp.status_code == 401, f"{method} {path} should 401 without a token"
+        assert resp.status_code != 401, f"{method} {path} should never 401 -- there is no auth any more"
 
 
 def test_status_surfaces_a_persisted_failure_report_even_from_a_fresh_runner(tmp_path):
@@ -150,7 +143,7 @@ def test_admin_logs_returns_the_current_process_output_and_lines_limits_it(tmp_p
     fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
     client = TestClient(app)
 
     import socket
@@ -187,7 +180,7 @@ def test_smoke_test_endpoint_runs_on_demand_while_serving(tmp_path):
     fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
     client = TestClient(app)
 
     import socket
@@ -243,7 +236,7 @@ def test_restart_endpoint_translates_to_a_new_deployment_id(tmp_path):
     fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
     client = TestClient(app)
 
     import socket
@@ -269,7 +262,7 @@ def test_restart_endpoint_honors_a_caller_supplied_deployment_id(tmp_path):
     fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
     client = TestClient(app)
 
     import socket
@@ -295,7 +288,7 @@ def test_stop_endpoint_against_a_real_child_releases_it(tmp_path):
     fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
     client = TestClient(app)
 
     import socket
@@ -372,7 +365,7 @@ def test_admin_deployment_logs_returns_that_deployments_archived_output(tmp_path
     fake_vllm = str(Path(__file__).parent.parent.parent / "tests" / "fake-vllm" / "fake_vllm.py")
     pm = ProcessManager()
     runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
-    app = create_app(pm, runner, StateStore(tmp_path / "state.json"), TOKEN)
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
     client = TestClient(app)
 
     import socket

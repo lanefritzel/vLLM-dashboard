@@ -45,11 +45,9 @@ class EventPusher:
     def __init__(
         self,
         url: Optional[str],
-        token: Optional[str],
         max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE,
     ) -> None:
         self._url = url
-        self._token = token
         self._max_queue_size = max_queue_size
         self._queue: list[PushItem] = []
         self._wake: Optional[asyncio.Event] = None
@@ -116,10 +114,7 @@ class EventPusher:
             self._url,
             data=body,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._token}" if self._token else "",
-            },
+            headers={"Content-Type": "application/json"},
         )
         try:
             with urllib.request.urlopen(req, timeout=SEND_TIMEOUT_SECONDS) as resp:

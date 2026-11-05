@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Dashboard.Core.Abstractions;
@@ -10,7 +9,7 @@ namespace Dashboard.Infrastructure.Supervisor;
 /// call builds an absolute URL from the given <c>adminUrl</c> -- same
 /// "named client + per-call absolute URL" pattern as <c>DockerOrchestrator</c>'s
 /// own HTTP calls, since the target host varies per instance, not per
-/// client registration.</summary>
+/// client registration. No bearer token: see <see cref="ISupervisorClient"/>.</summary>
 public sealed class SupervisorClient : ISupervisorClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
@@ -22,14 +21,6 @@ public sealed class SupervisorClient : ISupervisorClient
     private HttpClient NewClient() => _httpFactory.CreateClient("supervisor");
 
     private static string Url(string adminUrl, string path) => $"{adminUrl.TrimEnd('/')}{path}";
-
-    private static HttpRequestMessage NewRequest(HttpMethod method, string url, string? token)
-    {
-        var request = new HttpRequestMessage(method, url);
-        if (!string.IsNullOrEmpty(token))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        return request;
-    }
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -61,87 +52,76 @@ public sealed class SupervisorClient : ISupervisorClient
         }
     }
 
-    public async Task<SupervisorStatus> GetStatusAsync(string adminUrl, string token, CancellationToken ct = default)
+    public async Task<SupervisorStatus> GetStatusAsync(string adminUrl, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, "/admin/status"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.GetAsync(Url(adminUrl, "/admin/status"), ct);
         return await ReadAsync<SupervisorStatus>(response, ct);
     }
 
     public async Task<string> DeployAsync(
-        string adminUrl, string token, IReadOnlyList<string> argv, IReadOnlyDictionary<string, string>? env,
+        string adminUrl, IReadOnlyList<string> argv, IReadOnlyDictionary<string, string>? env,
         string deploymentId, double healthTimeout, object? smoke = null, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/deploy"), token);
-        request.Content = JsonContent.Create(new
+        using var response = await client.PostAsJsonAsync(Url(adminUrl, "/admin/deploy"), new
         {
             argv, env, deployment_id = deploymentId, health_timeout = healthTimeout, smoke,
-        });
-        using var response = await client.SendAsync(request, ct);
+        }, ct);
         var body = await ReadAsync<JsonElement>(response, ct);
         return body.GetProperty("deployment_id").GetString()!;
     }
 
     public async Task<IReadOnlyList<SupervisorDeploymentEvent>> GetEventsAsync(
-        string adminUrl, string token, string deploymentId, int after = 0, CancellationToken ct = default)
+        string adminUrl, string deploymentId, int after = 0, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, $"/admin/deployments/{deploymentId}/events?after={after}"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.GetAsync(Url(adminUrl, $"/admin/deployments/{deploymentId}/events?after={after}"), ct);
         return await ReadAsync<List<SupervisorDeploymentEvent>>(response, ct);
     }
 
     public async Task<string> GetDeploymentLogsAsync(
-        string adminUrl, string token, string deploymentId, int lines = 200, CancellationToken ct = default)
+        string adminUrl, string deploymentId, int lines = 200, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, $"/admin/deployments/{deploymentId}/logs?lines={lines}"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.GetAsync(Url(adminUrl, $"/admin/deployments/{deploymentId}/logs?lines={lines}"), ct);
         var body = await ReadAsync<JsonElement>(response, ct);
         return body.GetProperty("lines").GetString() ?? "";
     }
 
-    public async Task<SupervisorStopResult> StopAsync(string adminUrl, string token, CancellationToken ct = default)
+    public async Task<SupervisorStopResult> StopAsync(string adminUrl, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/stop"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.PostAsync(Url(adminUrl, "/admin/stop"), null, ct);
         return await ReadAsync<SupervisorStopResult>(response, ct);
     }
 
-    public async Task<SupervisorCancelResult> CancelAsync(string adminUrl, string token, string deploymentId, CancellationToken ct = default)
+    public async Task<SupervisorCancelResult> CancelAsync(string adminUrl, string deploymentId, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, $"/admin/deployments/{deploymentId}/cancel"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.PostAsync(Url(adminUrl, $"/admin/deployments/{deploymentId}/cancel"), null, ct);
         return await ReadAsync<SupervisorCancelResult>(response, ct);
     }
 
-    public async Task<string> RestartAsync(string adminUrl, string token, string? deploymentId = null, CancellationToken ct = default)
+    public async Task<string> RestartAsync(string adminUrl, string? deploymentId = null, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/restart"), token);
-        request.Content = JsonContent.Create(new { deployment_id = deploymentId });
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.PostAsJsonAsync(Url(adminUrl, "/admin/restart"), new { deployment_id = deploymentId }, ct);
         var body = await ReadAsync<JsonElement>(response, ct);
         return body.GetProperty("deployment_id").GetString()!;
     }
 
-    public async Task<SupervisorGpuInfo> GetGpuAsync(string adminUrl, string token, CancellationToken ct = default)
+    public async Task<SupervisorGpuInfo> GetGpuAsync(string adminUrl, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, "/admin/gpu"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.GetAsync(Url(adminUrl, "/admin/gpu"), ct);
         return await ReadAsync<SupervisorGpuInfo>(response, ct);
     }
 
-    public async Task<string> GetAutoStartAsync(string adminUrl, string token, CancellationToken ct = default)
+    public async Task<string> GetAutoStartAsync(string adminUrl, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, "/admin/settings"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.GetAsync(Url(adminUrl, "/admin/settings"), ct);
         var body = await ReadAsync<JsonElement>(response, ct);
         return body.GetProperty("AUTO_START").GetString()!;
     }
@@ -159,57 +139,52 @@ public sealed class SupervisorClient : ISupervisorClient
     /// names reach the wire byte-for-byte as declared.</summary>
     private static readonly JsonSerializerOptions NoNamingPolicy = new();
 
-    public async Task<string> SetAutoStartAsync(string adminUrl, string token, string autoStart, CancellationToken ct = default)
+    public async Task<string> SetAutoStartAsync(string adminUrl, string autoStart, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Put, Url(adminUrl, "/admin/settings"), token);
-        request.Content = JsonContent.Create(new { AUTO_START = autoStart }, options: NoNamingPolicy);
+        using var request = new HttpRequestMessage(HttpMethod.Put, Url(adminUrl, "/admin/settings"))
+        {
+            Content = JsonContent.Create(new { AUTO_START = autoStart }, options: NoNamingPolicy),
+        };
         using var response = await client.SendAsync(request, ct);
         var body = await ReadAsync<JsonElement>(response, ct);
         return body.GetProperty("AUTO_START").GetString()!;
     }
 
-    public async Task<SupervisorSmokeResult> SmokeTestAsync(string adminUrl, string token, CancellationToken ct = default)
+    public async Task<SupervisorSmokeResult> SmokeTestAsync(string adminUrl, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/smoke-test"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.PostAsync(Url(adminUrl, "/admin/smoke-test"), null, ct);
         return await ReadAsync<SupervisorSmokeResult>(response, ct);
     }
 
-    public async Task<SupervisorDownloadInspectResult> InspectDownloadAsync(string adminUrl, string token, string repoId, CancellationToken ct = default)
+    public async Task<SupervisorDownloadInspectResult> InspectDownloadAsync(string adminUrl, string repoId, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/downloads/inspect"), token);
-        request.Content = JsonContent.Create(new { repo_id = repoId });
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.PostAsJsonAsync(Url(adminUrl, "/admin/downloads/inspect"), new { repo_id = repoId }, ct);
         return await ReadAsync<SupervisorDownloadInspectResult>(response, ct);
     }
 
     public async Task<string> StartDownloadAsync(
-        string adminUrl, string token, string repoId, string slug, string? filename = null, CancellationToken ct = default)
+        string adminUrl, string repoId, string slug, string? filename = null, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Post, Url(adminUrl, "/admin/downloads"), token);
-        request.Content = JsonContent.Create(new { repo_id = repoId, slug, filename });
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.PostAsJsonAsync(Url(adminUrl, "/admin/downloads"), new { repo_id = repoId, slug, filename }, ct);
         var body = await ReadAsync<JsonElement>(response, ct);
         return body.GetProperty("download_id").GetString()!;
     }
 
-    public async Task<SupervisorDownloadStatus> GetDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct = default)
+    public async Task<SupervisorDownloadStatus> GetDownloadAsync(string adminUrl, string downloadId, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Get, Url(adminUrl, $"/admin/downloads/{downloadId}"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.GetAsync(Url(adminUrl, $"/admin/downloads/{downloadId}"), ct);
         return await ReadAsync<SupervisorDownloadStatus>(response, ct);
     }
 
-    public async Task CancelDownloadAsync(string adminUrl, string token, string downloadId, CancellationToken ct = default)
+    public async Task CancelDownloadAsync(string adminUrl, string downloadId, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var request = NewRequest(HttpMethod.Delete, Url(adminUrl, $"/admin/downloads/{downloadId}"), token);
-        using var response = await client.SendAsync(request, ct);
+        using var response = await client.DeleteAsync(Url(adminUrl, $"/admin/downloads/{downloadId}"), ct);
         await EnsureSuccessAsync(response, ct);
     }
 }

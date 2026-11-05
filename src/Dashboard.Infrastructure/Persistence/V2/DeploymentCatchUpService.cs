@@ -19,17 +19,15 @@ public sealed class DeploymentCatchUpService : BackgroundService
 
     private readonly IDeploymentService _deployments;
     private readonly IInstanceService _instances;
-    private readonly ISupervisorTokenProvider _tokenProvider;
     private readonly IDeploymentEventApplier _applier;
     private readonly ILogger<DeploymentCatchUpService> _logger;
 
     public DeploymentCatchUpService(
-        IDeploymentService deployments, IInstanceService instances, ISupervisorTokenProvider tokenProvider,
+        IDeploymentService deployments, IInstanceService instances,
         IDeploymentEventApplier applier, ILogger<DeploymentCatchUpService> logger)
     {
         _deployments = deployments;
         _instances = instances;
-        _tokenProvider = tokenProvider;
         _applier = applier;
         _logger = logger;
     }
@@ -70,13 +68,10 @@ public sealed class DeploymentCatchUpService : BackgroundService
             var instance = await _instances.GetAsync(deployment.InstanceId, ct);
             if (instance?.AdminUrl is null)
                 continue;
-            var token = await _tokenProvider.GetTokenAsync(instance.Id, ct);
-            if (token is null)
-                continue;
 
             try
             {
-                await _applier.CatchUpAsync(deployment.Id, instance.AdminUrl, token, ct);
+                await _applier.CatchUpAsync(deployment.Id, instance.AdminUrl, ct);
             }
             catch (OperationCanceledException)
             {
