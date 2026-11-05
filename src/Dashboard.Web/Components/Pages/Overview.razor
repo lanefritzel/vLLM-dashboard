@@ -115,6 +115,16 @@ else
             <Callout Tone="success">@_vramReleasedMessage</Callout>
         }
     }
+    else if (_activeDeployment is not null && IsSupervisorBusy)
+    {
+        <div class="ui-toolbar" style="margin-bottom: 2px;">
+            <StatusPill Status="swapping" />
+            <span class="text-muted">
+                Last known config: @(_activeModel?.Name ?? "—") · recipe: @(_activeRecipe?.Name ?? "—") · @_instance.Label
+                — supervisor is currently @SupervisorStateText(_reconcile?.SupervisorState).
+            </span>
+        </div>
+    }
     else
     {
         <div class="ui-toolbar" style="margin-bottom: 2px;">
@@ -252,7 +262,7 @@ else
     private SupervisorGpuInfo? _gpuInfo;
 
     private DotNetObjectReference<Overview>? _receiver;
-    private bool _hubStarted;
+    private Task? _hubStartTask;
     private bool _jsReady;
     private int _windowMinutes = 5;
     private string? _chartKey;
@@ -279,6 +289,35 @@ else
     private GenerationThroughputStats? _genStats;
     private DateTime _genStatsLastRefresh = DateTime.MinValue;
 
+    // Periodic re-poll of deployment/reconcile state (P16a finding, 2026-11-05):
+    // a supervisor-driven boot-replay never pushes events to the dashboard (its
+    // deployment id isn't one the dashboard issued -- see deploy_runner.py's
+    // _should_push), so without this, a tab left open during one never learns
+    // the model finished loading until the user manually reloads the page.
+    private static readonly TimeSpan ReconcilePollInterval = TimeSpan.FromSeconds(7);
+    private System.Threading.Timer? _reconcilePollTimer;
+    private bool _reconcilePollRunning;
+
+    /// <summary>True when the DB still has an active deployment row but the
+    /// supervisor itself is reporting a real, in-progress, non-idle state --
+    /// a boot-replay in flight, not a genuine stop. Drives which status banner
+    /// (and which action buttons) the "no Ok reconcile" branch below shows.</summary>
+    private bool IsSupervisorBusy =>
+        _reconcile?.Status == ReconcileStatus.IdleVsActive
+        && _reconcile.SupervisorState is { } s && s is not ("idle" or "ready");
+
+    private static string SupervisorStateText(string? state) => state switch
+    {
+        "loading" => "loading the model",
+        "waiting_health" => "waiting for the health check",
+        "starting" => "starting",
+        "stopping" => "stopping the previous model",
+        "releasing_gpu" => "releasing GPU memory",
+        "smoke" => "running a startup smoke test",
+        null => "unavailable",
+        var other => other,
+    };
+
     protected override async Task OnInitializedAsync()
     {
         _receiver = DotNetObjectReference.Create(this);
@@ -294,6 +333,32 @@ else
             _error = "Could not load: " + ex.Message;
         }
         _loading = false;
+
+        _reconcilePollTimer = new System.Threading.Timer(
+            _ => _ = PollReconcileAsync(), null, ReconcilePollInterval, ReconcilePollInterval);
+    }
+
+    private async Task PollReconcileAsync()
+    {
+        // Timer callbacks run on a thread-pool thread, outside Blazor's render
+        // sync context -- InvokeAsync marshals back onto it, and the running
+        // flag skips a tick if the previous one is still in flight rather than
+        // piling up overlapping polls.
+        if (_reconcilePollRunning || _instance is null) return;
+        _reconcilePollRunning = true;
+        try
+        {
+            await InvokeAsync(RefreshDeploymentStateAsync);
+        }
+        catch
+        {
+            // Circuit may be gone (page navigated away/closed) -- next tick
+            // either recovers or the timer gets disposed shortly after.
+        }
+        finally
+        {
+            _reconcilePollRunning = false;
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -301,17 +366,28 @@ else
         if (_instance is null) return;
         try
         {
-            if (!_hubStarted)
-            {
-                await JS.InvokeVoidAsync("hub_start", _receiver!);
-                _hubStarted = true;
-            }
+            // Shared in-flight task, not a bool flag (matches LiveTraffic.razor's
+            // _hubStartTask) -- the periodic reconcile poll below forces a fresh
+            // OnAfterRenderAsync every few seconds for the page's whole lifetime,
+            // not just once at startup, so a bool set "before awaiting" still has
+            // a window where a second concurrent render sees it as already true
+            // AFTER the single flag flip but BEFORE the connection is actually
+            // negotiated -- no, worse: a bool can't tell "already in flight" from
+            // "never started", so two renders landing back to back could each
+            // decide to (re)start hub_start, and hub.js's hub_start stops whatever
+            // connection already exists to make room for the new one, aborting a
+            // join mid-flight every time it happens. Assigning ??= here is atomic
+            // and synchronous -- a second concurrent render always awaits the
+            // exact same Task instance instead of ever calling hub_start twice.
+            _hubStartTask ??= JS.InvokeVoidAsync("hub_start", _receiver!).AsTask();
+            await _hubStartTask;
             _jsReady = true;
             await EnsureChartsAsync();
         }
         catch
         {
             // JS not ready yet (static prerender pass) -- retried on the next render.
+            _hubStartTask = null;
         }
     }
 
@@ -701,6 +777,8 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        if (_reconcilePollTimer is not null)
+            await _reconcilePollTimer.DisposeAsync();
         try
         {
             if (_hubJoinedSourceId is not null)
