@@ -1,0 +1,26 @@
+@* StatusPill — status dot + text, driven by StatusPresentation (Style Refactor
+   P1.3). Never color-only: the dot (or icon) always ships with text. *@
+<span class="@($"ui-status-pill ui-pill-{Presentation.Tone}{(Size == "sm" ? " ui-status-pill-sm" : "")}")">
+    @if (Presentation.Spinner)
+    {
+        <span class="ui-spinner" aria-hidden="true"></span>
+    }
+    else if (ShowIcon && Presentation.Icon is not null)
+    {
+        <Icon Name="@Presentation.Icon" Size="16" />
+    }
+    else
+    {
+        <span class="dot" aria-hidden="true"></span>
+    }
+    @(LabelOverride ?? Presentation.Label)
+</span>
+
+@code {
+    [Parameter, EditorRequired] public string Status { get; set; } = "";
+    [Parameter] public string? LabelOverride { get; set; }
+    [Parameter] public string Size { get; set; } = "md";
+    [Parameter] public bool ShowIcon { get; set; }
+
+    private StatusPresentation.Presentation Presentation => StatusPresentation.Resolve(Status);
+}

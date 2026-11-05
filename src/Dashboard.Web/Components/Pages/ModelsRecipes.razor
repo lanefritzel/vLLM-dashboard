@@ -24,110 +24,118 @@
 }
 else if (_selectedInstance is null)
 {
-    <div class="card"><div class="card-body">
-        <p class="text-muted mb-0">No instance configured yet. Register one on the Servers page.</p>
-    </div></div>
+    <UiPanel><EmptyState Variant="no-instance" Description="Register one on the Servers page." /></UiPanel>
 }
 else
 {
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger py-2">@_error</div>
+        <Callout Tone="danger">@_error</Callout>
     }
 
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="row g-3 align-items-end">
-                @if (_instances.Count > 1)
-                {
-                    <div class="col-md-4">
-                        <label class="form-label">Instance</label>
-                        <select class="form-select" @bind="_selectedInstanceId" @bind:after="OnInstanceChangedAsync">
+    <UiPanel>
+        <div class="row g-3 align-items-end">
+            @if (_instances.Count > 1)
+            {
+                <div class="col-md-4">
+                    <UiField Label="Instance" For="mr-instance">
+                        <UiSelect Id="mr-instance" Value="@_selectedInstanceId.ToString()" ValueChanged="OnInstanceValueChangedAsync">
                             @foreach (var inst in _instances)
                             {
                                 <option value="@inst.Id">@inst.Label</option>
                             }
-                        </select>
-                    </div>
-                }
-                <div class="col-md-5">
-                    <label class="form-label">Serving model</label>
-                    <select class="form-select" @bind="_servingModelId">
+                        </UiSelect>
+                    </UiField>
+                </div>
+            }
+            <div class="col-md-5">
+                <UiField Label="Serving model" For="mr-serving-model" Hint="&quot;Swap to this&quot; in the recipes table below deploys this model with that recipe.">
+                    <UiSelect Id="mr-serving-model" Value="@_servingModelId.ToString()" ValueChanged="@(v => _servingModelId = int.TryParse(v, out var n) ? n : _servingModelId)">
                         @foreach (var m in _models)
                         {
                             <option value="@m.Id">@m.Name</option>
                         }
-                    </select>
-                    <div class="form-text">"Swap to this" in the recipes table below deploys this model with that recipe.</div>
-                </div>
-                <div class="col-md-3 text-end">
-                    <button class="btn btn-primary btn-sm" @onclick="@(() => _addModelOpen = true)">+ Add model</button>
-                </div>
+                    </UiSelect>
+                </UiField>
+            </div>
+            <div class="col-md-3" style="text-align:right;">
+                <UiButton Variant="primary" Size="sm" OnClick="@(() => _addModelOpen = true)">+ Add model</UiButton>
             </div>
         </div>
-    </div>
+    </UiPanel>
 
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="card-title mb-3">Catalog</div>
-            <table class="table table-sm">
-                <thead><tr><th>Name</th><th>Source</th><th>Size</th><th>Quant</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                    @foreach (var m in _models)
-                    {
-                        <tr>
-                            <td>@m.Name</td>
-                            <td>@(m.SourceType == "huggingface" ? "Hugging Face" : "Local path")</td>
-                            <td>@(m.SizeBytes is { } sz ? FormatBytes(sz) : "—")</td>
-                            <td>@(m.Quantization ?? "—")</td>
-                            <td>@m.Status</td>
-                            <td class="text-end">
-                                <button class="btn btn-outline btn-sm" @onclick="@(() => NewRecipeFromModelAsync(m))">New recipe</button>
-                                <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteModelAsync(m))">Delete</button>
-                            </td>
-                        </tr>
-                    }
-                    @if (_models.Count == 0)
-                    {
-                        <tr><td colspan="6" class="text-muted">No models registered on this server yet.</td></tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <div style="height: var(--ui-space-4);"></div>
 
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="card-title mb-3">Recipes</div>
-            <table class="table table-sm">
-                <thead><tr><th>Recipe</th><th>Served as</th><th>Max len</th><th>GPU mem</th><th></th><th></th></tr></thead>
-                <tbody>
-                    @foreach (var r in _recipes)
-                    {
-                        var isActive = _activeDeployment is not null && _activeDeployment.RecipeId == r.Id && _activeDeployment.ModelId == _servingModelId;
-                        <tr>
-                            <td>@r.Name @(isActive ? "" : "")@if (isActive) { <span class="chip chip-active">active</span> }</td>
-                            <td>@r.ServedModelName</td>
-                            <td>@r.MaxModelLen.ToString("N0")</td>
-                            <td>@r.GpuMemoryUtilization.ToString("0.##")</td>
-                            <td class="text-end">
-                                <button class="btn btn-primary btn-sm" disabled="@(_swapBusy || isActive)" @onclick="@(() => SwapToThisAsync(r))">Swap to this</button>
-                                <button class="btn btn-outline btn-sm" @onclick="@(() => EditRecipeAsync(r))">Edit</button>
-                                <button class="btn btn-outline btn-sm" @onclick="@(() => DuplicateRecipeAsync(r))">Duplicate</button>
-                            </td>
-                            <td class="text-end">
-                                <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteRecipeAsync(r))">Delete</button>
-                            </td>
-                        </tr>
-                    }
-                    @if (_recipes.Count == 0)
-                    {
-                        <tr><td colspan="6" class="text-muted">No recipes yet — use "New recipe" on a catalog entry above.</td></tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <UiPanel Title="Catalog" Flush="true">
+        <TableShell Caption="Model catalog" ColumnCount="6" IsEmpty="@(_models.Count == 0)" EmptyTitle="No models registered on this server yet">
+            <Header>
+                <th scope="col">Name</th>
+                <th scope="col">Source</th>
+                <th scope="col" class="num">Size</th>
+                <th scope="col">Quant</th>
+                <th scope="col">Status</th>
+                <th scope="col"></th>
+            </Header>
+            <ChildContent>
+                @foreach (var m in _models)
+                {
+                    <tr>
+                        <td>@m.Name</td>
+                        <td>@(m.SourceType == "huggingface" ? "Hugging Face" : "Local path")</td>
+                        <td class="num">@(m.SizeBytes is { } sz ? FormatBytes(sz) : "—")</td>
+                        <td>@(m.Quantization ?? "—")</td>
+                        <td><StatusPill Status="@m.Status" Size="sm" /></td>
+                        <td>
+                            <span class="ui-row-actions">
+                                <UiButton Variant="ghost" Size="sm" OnClick="@(() => NewRecipeFromModelAsync(m))">New recipe</UiButton>
+                                <UiButton Variant="danger" Size="sm" OnClick="@(() => DeleteModelAsync(m))">Delete</UiButton>
+                            </span>
+                        </td>
+                    </tr>
+                }
+            </ChildContent>
+        </TableShell>
+    </UiPanel>
+
+    <div style="height: var(--ui-space-4);"></div>
+
+    <UiPanel Title="Recipes" Flush="true">
+        <TableShell Caption="Recipes" ColumnCount="5" IsEmpty="@(_recipes.Count == 0)" EmptyTitle="No recipes yet" EmptyMessage="Use &quot;New recipe&quot; on a catalog entry above.">
+            <Header>
+                <th scope="col">Recipe</th>
+                <th scope="col">Served as</th>
+                <th scope="col" class="num">Max len</th>
+                <th scope="col" class="num">GPU mem</th>
+                <th scope="col"></th>
+            </Header>
+            <ChildContent>
+                @foreach (var r in _recipes)
+                {
+                    var isActive = _activeDeployment is not null && _activeDeployment.RecipeId == r.Id && _activeDeployment.ModelId == _servingModelId;
+                    <tr>
+                        <td>
+                            @r.Name
+                            @if (isActive)
+                            {
+                                <Chip Static="true" Variant="success">active</Chip>
+                            }
+                        </td>
+                        <td>@r.ServedModelName</td>
+                        <td class="num">@r.MaxModelLen.ToString("N0")</td>
+                        <td class="num">@r.GpuMemoryUtilization.ToString("0.##")</td>
+                        <td>
+                            <span class="ui-row-actions">
+                                <UiButton Variant="primary" Size="sm" Disabled="@(_swapBusy || isActive)" OnClick="@(() => SwapToThisAsync(r))">Swap to this</UiButton>
+                                <UiButton Variant="ghost" Size="sm" OnClick="@(() => EditRecipeAsync(r))">Edit</UiButton>
+                                <UiButton Variant="ghost" Size="sm" OnClick="@(() => DuplicateRecipeAsync(r))">Duplicate</UiButton>
+                                <UiButton Variant="danger" Size="sm" OnClick="@(() => DeleteRecipeAsync(r))">Delete</UiButton>
+                            </span>
+                        </td>
+                    </tr>
+                }
+            </ChildContent>
+        </TableShell>
+    </UiPanel>
 }
 
 @if (_addModelOpen)
@@ -206,6 +214,13 @@ else
     {
         _selectedInstance = _instances.FirstOrDefault(i => i.Id == _selectedInstanceId);
         await RefreshActiveDeploymentAsync();
+    }
+
+    private async Task OnInstanceValueChangedAsync(string value)
+    {
+        if (int.TryParse(value, out var id))
+            _selectedInstanceId = id;
+        await OnInstanceChangedAsync();
     }
 
     private string CurrentActiveServedName()

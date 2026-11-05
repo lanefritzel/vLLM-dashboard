@@ -1,0 +1,50 @@
+/* ============================================================================
+   empty-state.css — EmptyState primitive (Style Refactor P1.4)
+
+   Used by EmptyState.razor, rendered inside a panel or TableShell's state
+   cell — never as a bare row. Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-space-2);
+  padding: var(--ui-space-7) var(--ui-space-5);
+  text-align: center;
+}
+
+.ui-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--ui-space-2);
+  border: 1px solid var(--ui-border);
+  border-radius: 50%;
+  background: var(--ui-surface-2);
+  color: var(--ui-subtle);
+}
+
+.ui-empty-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.ui-empty-body {
+  margin: 0;
+  max-width: 48ch;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-muted);
+}
+
+.ui-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-3);
+}

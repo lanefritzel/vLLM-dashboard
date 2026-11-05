@@ -1,0 +1,120 @@
+/* ============================================================================
+   stat-cards.css — stat card primitives (Style Refactor P1.3)
+
+   Legacy .kpi-* restyle + the ui-stat-card vocabulary used by StatCard.razor.
+   The sparkline slot is a plain RenderFragment for now; P1.6 (Chart Card &
+   Theme Bridge) is what lets it render an actual Chart.js mini-chart.
+   Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.kpi-card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-top: 2px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius);
+  padding: var(--ui-space-4);
+  box-shadow: 0 1px 2px var(--ui-shadow-sm);
+}
+
+.kpi-label {
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  color: var(--ui-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kpi-value {
+  font-size: 1.375rem;
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--ui-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-value.small { font-size: var(--ui-text-lg); }
+
+.kpi-unit {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-subtle);
+}
+
+/* ui-stat-card primitive (StatCard.razor) ------------------------------------ */
+
+.ui-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--ui-space-4);
+}
+
+.ui-stat-card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-top: 2px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius);
+  padding: var(--ui-space-4);
+  box-shadow: 0 1px 2px var(--ui-shadow-sm);
+}
+
+.ui-stat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-2);
+}
+
+.ui-stat-label {
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  color: var(--ui-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ui-stat-info {
+  display: inline-flex;
+  color: var(--ui-subtle);
+  cursor: help;
+}
+
+.ui-stat-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.ui-stat-value {
+  font-size: 1.75rem;
+  font-weight: 650;
+  color: var(--ui-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-stat-value-unavailable {
+  color: var(--ui-subtle);
+  font-weight: 500;
+}
+
+.ui-stat-unit {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-subtle);
+}
+
+.ui-stat-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+}
+
+.ui-stat-delta.up { color: var(--ui-success); }
+.ui-stat-delta.down { color: var(--ui-danger); }
+.ui-stat-delta.flat { color: var(--ui-muted); }
+
+.ui-stat-sparkline {
+  margin-top: var(--ui-space-2);
+  height: 32px;
+}

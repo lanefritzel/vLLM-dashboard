@@ -1,0 +1,177 @@
+/* ============================================================================
+   tables.css — table primitives (Style Refactor P1.3)
+
+   Legacy Bootstrap .table restyle + the ui-table vocabulary used by
+   TableShell.razor/SortableHeader.razor. Row density is tuned to the
+   Dockhand reference (~40px rows) rather than the spec's nominal 44px —
+   visual match wins when the two disagree. Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.table {
+  --bs-table-bg: transparent;
+  color: var(--ui-text);
+  margin-bottom: 0;
+}
+
+.table > :not(caption) > * > * {
+  padding: 10px 12px;
+  border-bottom-color: var(--ui-border-subtle);
+  background-color: transparent;
+  color: var(--ui-text);
+}
+
+.table > thead > tr > th,
+.table thead th {
+  background: var(--ui-surface-2);
+  border-bottom: 1px solid var(--ui-border-strong);
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+
+.table > tbody > tr {
+  border-top-color: var(--ui-border-subtle);
+}
+
+.table > tbody > tr:hover > * {
+  background-color: var(--ui-hover);
+}
+
+/* ui-table primitive (TableShell.razor) -------------------------------------- */
+
+.ui-table-wrap {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  overflow: auto;
+  background: var(--ui-surface);
+}
+
+.ui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text);
+}
+
+.ui-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--ui-surface-2);
+  text-align: left;
+  padding: 9px 12px;
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ui-muted);
+  border-bottom: 1px solid var(--ui-border-strong);
+  white-space: nowrap;
+}
+
+.ui-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ui-border-subtle);
+  vertical-align: middle;
+}
+
+.ui-table tbody tr:last-child td { border-bottom: 0; }
+.ui-table tbody tr:hover { background: var(--ui-hover); }
+
+.ui-table tbody tr[aria-selected="true"] { background: var(--ui-active); }
+
+th.num,
+td.num,
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.ui-row-actions {
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+tr:hover .ui-row-actions,
+.ui-row-actions:focus-within { opacity: 1; }
+
+@media (hover: none) {
+  .ui-row-actions { opacity: 1; }
+}
+
+.ui-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ui-sort:hover { color: var(--ui-text); }
+
+.ui-sort-icon { color: var(--ui-subtle); transition: transform 0.1s ease; }
+.ui-sort[aria-sort="ascending"] .ui-sort-icon,
+th[aria-sort="ascending"] .ui-sort-icon { color: var(--ui-text); }
+.ui-sort[aria-sort="descending"] .ui-sort-icon,
+th[aria-sort="descending"] .ui-sort-icon { color: var(--ui-text); transform: rotate(180deg); }
+
+/* Truncated cell text with no row-height jump (pair with title="" for tooltip) */
+.ui-table-truncate {
+  max-width: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Expandable row pattern -------------------------------------------------------- */
+
+.ui-row-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--ui-subtle);
+  cursor: pointer;
+}
+
+.ui-row-expand-btn:hover { color: var(--ui-text); }
+
+.ui-row-expand-btn .ui-icon { transition: transform 0.12s ease; }
+.ui-row-expand-btn[aria-expanded="true"] .ui-icon { transform: rotate(90deg); }
+
+.ui-row-detail > td {
+  padding: var(--ui-space-3) var(--ui-space-4);
+  background: var(--ui-surface-2);
+  border-bottom: 1px solid var(--ui-border-subtle);
+}
+
+/* Empty / loading / error states inside the table area --------------------------- */
+
+.ui-table-state-cell { padding: 0; }
+
+/* Footer slot: range, page size, pagination -------------------------------------- */
+
+.ui-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-2) var(--ui-space-4);
+  border-top: 1px solid var(--ui-border);
+  color: var(--ui-muted);
+  font-size: var(--ui-text-xs);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 390px) {
+  .ui-table-wrap { max-width: 100%; }
+}

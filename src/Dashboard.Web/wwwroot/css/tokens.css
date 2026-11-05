@@ -73,9 +73,9 @@
   --ui-shadow: rgba(2, 6, 18, 0.5);
   --ui-shadow-sm: rgba(2, 6, 18, 0.35);
   --ui-overlay: rgba(3, 7, 18, 0.62);
-  --ui-radius: 10px;
-  --ui-radius-sm: 6px;
-  --ui-radius-lg: 14px;
+  --ui-radius: 4px;
+  --ui-radius-sm: 3px;
+  --ui-radius-lg: 6px;
 
   /* Focus / selection ------------------------------------------------------------ */
   --ui-focus-ring: 0 0 0 3px rgba(47, 208, 124, 0.28);
@@ -119,6 +119,12 @@
   --ui-content-px: 32px;
   --ui-content-pt: 24px;
   --ui-content-pb: 40px;
+
+  /* Terminal (TerminalPane) — stays near-black in both themes, like a real
+     terminal, rather than following the page's light/dark surface. */
+  --ui-terminal-bg: #05070c;
+  --ui-terminal-text: #d6dce8;
+  --ui-terminal-border: #1b2334;
 
   /* Compatibility aliases — legacy pages/charts read the old names.
      They now resolve to the new token system (removed in P4.1). */
@@ -212,9 +218,9 @@
   --ui-shadow: rgba(23, 32, 54, 0.12);
   --ui-shadow-sm: rgba(23, 32, 54, 0.08);
   --ui-overlay: rgba(23, 32, 54, 0.40);
-  --ui-radius: 10px;
-  --ui-radius-sm: 6px;
-  --ui-radius-lg: 14px;
+  --ui-radius: 4px;
+  --ui-radius-sm: 3px;
+  --ui-radius-lg: 6px;
 
   /* Focus ----------------------------------------------------------------------------- */
   --ui-focus-ring: 0 0 0 3px rgba(14, 158, 90, 0.22);
@@ -223,6 +229,12 @@
 
   /* Select chevron (light variant) */
   --ui-select-chevron: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%235c6679' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M4 6l4 4 4-4'/%3e%3c/svg%3e");
+
+  /* Terminal stays the same near-black in light mode too — deliberately not
+     theme-dependent. */
+  --ui-terminal-bg: #05070c;
+  --ui-terminal-text: #d6dce8;
+  --ui-terminal-border: #1b2334;
 
   /* Compatibility aliases (mirror of dark block, same legacy names) */
   --bg: var(--ui-bg);

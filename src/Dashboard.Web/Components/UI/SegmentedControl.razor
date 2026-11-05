@@ -1,0 +1,21 @@
+@* SegmentedControl — sunken track with a raised active segment, for ranges/
+   simple filters (e.g. a metrics window picker) rather than navigation
+   between views — use Tabs for that (Style Refactor P1.5). *@
+<div class="ui-segmented" role="radiogroup">
+    @foreach (var item in Items)
+    {
+        <button type="button"
+                role="radio"
+                class="ui-segment @(item.Key == Value ? "active" : "")"
+                aria-checked="@(item.Key == Value ? "true" : "false")"
+                @onclick="@(() => ValueChanged.InvokeAsync(item.Key))">
+            @item.Label
+        </button>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<(string Key, string Label)> Items { get; set; } = [];
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+}

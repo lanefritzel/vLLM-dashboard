@@ -1,169 +1,167 @@
 @using Dashboard.Infrastructure.Persistence.V2
 @inject IRecipeService Recipes
 
-<div class="modal-overlay" @onclick="@RequestCancel">
-    <div class="modal-dialog-custom" @onclick:stopPropagation="true">
-        <div class="d-flex align-items-center justify-content-between mb-1">
-            <div class="card-title mb-0">@(IsNew ? "New recipe" : "Edit recipe") — @Model.Name</div>
-            <button type="button" class="modal-close-btn" @onclick="@RequestCancel" aria-label="Close">✕</button>
+<Dialog Title="@($"{(IsNew ? "New recipe" : "Edit recipe")} — {Model.Name}")" Size="lg"
+        Open="true" OpenChanged="@(open => { if (!open) _ = RequestCancel(); })"
+        Footer="@DialogFooter">
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <Callout Tone="danger">@_error</Callout>
+    }
+
+    @if (_hardBlocks.Count > 0)
+    {
+        <Callout Tone="danger">
+            <ul style="margin:0; padding-left: 1.1em;">
+                @foreach (var issue in _hardBlocks)
+                {
+                    <li>@issue</li>
+                }
+            </ul>
+        </Callout>
+    }
+    @if (_softWarnings.Count > 0)
+    {
+        <Callout Tone="warn">
+            <ul style="margin:0; padding-left: 1.1em;">
+                @foreach (var issue in _softWarnings)
+                {
+                    <li>@issue</li>
+                }
+            </ul>
+        </Callout>
+    }
+
+    <form id="recipe-form" @onsubmit="SaveAsync" @onsubmit:preventDefault="true" class="row g-3">
+        <div class="col-md-12"><div class="card-title mb-0">Identity</div></div>
+        <div class="col-md-4">
+            <UiField Label="Name" For="rc-name">
+                <UiInput Id="rc-name" Value="@_name" ValueChanged="@(v => { _name = v; _ = RevalidateAsync(); })" />
+            </UiField>
+        </div>
+        <div class="col-md-8">
+            <UiField Label="Description" For="rc-description">
+                <UiInput Id="rc-description" Value="@(_description ?? "")" ValueChanged="@(v => _description = v)" />
+            </UiField>
+        </div>
+        <div class="col-md-6">
+            <UiField Label="Served model name" For="rc-served-name"
+                     Hint="Pre-filled from the instance's currently-active served name (or &quot;main&quot; when nothing is active). A different value here changes what API clients request this model by once swapped in — you'll be asked to confirm that at swap time.">
+                <UiInput Id="rc-served-name" Value="@_servedModelName" ValueChanged="@(v => { _servedModelName = v; _ = RevalidateAsync(); })" />
+            </UiField>
         </div>
 
-        @if (!string.IsNullOrEmpty(_error))
-        {
-            <div class="alert alert-danger py-2">@_error</div>
-        }
-
-        @if (_hardBlocks.Count > 0)
-        {
-            <div class="alert alert-danger py-2">
-                <ul class="mb-0">
-                    @foreach (var issue in _hardBlocks)
-                    {
-                        <li>@issue</li>
-                    }
-                </ul>
-            </div>
-        }
-        @if (_softWarnings.Count > 0)
-        {
-            <div class="alert alert-warning py-2">
-                <ul class="mb-0">
-                    @foreach (var issue in _softWarnings)
-                    {
-                        <li>@issue</li>
-                    }
-                </ul>
-            </div>
-        }
-
-        <form @onsubmit="@SaveAsync" @onsubmit:preventDefault="true" class="row g-3">
-            <div class="col-md-12"><div class="card-title mb-0">Identity</div></div>
-            <div class="col-md-4">
-                <label class="form-label">Name</label>
-                <input class="form-control" @bind="_name" @bind:event="oninput" @bind:after="@RevalidateAsync" />
-            </div>
-            <div class="col-md-8">
-                <label class="form-label">Description</label>
-                <input class="form-control" @bind="_description" />
-            </div>
-            <div class="col-md-6">
-                <label class="form-label">Served model name</label>
-                <input class="form-control" @bind="_servedModelName" @bind:event="oninput" @bind:after="@RevalidateAsync" />
-                <div class="form-text">
-                    Pre-filled from the instance's currently-active served name (or "main" when nothing is
-                    active). A different value here changes what API clients request this model by once swapped in —
-                    you'll be asked to confirm that at swap time.
-                </div>
-            </div>
-
-            <div class="col-md-12"><div class="card-title mb-0">Sizing &amp; memory</div></div>
-            <div class="col-md-4">
-                <label class="form-label">Max model length</label>
-                <input class="form-control" type="number" min="1" @bind="_maxModelLen" @bind:after="@RevalidateAsync" />
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">GPU memory utilization</label>
-                <input class="form-control" type="number" min="0" max="1" step="0.05" @bind="_gpuMemoryUtilization" @bind:after="@RevalidateAsync" />
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">KV cache dtype</label>
-                <select class="form-select" @bind="_kvCacheDtype" @bind:after="@RevalidateAsync">
+        <div class="col-md-12"><div class="card-title mb-0">Sizing &amp; memory</div></div>
+        <div class="col-md-4">
+            <UiField Label="Max model length" For="rc-max-len">
+                <UiInput Id="rc-max-len" Type="number" Value="@_maxModelLen.ToString()" ValueChanged="@(v => { _maxModelLen = int.TryParse(v, out var n) ? n : _maxModelLen; _ = RevalidateAsync(); })" />
+            </UiField>
+        </div>
+        <div class="col-md-4">
+            <UiField Label="GPU memory utilization" For="rc-gpu-mem">
+                <UiInput Id="rc-gpu-mem" Type="number" Value="@_gpuMemoryUtilization.ToString()" ValueChanged="@(v => { _gpuMemoryUtilization = float.TryParse(v, out var n) ? n : _gpuMemoryUtilization; _ = RevalidateAsync(); })" />
+            </UiField>
+        </div>
+        <div class="col-md-4">
+            <UiField Label="KV cache dtype" For="rc-kv-dtype">
+                <UiSelect Id="rc-kv-dtype" Value="@_kvCacheDtype" ValueChanged="@(v => { _kvCacheDtype = v; _ = RevalidateAsync(); })">
                     <option value="auto">auto</option>
                     <option value="fp8_e4m3">fp8_e4m3</option>
                     <option value="float16">float16</option>
                     <option value="bfloat16">bfloat16</option>
-                </select>
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">Data type (--dtype)</label>
-                <select class="form-select" @bind="_dtype" @bind:after="@RevalidateAsync">
+                </UiSelect>
+            </UiField>
+        </div>
+        <div class="col-md-4">
+            <UiField Label="Data type (--dtype)" For="rc-dtype" Hint="On the Intel stack, bfloat16 is blocked and auto warns — the reason shows above if so.">
+                <UiSelect Id="rc-dtype" Value="@_dtype" ValueChanged="@(v => { _dtype = v; _ = RevalidateAsync(); })">
                     <option value="auto">auto</option>
                     <option value="float16">float16</option>
                     <option value="bfloat16">bfloat16</option>
-                </select>
-                <div class="form-text">On the Intel stack, bfloat16 is blocked and auto warns — the reason shows above if so.</div>
-            </div>
+                </UiSelect>
+            </UiField>
+        </div>
 
-            <div class="col-md-12"><div class="card-title mb-0">Performance</div></div>
-            <div class="col-md-3">
-                <label class="form-label"><input type="checkbox" class="form-check-input" @bind="_enforceEager" /> Enforce eager</label>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Max batched tokens</label>
-                <input class="form-control" type="number" min="1" @bind="_maxNumBatchedTokens" @bind:after="@RevalidateAsync" />
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Block size</label>
-                <input class="form-control" type="number" min="1" @bind="_blockSize" @bind:after="@RevalidateAsync" />
-            </div>
-            <div class="col-md-3">
-                <label class="form-label"><input type="checkbox" class="form-check-input" @bind="_speculativeDecoding" /> Speculative decoding</label>
-                @if (_speculativeDecoding)
-                {
-                    <input class="form-control form-control-sm mt-1" type="number" min="1" @bind="_speculativeTokens" placeholder="token count" />
-                }
-            </div>
+        <div class="col-md-12"><div class="card-title mb-0">Performance</div></div>
+        <div class="col-md-3">
+            <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                <input type="checkbox" @bind="_enforceEager" /> Enforce eager
+            </label>
+        </div>
+        <div class="col-md-3">
+            <UiField Label="Max batched tokens" For="rc-max-batched">
+                <UiInput Id="rc-max-batched" Type="number" Value="@_maxNumBatchedTokens.ToString()" ValueChanged="@(v => { _maxNumBatchedTokens = int.TryParse(v, out var n) ? n : _maxNumBatchedTokens; _ = RevalidateAsync(); })" />
+            </UiField>
+        </div>
+        <div class="col-md-3">
+            <UiField Label="Block size" For="rc-block-size">
+                <UiInput Id="rc-block-size" Type="number" Value="@_blockSize.ToString()" ValueChanged="@(v => { _blockSize = int.TryParse(v, out var n) ? n : _blockSize; _ = RevalidateAsync(); })" />
+            </UiField>
+        </div>
+        <div class="col-md-3">
+            <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2); margin-bottom: 6px;">
+                <input type="checkbox" @bind="_speculativeDecoding" /> Speculative decoding
+            </label>
+            @if (_speculativeDecoding)
+            {
+                <UiInput Id="rc-speculative-tokens" Type="number" Value="@_speculativeTokens?.ToString()" ValueChanged="@(v => _speculativeTokens = int.TryParse(v, out var n) ? n : null)" Placeholder="token count" />
+            }
+        </div>
 
-            <div class="col-md-12"><div class="card-title mb-0">Tools &amp; reasoning</div></div>
-            <div class="col-md-3">
-                <label class="form-label"><input type="checkbox" class="form-check-input" @bind="_enableAutoToolChoice" /> Auto tool choice</label>
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">Tool call parser</label>
-                <input class="form-control" @bind="_toolCallParser" />
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">Reasoning parser</label>
-                <input class="form-control" @bind="_reasoningParser" />
-            </div>
+        <div class="col-md-12"><div class="card-title mb-0">Tools &amp; reasoning</div></div>
+        <div class="col-md-3">
+            <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                <input type="checkbox" @bind="_enableAutoToolChoice" /> Auto tool choice
+            </label>
+        </div>
+        <div class="col-md-4">
+            <UiField Label="Tool call parser" For="rc-tool-parser">
+                <UiInput Id="rc-tool-parser" Value="@(_toolCallParser ?? "")" ValueChanged="@(v => _toolCallParser = v)" />
+            </UiField>
+        </div>
+        <div class="col-md-4">
+            <UiField Label="Reasoning parser" For="rc-reasoning-parser">
+                <UiInput Id="rc-reasoning-parser" Value="@(_reasoningParser ?? "")" ValueChanged="@(v => _reasoningParser = v)" />
+            </UiField>
+        </div>
 
-            <div class="col-md-12">
-                <details>
-                    <summary style="cursor:pointer" class="card-title d-inline">Advanced</summary>
-                    <div class="row g-2 mt-2">
-                        <div class="col-md-6">
-                            <div class="d-flex align-items-center justify-content-between">
-                                <label class="form-label mb-1">Extra args</label>
-                                <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _extraArgs.Add(("", "")))">+ Row</button>
-                            </div>
-                            @foreach (var (row, i) in _extraArgs.Select((r, i) => (r, i)))
-                            {
-                                <div class="d-flex gap-1 mb-1">
-                                    <input class="form-control form-control-sm" placeholder="key (no --)" value="@row.Key"
-                                           @oninput="@(e => _extraArgs[i] = ((string)e.Value!, row.Value))" />
-                                    <input class="form-control form-control-sm" placeholder="value (blank = flag)" value="@row.Value"
-                                           @oninput="@(e => _extraArgs[i] = (row.Key, (string)e.Value!))" />
-                                    <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _extraArgs.RemoveAt(i))">✕</button>
-                                </div>
-                            }
+        <div class="col-md-12">
+            <details>
+                <summary style="cursor:pointer" class="card-title d-inline">Advanced</summary>
+                <div class="row g-2 mt-2">
+                    <div class="col-md-6">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <label class="ui-label" style="margin-bottom:4px;">Extra args</label>
+                            <UiButton Variant="secondary" Size="sm" OnClick="@(() => _extraArgs.Add(("", "")))">+ Row</UiButton>
                         </div>
-                        <div class="col-md-6">
-                            <div class="d-flex align-items-center justify-content-between">
-                                <label class="form-label mb-1">Environment vars</label>
-                                <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _extraEnv.Add(("", "")))">+ Row</button>
+                        @foreach (var (row, i) in _extraArgs.Select((r, i) => (r, i)))
+                        {
+                            <div style="display:flex; gap: var(--ui-space-1); margin-bottom: var(--ui-space-1);">
+                                <UiInput Id="@($"rc-extra-arg-key-{i}")" Value="@row.Key" ValueChanged="@(v => _extraArgs[i] = (v, row.Value))" Placeholder="key (no --)" />
+                                <UiInput Id="@($"rc-extra-arg-value-{i}")" Value="@row.Value" ValueChanged="@(v => _extraArgs[i] = (row.Key, v))" Placeholder="value (blank = flag)" />
+                                <UiButton Variant="danger" Size="sm" OnClick="@(() => _extraArgs.RemoveAt(i))">✕</UiButton>
                             </div>
-                            @foreach (var (row, i) in _extraEnv.Select((r, i) => (r, i)))
-                            {
-                                <div class="d-flex gap-1 mb-1">
-                                    <input class="form-control form-control-sm" placeholder="key" value="@row.Key"
-                                           @oninput="@(e => _extraEnv[i] = ((string)e.Value!, row.Value))" />
-                                    <input class="form-control form-control-sm" placeholder="value" value="@row.Value"
-                                           @oninput="@(e => _extraEnv[i] = (row.Key, (string)e.Value!))" />
-                                    <button type="button" class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => _extraEnv.RemoveAt(i))">✕</button>
-                                </div>
-                            }
-                        </div>
+                        }
                     </div>
-                </details>
-            </div>
-
-            <div class="col-md-12">
-                <button type="submit" class="btn btn-primary btn-sm" disabled="@(_busy || _hardBlocks.Count > 0)">@(_busy ? "Saving…" : "Save")</button>
-                <button type="button" class="btn btn-secondary btn-sm" @onclick="@RequestCancel">Cancel</button>
-            </div>
-        </form>
-    </div>
-</div>
+                    <div class="col-md-6">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <label class="ui-label" style="margin-bottom:4px;">Environment vars</label>
+                            <UiButton Variant="secondary" Size="sm" OnClick="@(() => _extraEnv.Add(("", "")))">+ Row</UiButton>
+                        </div>
+                        @foreach (var (row, i) in _extraEnv.Select((r, i) => (r, i)))
+                        {
+                            <div style="display:flex; gap: var(--ui-space-1); margin-bottom: var(--ui-space-1);">
+                                <UiInput Id="@($"rc-extra-env-key-{i}")" Value="@row.Key" ValueChanged="@(v => _extraEnv[i] = (v, row.Value))" Placeholder="key" />
+                                <UiInput Id="@($"rc-extra-env-value-{i}")" Value="@row.Value" ValueChanged="@(v => _extraEnv[i] = (row.Key, v))" Placeholder="value" />
+                                <UiButton Variant="danger" Size="sm" OnClick="@(() => _extraEnv.RemoveAt(i))">✕</UiButton>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </details>
+        </div>
+    </form>
+</Dialog>
 
 @code {
     [Parameter, EditorRequired] public Recipe Model { get; set; } = null!;
@@ -198,6 +196,11 @@
     private string? _error;
     private List<string> _hardBlocks = new();
     private List<string> _softWarnings = new();
+
+    private RenderFragment DialogFooter => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="RequestCancel">Cancel</UiButton>
+        <UiButton Variant="primary" Size="sm" Type="submit" form="recipe-form" Disabled="@(_busy || _hardBlocks.Count > 0)">@(_busy ? "Saving…" : "Save")</UiButton>
+    </text>;
 
     protected override async Task OnInitializedAsync()
     {

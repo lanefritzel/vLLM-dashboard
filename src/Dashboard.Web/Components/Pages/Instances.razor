@@ -22,40 +22,42 @@
 }
 else if (_rows.Count == 0)
 {
-    <div class="card"><div class="card-body">
-        <p class="text-muted mb-0">No instances configured yet. Register one on the Servers page.</p>
-    </div></div>
+    <UiPanel><EmptyState Variant="no-data" Title="No instances configured yet" Description="Register one on the Servers page." /></UiPanel>
 }
 else
 {
-    <div class="card">
-        <div class="card-body">
-            <table class="table table-sm">
-                <thead><tr><th>Label</th><th>Proxy URL</th><th>Port</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                    @foreach (var row in _rows)
-                    {
-                        <tr>
-                            <td>@row.Instance.Label</td>
-                            <td>
-                                <code class="small">@row.ProxyUrl</code>
-                                <button class="btn btn-outline btn-sm ms-1" @onclick="@(() => CopyAsync(row.ProxyUrl))">Copy</button>
-                            </td>
-                            <td>@row.Instance.Port</td>
-                            <td>@StatusText(row)</td>
-                            <td class="text-end">
-                                <button class="btn btn-outline btn-sm" @onclick="@(() => CopySnippetAsync(row))">Copy client snippet</button>
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <TableShell Caption="Instances" ColumnCount="5">
+        <Header>
+            <th scope="col">Label</th>
+            <th scope="col">Proxy URL</th>
+            <th scope="col" class="num">Port</th>
+            <th scope="col">Status</th>
+            <th scope="col"></th>
+        </Header>
+        <ChildContent>
+            @foreach (var row in _rows)
+            {
+                <tr>
+                    <td>@row.Instance.Label</td>
+                    <td>
+                        <code class="small">@row.ProxyUrl</code>
+                        <UiButton Variant="ghost" Size="sm" OnClick="@(() => CopyAsync(row.ProxyUrl))">Copy</UiButton>
+                    </td>
+                    <td class="num">@row.Instance.Port</td>
+                    <td><StatusPill Status="@StatusTextRaw(row)" Size="sm" /></td>
+                    <td>
+                        <span class="ui-row-actions">
+                            <UiButton Variant="ghost" Size="sm" OnClick="@(() => CopySnippetAsync(row))">Copy client snippet</UiButton>
+                        </span>
+                    </td>
+                </tr>
+            }
+        </ChildContent>
+    </TableShell>
 
     @if (_copied is not null)
     {
-        <div class="text-muted small mt-2">Copied: <code>@_copied</code></div>
+        <p class="text-muted small mt-2">Copied: <code>@_copied</code></p>
     }
 }
 
@@ -114,15 +116,17 @@ else
         _loading = false;
     }
 
-    private static string StatusText(Row row)
+    /// <summary>Returns a StatusPresentation key, not display text -- StatusPill
+    /// resolves the label/tone/icon itself.</summary>
+    private static string StatusTextRaw(Row row)
     {
         if (row.Instance.AdminUrl is null)
-            return "needs supervisor registration";
+            return "needs setup";
         return row.Reconcile?.Status switch
         {
-            ReconcileStatus.Ok => "OK",
+            ReconcileStatus.Ok => "ready",
             ReconcileStatus.Down => "unreachable",
-            ReconcileStatus.NeedsRegistration => "needs supervisor registration",
+            ReconcileStatus.NeedsRegistration => "needs setup",
             ReconcileStatus.Mismatch => "mismatch",
             ReconcileStatus.IdleVsActive => "idle",
             null => "unknown",

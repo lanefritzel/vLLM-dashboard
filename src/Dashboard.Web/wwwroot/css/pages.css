@@ -1,0 +1,85 @@
+/* ============================================================================
+   pages.css — page-specific layout chrome (Style Refactor P1.7)
+
+   Unlike components.css and wwwroot/css/components/*, this file is for
+   classes used by exactly one page's own layout, not a reusable primitive —
+   starting with the /dev/ui gallery. Consumes --ui-* tokens only.
+   ============================================================================ */
+
+/* DevUiGallery ---------------------------------------------------------------- */
+
+.gallery-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.gallery-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-3) 0;
+  background: var(--ui-bg);
+  border-bottom: 1px solid var(--ui-border);
+  margin-bottom: var(--ui-space-5);
+}
+
+.gallery-section {
+  margin-bottom: var(--ui-space-7);
+  scroll-margin-top: 64px;
+}
+
+.gallery-section-note {
+  margin: 0 0 var(--ui-space-4);
+  color: var(--ui-muted);
+  font-size: var(--ui-text-sm);
+  max-width: 70ch;
+}
+
+.gallery-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-3);
+  align-items: flex-start;
+  margin-bottom: var(--ui-space-3);
+}
+
+.gallery-row:last-child { margin-bottom: 0; }
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--ui-space-4);
+}
+
+.gallery-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.gallery-swatch-label {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-subtle);
+}
+
+.gallery-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+}
+
+.gallery-checklist label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ui-space-2);
+  font-size: var(--ui-text-sm);
+}
+
+@media (max-width: 390px) {
+  .gallery-shell { max-width: 100%; }
+}

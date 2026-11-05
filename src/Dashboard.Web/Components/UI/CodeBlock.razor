@@ -1,0 +1,19 @@
+@* CodeBlock — static code snippet with optional language header and copy
+   (Style Refactor P1.5). *@
+<div class="ui-code-block">
+    @if (!string.IsNullOrEmpty(Language))
+    {
+        <div class="ui-code-header">@Language</div>
+    }
+    @if (ShowCopy)
+    {
+        <div class="ui-code-copy"><CopyButton Text="@Code" /></div>
+    }
+    <pre><code>@Code</code></pre>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Code { get; set; } = "";
+    [Parameter] public string? Language { get; set; }
+    [Parameter] public bool ShowCopy { get; set; } = true;
+}

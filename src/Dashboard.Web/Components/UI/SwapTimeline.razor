@@ -1,0 +1,45 @@
+@* SwapTimeline — vertical step list for a model swap/deploy lifecycle
+   (Style Refactor P1.5): Queued, Stopping current, Pulling image, Starting
+   container, Health check, Ready/Failed. *@
+<ol class="ui-timeline">
+    @foreach (var step in Steps)
+    {
+        <li class="ui-timeline-step ui-timeline-@step.State">
+            <span class="ui-timeline-dot" aria-hidden="true">
+                @if (step.State == "current")
+                {
+                    <span class="ui-spinner"></span>
+                }
+                else if (step.State == "completed")
+                {
+                    <Icon Name="check" Size="12" />
+                }
+                else if (step.State == "failed")
+                {
+                    <Icon Name="x-circle" Size="12" />
+                }
+            </span>
+            <div class="ui-timeline-body">
+                <span class="ui-timeline-label">@step.Label</span>
+                @if (!string.IsNullOrEmpty(step.ElapsedLabel))
+                {
+                    <span class="ui-timeline-elapsed">@step.ElapsedLabel</span>
+                }
+            </div>
+        </li>
+    }
+    @if (LogsHref is not null)
+    {
+        <li class="ui-timeline-logs-link">
+            <a href="@LogsHref">View logs</a>
+        </li>
+    }
+</ol>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<SwapTimelineStep> Steps { get; set; } = [];
+    [Parameter] public string? LogsHref { get; set; }
+
+    /// <summary>State: completed | current | failed | pending.</summary>
+    public sealed record SwapTimelineStep(string Label, string State, string? ElapsedLabel = null);
+}

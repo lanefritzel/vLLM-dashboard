@@ -1,0 +1,80 @@
+@* TerminalPane — scrollable log viewer with a toolbar (title, status, copy,
+   download, wrap/fullscreen) and follow/jump-to-latest (Style Refactor
+   P1.5). Follow is an explicit toggle rather than inferred from scroll
+   position — simpler than scroll-tracking JS and still lets a user pause
+   auto-scroll to read older lines. *@
+@inject IJSRuntime JS
+
+<div class="ui-terminal-pane @(_fullscreen ? "ui-terminal-fullscreen" : "")">
+    <div class="ui-terminal-toolbar">
+        @if (!string.IsNullOrEmpty(Title))
+        {
+            <span class="ui-terminal-title">@Title</span>
+        }
+        @if (!string.IsNullOrEmpty(Status))
+        {
+            <StatusPill Status="@Status" Size="sm" />
+        }
+        <div class="ui-toolbar-spacer"></div>
+        <button type="button" class="ui-btn ui-btn-ghost ui-btn-sm" @onclick="ToggleFollow" aria-pressed="@_follow">
+            @(_follow ? "Following" : "Paused")
+        </button>
+        <button type="button" class="ui-btn ui-btn-ghost ui-btn-sm" @onclick="ToggleWrap" aria-pressed="@_wrap">
+            Wrap
+        </button>
+        <CopyButton Text="@JoinedText" />
+        @if (AllowDownload)
+        {
+            <a class="ui-btn ui-btn-ghost ui-btn-sm" href="@DownloadHref" download="@(DownloadFileName ?? "log.txt")">
+                Download
+            </a>
+        }
+        <button type="button" class="ui-btn ui-btn-ghost ui-btn-sm" @onclick="ToggleFullscreen" aria-pressed="@_fullscreen">
+            Fullscreen
+        </button>
+    </div>
+    <div class="ui-terminal-body @(_wrap ? "ui-terminal-wrap" : "")" @ref="BodyRef">
+        @foreach (var line in Lines)
+        {
+            <div class="ui-terminal-line">@line</div>
+        }
+    </div>
+    @if (!_follow)
+    {
+        <button type="button" class="ui-terminal-jump" @onclick="JumpToLatest">Jump to latest</button>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Status { get; set; }
+    [Parameter, EditorRequired] public IReadOnlyList<string> Lines { get; set; } = [];
+    [Parameter] public bool AllowDownload { get; set; }
+    [Parameter] public string? DownloadFileName { get; set; }
+
+    private ElementReference BodyRef;
+    private bool _follow = true;
+    private bool _wrap = true;
+    private bool _fullscreen;
+    private int _lastLineCount;
+
+    private string JoinedText => string.Join("\n", Lines);
+    private string DownloadHref => "data:text/plain;charset=utf-8," + Uri.EscapeDataString(JoinedText);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_follow || Lines.Count == _lastLineCount) return;
+        _lastLineCount = Lines.Count;
+        await JS.InvokeVoidAsync("ui_scrollToBottom", BodyRef);
+    }
+
+    private void ToggleFollow() => _follow = !_follow;
+    private void ToggleWrap() => _wrap = !_wrap;
+    private void ToggleFullscreen() => _fullscreen = !_fullscreen;
+
+    private async Task JumpToLatest()
+    {
+        _follow = true;
+        await JS.InvokeVoidAsync("ui_scrollToBottom", BodyRef);
+    }
+}

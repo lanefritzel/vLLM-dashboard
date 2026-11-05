@@ -1,0 +1,27 @@
+@* ProgressBar — track + fill, indeterminate when Value is null (Style
+   Refactor P1.5). Never used as a blocking modal progress bar. *@
+<div>
+    @if (Label is not null || (ShowValue && Value is not null))
+    {
+        <div class="ui-progress-header">
+            @if (Label is not null)
+            {
+                <span>@Label</span>
+            }
+            @if (ShowValue && Value is not null)
+            {
+                <span>@Value.Value.ToString("0")%</span>
+            }
+        </div>
+    }
+    <div class="ui-progress @(Value is null ? "ui-progress-indeterminate" : "")" role="progressbar"
+         aria-valuenow="@(Value?.ToString("0"))" aria-valuemin="0" aria-valuemax="100">
+        <div class="ui-progress-fill" style="@(Value is not null ? $"width:{Value}%;" : "")"></div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public double? Value { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public bool ShowValue { get; set; } = true;
+}

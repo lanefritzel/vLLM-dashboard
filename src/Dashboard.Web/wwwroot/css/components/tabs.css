@@ -1,0 +1,73 @@
+/* ============================================================================
+   tabs.css — Tabs and SegmentedControl primitives (Style Refactor P1.5)
+
+   Tabs is for navigation between views; SegmentedControl is for ranges/
+   simple filters — don't use Tabs for a sequential workflow. Consumes
+   --ui-* tokens only.
+   ============================================================================ */
+
+.ui-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: var(--ui-space-4);
+  border-bottom: 1px solid var(--ui-border);
+  overflow-x: auto;
+}
+
+.ui-tab {
+  padding: 10px 14px;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--ui-muted);
+  font-family: inherit;
+  font-size: var(--ui-text-sm);
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-tab:hover { color: var(--ui-text); }
+
+.ui-tab.active,
+.ui-tab[aria-selected="true"] {
+  color: var(--ui-text);
+  border-bottom-color: var(--ui-primary);
+}
+
+/* ui-segmented primitive (SegmentedControl.razor) ---------------------------- */
+
+.ui-segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--ui-surface-2);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+}
+
+.ui-segment {
+  padding: 5px 12px;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ui-muted);
+  font-family: inherit;
+  font-size: var(--ui-text-sm);
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-segment:hover { color: var(--ui-text); }
+
+.ui-segment.active {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: 0 1px 2px var(--ui-shadow-sm);
+}
+
+@media (max-width: 390px) {
+  .ui-segmented { width: 100%; }
+  .ui-segment { flex: 1; text-align: center; }
+}

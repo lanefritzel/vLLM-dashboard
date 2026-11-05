@@ -1,0 +1,26 @@
+@* ToastHost — mounted once (in MainLayout, alongside DialogHost) so any page
+   can call IToastService.Show without re-hosting the stack itself (Style
+   Refactor P1.4). aria-live="polite" announces each toast as it appears;
+   streaming updates should not go through here. *@
+@using Dashboard.Web.Components.Shared
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IToastService ToastServiceImpl
+
+<div class="ui-toast-stack" aria-live="polite">
+    @foreach (var toast in ToastServiceImpl.Toasts)
+    {
+        <Toast @key="toast.Id" Item="toast" />
+    }
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        ToastServiceImpl.StateChanged += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => ToastServiceImpl.StateChanged -= OnStateChanged;
+}

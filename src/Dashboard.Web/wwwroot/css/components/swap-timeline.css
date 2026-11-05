@@ -1,0 +1,92 @@
+/* ============================================================================
+   swap-timeline.css — SwapTimeline primitive (Style Refactor P1.5)
+
+   Used by SwapTimeline.razor for a model swap/deploy lifecycle: Queued,
+   Stopping current, Pulling image, Starting container, Health check,
+   Ready/Failed. Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.ui-timeline {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-timeline-step {
+  position: relative;
+  display: flex;
+  gap: var(--ui-space-3);
+  padding-bottom: var(--ui-space-4);
+}
+
+.ui-timeline-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 20px;
+  bottom: 0;
+  width: 1px;
+  background: var(--ui-border-strong);
+}
+
+.ui-timeline-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1px solid var(--ui-border-strong);
+  background: var(--ui-surface-2);
+  color: var(--ui-subtle);
+}
+
+.ui-timeline-completed .ui-timeline-dot {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  color: var(--ui-primary);
+}
+
+.ui-timeline-current .ui-timeline-dot {
+  border-color: var(--ui-info);
+  background: var(--ui-info-soft);
+  color: var(--ui-info);
+}
+
+.ui-timeline-failed .ui-timeline-dot {
+  border-color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  color: var(--ui-danger);
+}
+
+.ui-timeline-dot .ui-spinner { width: 10px; height: 10px; border-width: 1.5px; }
+
+.ui-timeline-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.ui-timeline-label {
+  font-size: var(--ui-text-sm);
+  font-weight: 550;
+  color: var(--ui-text);
+}
+
+.ui-timeline-pending .ui-timeline-label { color: var(--ui-muted); font-weight: 500; }
+
+.ui-timeline-elapsed {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-timeline-logs-link {
+  margin-left: 32px;
+  font-size: var(--ui-text-sm);
+}

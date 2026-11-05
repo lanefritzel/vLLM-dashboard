@@ -1,0 +1,61 @@
+/* ============================================================================
+   page-header.css — page title row primitives (Style Refactor P1.2)
+
+   Used by PageHeader.razor. The count pill reuses .ui-chip-count (chips
+   section of components.css) rather than a new class. The Tabs slot is a
+   layout wrapper only — tab-bar visuals come from the existing .ui-tabs/
+   .ui-tab classes once a Tabs primitive renders into it.
+   Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.page-title {
+  font-size: var(--ui-text-2xl);
+  font-weight: 700;
+  margin: 0 0 var(--ui-space-5);
+  color: var(--ui-text);
+}
+
+.ui-page-breadcrumb {
+  margin-bottom: var(--ui-space-2);
+  font-size: var(--ui-text-sm);
+  color: var(--ui-muted);
+}
+
+.ui-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--ui-space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--ui-space-5);
+}
+
+.ui-page-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  font-size: var(--ui-text-xl);
+  font-weight: 650;
+  color: var(--ui-text);
+}
+
+.ui-page-subtitle {
+  margin: 2px 0 0;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-muted);
+}
+
+.ui-page-actions {
+  display: flex;
+  gap: var(--ui-space-2);
+  flex-wrap: wrap;
+}
+
+.ui-page-tabs {
+  margin-top: var(--ui-space-3);
+}
+
+@media (max-width: 768px) {
+  .ui-page-header { align-items: flex-start; }
+}

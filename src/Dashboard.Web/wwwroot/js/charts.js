@@ -1,6 +1,11 @@
 // Chart.js bridge for the vLLM Dashboard. All charts are live line charts driven by
 // SignalR `samples` events via chart_push. Colors come from the theme's CSS variables
-// so dark/light swap cleanly.
+// so dark/light swap cleanly (Style Refactor P1.6: chart defaults + theme bridge).
+//
+// Public API: the original chart_* names are the stable entry points existing
+// pages already call. createChart/applyChartTheme/chartTokens are the same
+// behavior under the names the Style Refactor plan asks ChartCard/P3 work to
+// use going forward — aliases, not a second implementation.
 (function () {
   var charts = {};
 
@@ -14,8 +19,11 @@
   function colors() {
     return {
       text: cssVar('--ui-text', '#e8ecf4'),
+      text2: cssVar('--ui-text-2', '#c3cad9'),
       muted: cssVar('--ui-muted', '#98a2ba'),
       grid: cssVar('--ui-chart-grid', '#1c2537'),
+      surface: cssVar('--ui-surface', '#111827'),
+      border: cssVar('--ui-border-strong', '#2e3b52'),
       accent: cssVar('--ui-chart-2', '#5b9dff'),
       green: cssVar('--ui-chart-1', '#2fd07c'),
       red: cssVar('--ui-danger', '#f0566e'),
@@ -33,28 +41,55 @@
     return c;
   }
 
+  // 8% alpha fill, used only when a chart has exactly one series (a fill
+  // reads as noise once two or more lines overlap it).
+  function fillAlphaHex(col) { return col + '14'; }
+
+  function tooltipTheme(pal) {
+    return {
+      enabled: true,
+      intersect: false,
+      backgroundColor: pal.surface,
+      borderColor: pal.border,
+      borderWidth: 1,
+      cornerRadius: 8,
+      padding: 10,
+      titleColor: pal.text,
+      titleFont: { size: 12, weight: '600' },
+      bodyColor: pal.text2,
+      bodyFont: { size: 12 }
+    };
+  }
+
   function canvas(id) {
     var el = document.getElementById(id);
     return el ? el.getContext('2d') : null;
   }
 
-  // Create a line chart. `series` = [{key,label,color}]; `opts` = {yMin,yMax,beginAtZero}.
+  // Create a line chart. `series` = [{key,label,color}]; `opts` = {yMin,yMax,
+  // beginAtZero,xGrid,yTicksLimit,sparkline}. `sparkline: true` hides axes
+  // and the legend for a StatCard-sized mini chart (Style Refactor D2) --
+  // used alongside, not instead of, a full ChartCard view of the same data.
   // Returns true if the canvas existed and the chart was created, false
-  // otherwise -- the canvas can genuinely not exist yet on the caller's
-  // first attempt (e.g. right after an @if block flips true but the DOM
-  // hasn't caught up), so callers must check this rather than assume success.
+  // otherwise -- the canvas can genuinely not exist yet on the caller's first
+  // attempt (e.g. right after an @if block flips true but the DOM hasn't
+  // caught up), so callers must check this rather than assume success.
   window.chart_create = function (id, series, opts) {
     var c = canvas(id);
     if (!c) return false;
     if (charts[id]) { try { charts[id].destroy(); } catch (e) {} delete charts[id]; }
     var pal = colors();
     var hiddenKeys = (opts && opts.hidden) || [];
+    var singleSeries = series.length === 1;
     var datasets = series.map(function (s) {
       var col = resolveColor(s.color) || pal.accent;
       return {
         key: s.key, label: s.label, data: [],
-        borderColor: col, backgroundColor: col + '22',
-        pointRadius: 0, borderWidth: 2, tension: 0.2, fill: false, spanGaps: true,
+        _colorSpec: s.color,
+        borderColor: col,
+        backgroundColor: singleSeries ? fillAlphaHex(col) : col + '22',
+        pointRadius: 0, pointHoverRadius: 3, borderWidth: 1.75, tension: 0.25,
+        fill: singleSeries, spanGaps: true,
         hidden: hiddenKeys.indexOf(s.key) !== -1
       };
     });
@@ -63,19 +98,29 @@
     else if (opts && opts.beginAtZero === false) { y.beginAtZero = false; }
     else { y.beginAtZero = true; }
     if (opts && opts.yMax != null) y.max = opts.yMax;
+    var sparkline = !!(opts && opts.sparkline);
     var config = {
       type: 'line',
       data: { labels: [], datasets: datasets },
       options: {
         responsive: true, maintainAspectRatio: false, animation: false,
+        layout: sparkline ? { padding: 0 } : undefined,
         interaction: { mode: 'nearest', intersect: false },
         scales: {
-          x: { ticks: { color: pal.muted, maxTicksLimit: 6, maxRotation: 0 }, grid: { color: pal.grid } },
-          y: Object.assign({ ticks: { color: pal.muted }, grid: { color: pal.grid } }, y)
+          x: {
+            display: !sparkline,
+            ticks: { color: pal.muted, font: { size: 11 }, maxTicksLimit: 6, maxRotation: 0 },
+            grid: { display: !!(opts && opts.xGrid), color: pal.grid }
+          },
+          y: Object.assign({
+            display: !sparkline,
+            ticks: { color: pal.muted, font: { size: 11 }, maxTicksLimit: (opts && opts.yTicksLimit) || 5 },
+            grid: { color: pal.grid }
+          }, y)
         },
         plugins: {
-          legend: { labels: { color: pal.text, boxWidth: 12 } },
-          tooltip: { intersect: false }
+          legend: { display: !sparkline, labels: { color: pal.text, boxWidth: 12 } },
+          tooltip: tooltipTheme(pal)
         }
       }
     };
@@ -134,25 +179,41 @@
     Object.keys(charts).forEach(function (k) { window.chart_dispose(k); });
   };
 
-  // Theme change: refresh theme-dependent colors (ticks, grid, legend) on all
-  // live charts without rebuilding them.
-  window.addEventListener('themechange', function () {
+  // Update one live chart's theme-dependent colors in place (grid/ticks/
+  // legend/tooltip/dataset border+fill) and re-render without rebuilding it.
+  // Falls back to doing nothing for a chart mid-destroy.
+  function applyChartTheme(chart) {
+    if (!chart) return;
     var pal = colors();
-    Object.keys(charts).forEach(function (id) {
-      var chart = charts[id];
-      if (!chart) return;
-      var o = chart.options;
-      if (o.scales) {
-        ['x', 'y'].forEach(function (axis) {
-          if (!o.scales[axis]) return;
-          if (o.scales[axis].ticks) o.scales[axis].ticks.color = pal.muted;
-          if (o.scales[axis].grid) o.scales[axis].grid.color = pal.grid;
-        });
-      }
-      if (o.plugins && o.plugins.legend && o.plugins.legend.labels) {
-        o.plugins.legend.labels.color = pal.text;
-      }
-      try { chart.update('none'); } catch (e) { /* chart may be mid-destroy */ }
+    var o = chart.options;
+    if (o.scales) {
+      ['x', 'y'].forEach(function (axis) {
+        if (!o.scales[axis]) return;
+        if (o.scales[axis].ticks) o.scales[axis].ticks.color = pal.muted;
+        if (o.scales[axis].grid) o.scales[axis].grid.color = pal.grid;
+      });
+    }
+    if (o.plugins && o.plugins.legend && o.plugins.legend.labels) {
+      o.plugins.legend.labels.color = pal.text;
+    }
+    if (o.plugins && o.plugins.tooltip) {
+      Object.assign(o.plugins.tooltip, tooltipTheme(pal));
+    }
+    var singleSeries = chart.data.datasets.length === 1;
+    chart.data.datasets.forEach(function (ds) {
+      var col = resolveColor(ds._colorSpec) || pal.accent;
+      ds.borderColor = col;
+      ds.backgroundColor = singleSeries ? fillAlphaHex(col) : col + '22';
     });
+    try { chart.update('none'); } catch (e) { /* chart may be mid-destroy */ }
+  }
+
+  window.addEventListener('themechange', function () {
+    Object.keys(charts).forEach(function (id) { applyChartTheme(charts[id]); });
   });
+
+  // Named aliases per the Style Refactor P1.6 helper API.
+  window.chartTokens = colors;
+  window.createChart = window.chart_create;
+  window.applyChartTheme = function (id) { applyChartTheme(charts[id]); };
 })();

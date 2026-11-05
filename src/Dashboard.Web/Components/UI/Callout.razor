@@ -1,0 +1,35 @@
+@* Callout — persistent page-level message (Style Refactor P1.4). For
+   transient success/error use Toast instead; don't nest callouts. *@
+<div class="ui-callout ui-callout-@Tone.ToLowerInvariant()">
+    <span class="ui-icon"><Icon Name="@IconName" Size="20" /></span>
+    <div>
+        @if (!string.IsNullOrEmpty(Title))
+        {
+            <p class="ui-callout-title">@Title</p>
+        }
+        @if (ChildContent is not null)
+        {
+            @ChildContent
+        }
+        @if (Action is not null)
+        {
+            <div class="ui-callout-action">@Action</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Tone { get; set; } = "info";
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Action { get; set; }
+
+    private string IconName => Tone.ToLowerInvariant() switch
+    {
+        "success" => "check",
+        "warn" => "alert",
+        "danger" => "x-circle",
+        "neutral" => "info",
+        _ => "info",
+    };
+}

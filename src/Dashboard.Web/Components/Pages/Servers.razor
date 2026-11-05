@@ -22,35 +22,31 @@ else
 {
     @if (_error is not null)
     {
-        <div class="alert alert-danger py-2">@_error</div>
+        <Callout Tone="danger">@_error</Callout>
     }
 
-    <div class="d-flex justify-content-end mb-3">
-        <button class="btn btn-primary btn-sm" @onclick="@OpenNewServer">+ Add server</button>
+    <div class="ui-page-actions" style="justify-content:flex-end; margin-bottom: var(--ui-space-3);">
+        <UiButton Variant="primary" Size="sm" OnClick="OpenNewServer">+ Add server</UiButton>
     </div>
 
     @foreach (var server in _servers)
     {
-        <div class="card mb-3">
-            <div class="card-body">
-                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-                    <div>
-                        <div class="card-title mb-0">@server.Label</div>
-                        <div class="text-muted small">
-                            @(server.DockerHost ?? "no Docker host") ·
-                            @(server.GpuName ?? "no GPU set") @(server.GpuCount > 1 ? $"x{server.GpuCount}" : "") @(server.GpuMemGb is { } gb ? $"({gb} GB)" : "") ·
-                            models dir: @(string.IsNullOrWhiteSpace(server.ModelsDir) ? "—" : server.ModelsDir)
-                        </div>
-                    </div>
-                    <div>
-                        <button class="btn btn-outline btn-sm" @onclick="@(() => OpenEditServer(server))">Edit</button>
-                        <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteServerAsync(server))">Delete</button>
-                    </div>
-                </div>
-
-                <table class="table table-sm mb-2">
-                    <thead><tr><th>Instance</th><th>Proxy slug</th><th>Port</th><th>Supervisor</th><th></th></tr></thead>
-                    <tbody>
+        <div style="margin-bottom: var(--ui-space-3);">
+            <UiPanel Title="@server.Label"
+                     Description="@($"{server.DockerHost ?? "no Docker host"} · {server.GpuName ?? "no GPU set"} {(server.GpuCount > 1 ? $"x{server.GpuCount}" : "")} {(server.GpuMemGb is { } gb ? $"({gb} GB)" : "")} · models dir: {(string.IsNullOrWhiteSpace(server.ModelsDir) ? "—" : server.ModelsDir)}")"
+                     HeaderActions="@ServerHeaderActions(server)"
+                     Flush="true">
+                <TableShell Caption="@($"Instances on {server.Label}")" ColumnCount="5"
+                            IsEmpty="@(!HasInstances(server.Id))"
+                            EmptyTitle="No instances on this server yet">
+                    <Header>
+                        <th scope="col">Instance</th>
+                        <th scope="col">Proxy slug</th>
+                        <th scope="col">Port</th>
+                        <th scope="col">Supervisor</th>
+                        <th scope="col"></th>
+                    </Header>
+                    <ChildContent>
                         @if (_instancesByServer.TryGetValue(server.Id, out var list))
                         {
                             @foreach (var instance in list)
@@ -58,75 +54,72 @@ else
                                 <tr>
                                     <td>@instance.Label</td>
                                     <td><code>@instance.ProxySlug</code></td>
-                                    <td>@instance.Port</td>
+                                    <td class="num">@instance.Port</td>
                                     <td>@(instance.AdminUrl is null ? "needs supervisor registration" : instance.AdminUrl)</td>
-                                    <td class="text-end">
-                                        <button class="btn btn-outline btn-sm" @onclick="@(() => OpenEditInstance(server, instance))">Edit</button>
-                                        <button class="btn btn-outline btn-sm btn-danger-soft" @onclick="@(() => DeleteInstanceAsync(instance))">Delete</button>
+                                    <td>
+                                        <span class="ui-row-actions">
+                                            <UiButton Variant="ghost" Size="sm" OnClick="@(() => OpenEditInstance(server, instance))">Edit</UiButton>
+                                            <UiButton Variant="danger" Size="sm" OnClick="@(() => DeleteInstanceAsync(instance))">Delete</UiButton>
+                                        </span>
                                     </td>
                                 </tr>
                             }
                         }
-                        @if (!_instancesByServer.TryGetValue(server.Id, out var l2) || l2.Count == 0)
-                        {
-                            <tr><td colspan="5" class="text-muted">No instances on this server yet.</td></tr>
-                        }
-                    </tbody>
-                </table>
-                <button class="btn btn-outline btn-sm" @onclick="@(() => OpenNewInstance(server))">+ Add instance</button>
-            </div>
+                    </ChildContent>
+                    <Footer>
+                        <UiButton Variant="secondary" Size="sm" OnClick="@(() => OpenNewInstance(server))">+ Add instance</UiButton>
+                    </Footer>
+                </TableShell>
+            </UiPanel>
         </div>
     }
     @if (_servers.Count == 0)
     {
-        <div class="card"><div class="card-body text-muted">No servers configured yet.</div></div>
+        <UiPanel><EmptyState Variant="no-data" Title="No servers configured yet" PrimaryAction="@NoServersAction" /></UiPanel>
     }
 }
 
 @if (_editingServer is not null)
 {
-    <div class="modal-overlay" @onclick="@CloseServerDialog">
-        <div class="modal-dialog-custom" @onclick:stopPropagation="true">
-            <div class="d-flex align-items-center justify-content-between mb-3">
-                <div class="card-title mb-0">@(_serverIsNew ? "Add server" : "Edit server")</div>
-                <button type="button" class="modal-close-btn" @onclick="@CloseServerDialog" aria-label="Close">✕</button>
+    <Dialog Title="@(_serverIsNew ? "Add server" : "Edit server")" Size="md"
+            Open="@(_editingServer is not null)" OpenChanged="@(open => { if (!open) CloseServerDialog(); })"
+            Footer="@ServerDialogFooter">
+        <form id="server-form" @onsubmit="SaveServerAsync" @onsubmit:preventDefault="true" class="row g-3">
+            <div class="col-md-6">
+                <UiField Label="Label" For="sv-label" Required="true">
+                    <UiInput Id="sv-label" @bind-Value="_svLabel" />
+                </UiField>
             </div>
-            <form @onsubmit="@SaveServerAsync" @onsubmit:preventDefault="true" class="row g-3">
-                <div class="col-md-6">
-                    <label class="form-label">Label</label>
-                    <input class="form-control" @bind="_svLabel" required />
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">Docker host</label>
-                    <input class="form-control" @bind="_svDockerHost" placeholder="for Start/Hard-reset only" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">GPU name</label>
-                    <input class="form-control" @bind="_svGpuName" placeholder="e.g. Intel Max 1550" />
-                    <div class="form-text">Containing "intel" enables the Intel dtype rule.</div>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">GPU count</label>
-                    <input class="form-control" type="number" min="1" @bind="_svGpuCount" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">GPU memory (GB)</label>
-                    <input class="form-control" type="number" min="0" @bind="_svGpuMemGb" />
-                </div>
-                <div class="col-md-12">
-                    <label class="form-label">Models directory</label>
-                    <div class="d-flex gap-2">
-                        <input class="form-control" @bind="_svModelsDir" placeholder="/models" />
-                        <button type="button" class="btn btn-outline btn-sm" @onclick="@(() => _showModelsDirPicker = true)">Browse…</button>
+            <div class="col-md-6">
+                <UiField Label="Docker host" For="sv-docker-host" Hint="for Start/Hard-reset only">
+                    <UiInput Id="sv-docker-host" @bind-Value="_svDockerHost" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="GPU name" For="sv-gpu-name" Hint="Containing &quot;intel&quot; enables the Intel dtype rule.">
+                    <UiInput Id="sv-gpu-name" @bind-Value="_svGpuName" Placeholder="e.g. Intel Max 1550" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="GPU count" For="sv-gpu-count">
+                    <UiInput Id="sv-gpu-count" Type="number" Value="@_svGpuCount.ToString()" ValueChanged="@(v => _svGpuCount = int.TryParse(v, out var n) ? n : _svGpuCount)" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="GPU memory (GB)" For="sv-gpu-mem">
+                    <UiInput Id="sv-gpu-mem" Type="number" Value="@_svGpuMemGb?.ToString()" ValueChanged="@(v => _svGpuMemGb = int.TryParse(v, out var n) ? n : null)" />
+                </UiField>
+            </div>
+            <div class="col-md-12">
+                <UiField Label="Models directory" For="sv-models-dir">
+                    <div style="display:flex; gap: var(--ui-space-2);">
+                        <div style="flex:1;"><UiInput Id="sv-models-dir" @bind-Value="_svModelsDir" Placeholder="/models" /></div>
+                        <UiButton Variant="secondary" Size="sm" OnClick="@(() => _showModelsDirPicker = true)">Browse…</UiButton>
                     </div>
-                </div>
-                <div class="col-md-12">
-                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
-                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@CloseServerDialog">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
+                </UiField>
+            </div>
+        </form>
+    </Dialog>
 }
 
 @if (_showModelsDirPicker)
@@ -138,79 +131,75 @@ else
 
 @if (_editingInstance is not null)
 {
-    <div class="modal-overlay" @onclick="@CloseInstanceDialog">
-        <div class="modal-dialog-custom" style="max-width: 600px;" @onclick:stopPropagation="true">
-            <div class="d-flex align-items-center justify-content-between mb-3">
-                <div class="card-title mb-0">@(_instanceIsNew ? "Add instance" : "Edit instance")</div>
-                <button type="button" class="modal-close-btn" @onclick="@CloseInstanceDialog" aria-label="Close">✕</button>
+    <Dialog Title="@(_instanceIsNew ? "Add instance" : "Edit instance")" Size="md"
+            Open="@(_editingInstance is not null)" OpenChanged="@(open => { if (!open) CloseInstanceDialog(); })"
+            Footer="@InstanceDialogFooter">
+        <form id="instance-form" @onsubmit="SaveInstanceAsync" @onsubmit:preventDefault="true" class="row g-3">
+            <div class="col-md-6">
+                <UiField Label="Label" For="in-label" Required="true">
+                    <UiInput Id="in-label" @bind-Value="_inLabel" />
+                </UiField>
             </div>
-            <form @onsubmit="@SaveInstanceAsync" @onsubmit:preventDefault="true" class="row g-3">
-                <div class="col-md-6">
-                    <label class="form-label">Label</label>
-                    <input class="form-control" @bind="_inLabel" required />
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">Proxy slug</label>
-                    <input class="form-control" @bind="_inProxySlug" required />
-                    @if (!_instanceIsNew)
-                    {
-                        <div class="form-text text-danger">Changing this changes every client's proxy URL.</div>
-                    }
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">vLLM port</label>
-                    <input class="form-control" type="number" min="1" @bind="_inPort" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Container name</label>
-                    <input class="form-control" @bind="_inContainerName" placeholder="for Start/Hard-reset only" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Poll interval (ms)</label>
-                    <input class="form-control" type="number" min="100" @bind="_inPollIntervalMs" />
-                </div>
-                <div class="col-md-8">
-                    <label class="form-label">Supervisor URL</label>
-                    <input class="form-control" @bind="_inAdminUrl" placeholder="http://host:8080" />
-                </div>
-                <div class="col-md-12">
-                    <button type="button" class="btn btn-outline btn-sm" disabled="@(_testBusy || string.IsNullOrWhiteSpace(_inAdminUrl))" @onclick="@TestConnectionAsync">
-                        @(_testBusy ? "Testing…" : "Test connection")
-                    </button>
-                    @if (_testResult is not null)
-                    {
-                        <div class="@(_testOk ? "alert alert-success" : "alert alert-danger") py-2 mt-2">@_testResult</div>
-                    }
-                </div>
-
-                @if (!_instanceIsNew && _editingInstance.AdminUrl is not null)
+            <div class="col-md-6">
+                <UiField Label="Proxy slug" For="in-slug" Required="true"
+                         Hint="@(!_instanceIsNew ? "Changing this changes every client's proxy URL." : null)">
+                    <UiInput Id="in-slug" @bind-Value="_inProxySlug" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="vLLM port" For="in-port">
+                    <UiInput Id="in-port" Type="number" Value="@_inPort.ToString()" ValueChanged="@(v => _inPort = int.TryParse(v, out var n) ? n : _inPort)" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="Container name" For="in-container" Hint="for Start/Hard-reset only">
+                    <UiInput Id="in-container" @bind-Value="_inContainerName" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="Poll interval (ms)" For="in-poll">
+                    <UiInput Id="in-poll" Type="number" Value="@_inPollIntervalMs.ToString()" ValueChanged="@(v => _inPollIntervalMs = int.TryParse(v, out var n) ? n : _inPollIntervalMs)" />
+                </UiField>
+            </div>
+            <div class="col-md-8">
+                <UiField Label="Supervisor URL" For="in-admin-url">
+                    <UiInput Id="in-admin-url" @bind-Value="_inAdminUrl" Placeholder="http://host:8080" />
+                </UiField>
+            </div>
+            <div class="col-md-12">
+                <UiButton Variant="secondary" Size="sm" Disabled="@(_testBusy || string.IsNullOrWhiteSpace(_inAdminUrl))" OnClick="TestConnectionAsync">
+                    @(_testBusy ? "Testing…" : "Test connection")
+                </UiButton>
+                @if (_testResult is not null)
                 {
-                    <div class="col-md-12">
-                        @if (_autoStartOn is null)
-                        {
-                            <label class="form-label mb-1 text-muted">Restore last known good model on boot — checking…</label>
-                        }
-                        else
-                        {
-                            <label class="form-label mb-1">
-                                <input type="checkbox" class="form-check-input" checked="@_autoStartOn" @onchange="@OnAutoStartToggledAsync" />
-                                Restore last known good model on boot
-                            </label>
-                        }
-                        <div class="form-text">
-                            Restores the last <em>healthy</em> model when the container starts — a failed run is
-                            never replayed, and it stops retrying after 3 attempts.
-                        </div>
+                    <div style="margin-top: var(--ui-space-2);">
+                        <Callout Tone="@(_testOk ? "success" : "danger")">@_testResult</Callout>
                     </div>
                 }
+            </div>
 
+            @if (!_instanceIsNew && _editingInstance!.AdminUrl is not null)
+            {
                 <div class="col-md-12">
-                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
-                    <button type="button" class="btn btn-secondary btn-sm" @onclick="@CloseInstanceDialog">Cancel</button>
+                    @if (_autoStartOn is null)
+                    {
+                        <label class="ui-label" style="display:block; margin-bottom: 4px;">Restore last known good model on boot — checking…</label>
+                    }
+                    else
+                    {
+                        <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2); margin-bottom: 4px;">
+                            <input type="checkbox" checked="@_autoStartOn" @onchange="@OnAutoStartToggledAsync" />
+                            Restore last known good model on boot
+                        </label>
+                    }
+                    <p class="ui-hint" style="margin:0;">
+                        Restores the last <em>healthy</em> model when the container starts — a failed run is
+                        never replayed, and it stops retrying after 3 attempts.
+                    </p>
                 </div>
-            </form>
-        </div>
-    </div>
+            }
+        </form>
+    </Dialog>
 }
 
 @code {
@@ -243,6 +232,25 @@ else
     private bool _testOk;
     private string? _testResult;
     private bool? _autoStartOn;
+
+    private bool HasInstances(int serverId) => _instancesByServer.TryGetValue(serverId, out var list) && list.Count > 0;
+
+    private RenderFragment ServerHeaderActions(Server server) => @<text>
+        <UiButton Variant="ghost" Size="sm" OnClick="@(() => OpenEditServer(server))">Edit</UiButton>
+        <UiButton Variant="danger" Size="sm" OnClick="@(() => DeleteServerAsync(server))">Delete</UiButton>
+    </text>;
+
+    private RenderFragment NoServersAction => @<UiButton Variant="primary" Size="sm" OnClick="OpenNewServer">+ Add server</UiButton>;
+
+    private RenderFragment ServerDialogFooter => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="CloseServerDialog">Cancel</UiButton>
+        <UiButton Variant="primary" Size="sm" Type="submit" form="server-form">Save</UiButton>
+    </text>;
+
+    private RenderFragment InstanceDialogFooter => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="CloseInstanceDialog">Cancel</UiButton>
+        <UiButton Variant="primary" Size="sm" Type="submit" form="instance-form">Save</UiButton>
+    </text>;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 

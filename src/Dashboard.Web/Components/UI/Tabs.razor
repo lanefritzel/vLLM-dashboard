@@ -1,0 +1,41 @@
+@* Tabs — tab strip with roving tabindex and arrow-key navigation (Style
+   Refactor P1.5). Renders only the strip; the caller swaps content based on
+   ActiveKey, which also lets this slot straight into PageHeader's Tabs slot.
+   For a range/filter control instead of navigation, use SegmentedControl. *@
+<div class="ui-tabs" role="tablist">
+    @foreach (var item in Items)
+    {
+        <button type="button"
+                role="tab"
+                class="ui-tab @(item.Key == ActiveKey ? "active" : "")"
+                aria-selected="@(item.Key == ActiveKey ? "true" : "false")"
+                tabindex="@(item.Key == ActiveKey ? "0" : "-1")"
+                @onclick="@(() => Select(item.Key))"
+                @onkeydown="@(e => HandleKeyDown(e, item.Key))">
+            @item.Label
+        </button>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<(string Key, string Label)> Items { get; set; } = [];
+    [Parameter] public string ActiveKey { get; set; } = "";
+    [Parameter] public EventCallback<string> ActiveKeyChanged { get; set; }
+
+    private Task Select(string key) => ActiveKeyChanged.InvokeAsync(key);
+
+    private Task HandleKeyDown(KeyboardEventArgs e, string currentKey)
+    {
+        if (e.Key != "ArrowRight" && e.Key != "ArrowLeft")
+            return Task.CompletedTask;
+
+        var index = Items.ToList().FindIndex(i => i.Key == currentKey);
+        if (index < 0) return Task.CompletedTask;
+
+        var nextIndex = e.Key == "ArrowRight"
+            ? (index + 1) % Items.Count
+            : (index - 1 + Items.Count) % Items.Count;
+
+        return Select(Items[nextIndex].Key);
+    }
+}

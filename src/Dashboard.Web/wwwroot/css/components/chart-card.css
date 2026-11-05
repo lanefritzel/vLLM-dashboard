@@ -1,0 +1,145 @@
+/* ============================================================================
+   chart-card.css — ChartCard primitive and chart.js canvas chrome
+   (Style Refactor P1.6)
+
+   Used by ChartCard.razor; the canvas itself stays caller content (so the
+   caller keeps its own id/@ref for charts.js' createChart/chart_push), this
+   supplies the consistent header/body/footer/empty/loading chrome around it.
+   Consumes --ui-* tokens only — chart series colors live in tokens.css and
+   are read by charts.js via getComputedStyle, never hardcoded here or in Razor.
+   ============================================================================ */
+
+.chart-wrap {
+  position: relative;
+  height: 240px;
+  margin-bottom: var(--ui-space-4);
+}
+
+.chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.ui-chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: var(--ui-space-3);
+}
+
+.ui-chart-header-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  flex: none;
+}
+
+.ui-chart-title {
+  margin: 0;
+  font-size: var(--ui-text-md);
+  font-weight: 650;
+}
+
+.ui-chart-subtitle {
+  margin: 2px 0 0;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-muted);
+}
+
+.ui-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: var(--ui-space-2);
+  font-size: var(--ui-text-xs);
+  color: var(--ui-muted);
+}
+
+.ui-chart-legend-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  margin-bottom: var(--ui-space-2);
+}
+
+.ui-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ui-chart-legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.ui-chart-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-2);
+  font-size: var(--ui-text-xs);
+  color: var(--ui-subtle);
+}
+
+/* ChartCard's own outer padding -- it renders straight into .ui-panel rather
+   than through the padded .ui-panel-body sub-div other panels use. */
+.ui-chart-card {
+  padding: var(--ui-space-4) var(--ui-space-5);
+}
+
+/* ui-chart-card-body: the canvas/empty/loading host inside ChartCard ------- */
+
+.ui-chart-card-body {
+  position: relative;
+  min-height: 220px;
+  max-height: 260px;
+}
+
+.ui-chart-card-body canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.ui-chart-card-skeleton {
+  position: absolute;
+  inset: 0;
+}
+
+.ui-chart-card-body .ui-empty {
+  position: absolute;
+  inset: 0;
+  padding: var(--ui-space-4);
+}
+
+.window-select { width: auto; }
+
+.series-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: var(--ui-space-3);
+}
+
+.series-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-muted);
+}
+
+.series-toggle .dot {
+  width: 8px;
+  height: 8px;
+  margin-right: 0;
+}
+
+/* Responsive: chart height */
+@media (max-width: 1024px) {
+  .chart-wrap { height: 200px; }
+  .ui-chart-card-body { min-height: 200px; }
+}

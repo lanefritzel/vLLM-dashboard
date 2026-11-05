@@ -1,0 +1,35 @@
+/* ============================================================================
+   skeleton.css — Skeleton loading primitive (Style Refactor P1.4)
+
+   Used by Skeleton.razor. The shimmer animation is disabled globally by the
+   prefers-reduced-motion rule in base.css, so no separate override is needed
+   here. Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.ui-skeleton {
+  border-radius: var(--ui-radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--ui-surface-2) 25%,
+    var(--ui-surface-3) 50%,
+    var(--ui-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: ui-shimmer 1.4s ease infinite;
+}
+
+@keyframes ui-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.ui-skeleton-line { height: 12px; margin-bottom: 10px; }
+.ui-skeleton-line.w-40 { width: 40%; }
+.ui-skeleton-line.w-60 { width: 60%; }
+.ui-skeleton-line.w-80 { width: 80%; }
+.ui-skeleton-line:last-child { margin-bottom: 0; }
+
+.ui-skeleton-circle { width: 40px; height: 40px; border-radius: 50%; }
+.ui-skeleton-avatar { display: inline-block; width: 24px; height: 24px; border-radius: 50%; }
+
+.ui-skeleton-block { width: 100%; }

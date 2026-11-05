@@ -1,0 +1,27 @@
+@* CopyButton — copy-to-clipboard affordance with a visible confirmation
+   (Style Refactor P1.5). Reuses the ui-btn-ghost look rather than new CSS. *@
+@inject IJSRuntime JS
+
+<button type="button" class="ui-btn ui-btn-ghost ui-btn-sm" @onclick="CopyAsync" aria-label="@(_copied ? "Copied" : Label)">
+    <Icon Name="@(_copied ? "check" : "copy")" Size="14" />
+    @(_copied ? "Copied" : Label)
+</button>
+
+@code {
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+    [Parameter] public string Label { get; set; } = "Copy";
+
+    private bool _copied;
+
+    private async Task CopyAsync()
+    {
+        var ok = await JS.InvokeAsync<bool>("ui_copyText", Text);
+        if (!ok) return;
+
+        _copied = true;
+        StateHasChanged();
+        await Task.Delay(1500);
+        _copied = false;
+        StateHasChanged();
+    }
+}

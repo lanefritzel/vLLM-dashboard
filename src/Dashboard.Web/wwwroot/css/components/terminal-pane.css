@@ -1,0 +1,104 @@
+/* ============================================================================
+   terminal-pane.css — TerminalPane primitive (Style Refactor P1.5)
+
+   Used by TerminalPane.razor. Near-black body regardless of page theme, via
+   the --ui-terminal-* tokens in tokens.css — not a new hardcoded color.
+   The legacy .ui-terminal/.probe-output/.logs-console classes stay as the
+   lighter, non-toolbar log box used elsewhere; TerminalPane is the fuller
+   primitive with wrap/follow/jump-to-latest.
+   ============================================================================ */
+
+.ui-terminal,
+.probe-output,
+.logs-console {
+  padding: var(--ui-space-3);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-2);
+  color: var(--ui-text-2);
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-text-xs);
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.logs-console {
+  height: 320px;
+  overflow-y: auto;
+  white-space: pre;
+}
+
+/* ui-terminal-pane primitive (TerminalPane.razor) ---------------------------- */
+
+.ui-terminal-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--ui-terminal-border);
+  border-radius: var(--ui-radius);
+  overflow: hidden;
+  background: var(--ui-terminal-bg);
+}
+
+.ui-terminal-fullscreen {
+  position: fixed;
+  inset: var(--ui-space-4);
+  z-index: 230;
+}
+
+.ui-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  padding: var(--ui-space-2) var(--ui-space-3);
+  border-bottom: 1px solid var(--ui-terminal-border);
+  background: var(--ui-surface-2);
+  flex-wrap: wrap;
+}
+
+.ui-terminal-title {
+  font-size: var(--ui-text-sm);
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.ui-terminal-body {
+  flex: 1;
+  min-height: 160px;
+  max-height: 480px;
+  overflow: auto;
+  padding: var(--ui-space-3);
+  color: var(--ui-terminal-text);
+  font-family: var(--ui-font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.ui-terminal-body.ui-terminal-wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ui-terminal-fullscreen .ui-terminal-body { max-height: none; }
+
+.ui-terminal-line { padding: 1px 0; }
+.ui-terminal-line:hover { background: rgba(255, 255, 255, 0.04); }
+
+.ui-terminal-jump {
+  position: absolute;
+  bottom: var(--ui-space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 999px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  box-shadow: 0 4px 16px var(--ui-shadow);
+  cursor: pointer;
+}

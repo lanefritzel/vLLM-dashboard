@@ -1,0 +1,82 @@
+@* Drawer — right-side sheet for long-form editors (Style Refactor P1.5).
+   Dirty guards against an accidental close by reusing the existing
+   IDialogService confirm rather than a new confirmation primitive. *@
+@using Dashboard.Web.Components.Shared
+@inject IJSRuntime JS
+@inject IDialogService Dialogs
+@implements IAsyncDisposable
+
+@if (Open)
+{
+    <div class="ui-drawer-backdrop" @onclick="RequestClose"></div>
+    <div class="ui-drawer" @ref="PanelRef" tabindex="-1" @onkeydown="HandleKeyDown">
+        <div class="ui-drawer-header">
+            <h2 class="ui-drawer-title">@Title</h2>
+            <button type="button" class="modal-close-btn" style="position:static;" aria-label="Close" @onclick="RequestClose">
+                <Icon Name="close" Size="16" />
+            </button>
+        </div>
+        <div class="ui-drawer-body">
+            @ChildContent
+        </div>
+        @if (Footer is not null)
+        {
+            <div class="ui-drawer-footer">@Footer</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public string Title { get; set; } = "";
+
+    /// <summary>When true, closing asks for confirmation first.</summary>
+    [Parameter] public bool Dirty { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+
+    private ElementReference PanelRef;
+    private bool _wasOpen;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Open && !_wasOpen)
+        {
+            _wasOpen = true;
+            await JS.InvokeVoidAsync("ui_captureFocus");
+            await JS.InvokeVoidAsync("ui_lockScroll", true);
+            await JS.InvokeVoidAsync("ui_focusElement", PanelRef);
+        }
+        else if (!Open && _wasOpen)
+        {
+            _wasOpen = false;
+            await JS.InvokeVoidAsync("ui_lockScroll", false);
+            await JS.InvokeVoidAsync("ui_restoreFocus");
+        }
+    }
+
+    private Task HandleKeyDown(KeyboardEventArgs e) => e.Key == "Escape" ? RequestClose() : Task.CompletedTask;
+
+    private async Task RequestClose()
+    {
+        if (Dirty)
+        {
+            var discard = await Dialogs.ConfirmAsync(
+                "You have unsaved changes. Close without saving?",
+                title: "Discard changes?",
+                confirmText: "Discard",
+                cancelText: "Keep editing");
+            if (!discard) return;
+        }
+
+        Open = false;
+        await OpenChanged.InvokeAsync(false);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!_wasOpen) return;
+        try { await JS.InvokeVoidAsync("ui_lockScroll", false); } catch { /* circuit may already be gone */ }
+    }
+}

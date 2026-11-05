@@ -1,0 +1,32 @@
+@* UiField — label + hint/error wrapper around a UiInput/UiSelect/UiTextarea child
+   (Style Refactor P1.2). Pass the same id to For and to the child's Id so the
+   label, and the error text's aria-describedby, line up. *@
+<div class="ui-field @(HasError ? "has-error" : "")">
+    <label class="ui-label" for="@For">
+        @Label
+        @if (Required)
+        {
+            <span aria-hidden="true"> *</span>
+        }
+    </label>
+    @ChildContent
+    @if (HasError)
+    {
+        <span id="@($"{For}-error")" class="ui-error-text">@Error</span>
+    }
+    else if (!string.IsNullOrEmpty(Hint))
+    {
+        <span class="ui-hint">@Hint</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public string For { get; set; } = "";
+    [Parameter] public bool Required { get; set; }
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool HasError => !string.IsNullOrEmpty(Error);
+}

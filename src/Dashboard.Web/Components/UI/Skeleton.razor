@@ -1,0 +1,35 @@
+@* Skeleton — shimmering loading placeholder (Style Refactor P1.4). Compose a
+   page's loading state from these (header + stat row + table rows) rather
+   than a single centered spinner. Shimmer is disabled under
+   prefers-reduced-motion by the global rule in base.css. *@
+@if (Variant == "circle")
+{
+    <div class="ui-skeleton ui-skeleton-circle" style="@SizeStyle"></div>
+}
+else if (Variant == "line")
+{
+    <div class="ui-skeleton ui-skeleton-line @WidthClass"></div>
+}
+else
+{
+    <div class="ui-skeleton ui-skeleton-block" style="@SizeStyle"></div>
+}
+
+@code {
+    /// <summary>line | circle | block (block covers table-row/chart/stat-card
+    /// shapes too — set Width/Height to match).</summary>
+    [Parameter] public string Variant { get; set; } = "line";
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? Height { get; set; }
+
+    private string WidthClass => Width switch
+    {
+        "40%" => "w-40",
+        "60%" => "w-60",
+        "80%" => "w-80",
+        _ => "",
+    };
+
+    private string SizeStyle =>
+        $"{(Width is not null ? $"width:{Width};" : "")}{(Height is not null ? $"height:{Height};" : "")}";
+}

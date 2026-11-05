@@ -1,0 +1,82 @@
+/* ============================================================================
+   panels.css — panel/card primitives (Style Refactor P1.2)
+
+   Legacy .card* restyle + the ui-panel vocabulary used by UiPanel.razor.
+   Consumes --ui-* tokens only.
+   ============================================================================ */
+
+.card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  box-shadow: 0 1px 2px var(--ui-shadow-sm);
+  color: var(--ui-text);
+}
+
+.card-body { padding: var(--ui-space-4) var(--ui-space-5); }
+
+.card-title {
+  margin-bottom: var(--ui-space-3);
+  font-weight: 650;
+  color: var(--ui-text);
+}
+
+/* ui-panel primitive (UiPanel.razor) ----------------------------------------- */
+
+.ui-panel {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  box-shadow: 0 1px 2px var(--ui-shadow-sm);
+  color: var(--ui-text);
+}
+
+.ui-panel-inset {
+  background: var(--ui-surface-2);
+  box-shadow: none;
+}
+
+.ui-panel-interactive {
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.ui-panel-interactive:hover { border-color: var(--ui-border-strong); }
+
+.ui-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-5);
+  border-bottom: 1px solid var(--ui-border);
+  font-size: var(--ui-text-md);
+  font-weight: 600;
+}
+
+.ui-panel-title { color: var(--ui-text); }
+
+.ui-panel-description {
+  margin-top: 2px;
+  font-size: var(--ui-text-sm);
+  font-weight: 400;
+  color: var(--ui-muted);
+}
+
+.ui-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  flex: none;
+}
+
+.ui-panel-body { padding: var(--ui-space-4) var(--ui-space-5); }
+
+.ui-panel-body-flush { padding: 0; }
+
+.ui-panel-footer {
+  padding: var(--ui-space-3) var(--ui-space-5);
+  border-top: 1px solid var(--ui-border);
+  color: var(--ui-muted);
+  font-size: var(--ui-text-sm);
+}

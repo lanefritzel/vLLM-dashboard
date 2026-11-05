@@ -5,40 +5,29 @@
 @using Dashboard.Core.Abstractions
 @using Dashboard.Core.Models
 @using Dashboard.Infrastructure.Persistence.V2
-@using Microsoft.JSInterop
-@inject IJSRuntime JS
 @inject IServerService Servers
 @inject IInstanceService Instances
 @inject IDeploymentService Deployments
 @inject ISupervisorClient SupervisorClient
+@inject NavigationManager Nav
 
 <PageTitle>Logs — vLLM Dashboard</PageTitle>
 
-<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-    <h1 class="page-title mb-0">Logs <span class="text-muted fs-5">/ @(_instance?.Label ?? "no instance configured")</span></h1>
+<div class="ui-page-header">
+    <h1 class="ui-page-title">Logs <span class="ui-page-subtitle" style="margin:0;">/ @(_instance?.Label ?? "no instance configured")</span></h1>
     @if (_instance is not null)
     {
-        <div class="d-flex align-items-center gap-2">
-            <label class="text-muted small d-flex align-items-center gap-1" style="cursor: pointer;">
-                <input type="checkbox" checked="@_followTail" @onchange="OnFollowTailChanged" />
-                Follow tail
-            </label>
-            <button class="btn btn-outline-secondary btn-sm" @onclick="ClearLines">Clear</button>
-        </div>
+        <UiButton Variant="secondary" Size="sm" OnClick="ClearLines">Clear</UiButton>
     }
 </div>
 
 @if (_instance is null)
 {
-    <div class="card"><div class="card-body">
-        <p class="text-muted mb-0">No instance configured yet. Register one on the <a href="servers">Servers</a> page.</p>
-    </div></div>
+    <UiPanel><EmptyState Variant="no-instance" Description="Register one on the Servers page." PrimaryAction="@GoToServersAction" /></UiPanel>
 }
 else if (_activeDeploymentId is null)
 {
-    <div class="card"><div class="card-body">
-        <p class="text-muted mb-0">No active deployment on this instance — logs appear once a model is serving.</p>
-    </div></div>
+    <UiPanel><EmptyState Variant="no-data" Title="No active deployment" Description="Logs appear once a model is serving on this instance." /></UiPanel>
 }
 else
 {
@@ -46,11 +35,7 @@ else
         Stdout/stderr from the active deployment's supervisor process, polled every 2s.
     </p>
 
-    <div class="card">
-        <div class="card-body">
-            <pre id="logs-console" class="probe-output logs-console">@(_lines.Count == 0 ? "Waiting for log output…" : string.Join("\n", _lines))</pre>
-        </div>
-    </div>
+    <TerminalPane Lines="_lines" AllowDownload="true" DownloadFileName="@($"deployment-{_activeDeploymentId}.log")" />
 }
 
 @code {
@@ -60,9 +45,10 @@ else
     private Instance? _instance;
     private int? _activeDeploymentId;
     private readonly List<string> _lines = new();
-    private bool _followTail = true;
     private bool _disposed;
     private CancellationTokenSource? _pollCts;
+
+    private RenderFragment GoToServersAction => @<UiButton Variant="primary" Size="sm" OnClick="@(() => Nav.NavigateTo("servers"))">Go to Servers</UiButton>;
 
     protected override async Task OnInitializedAsync()
     {
@@ -108,15 +94,7 @@ else
                     var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
                     _lines.Clear();
                     _lines.AddRange(lines);
-                    await InvokeAsync(async () =>
-                    {
-                        StateHasChanged();
-                        if (_followTail)
-                        {
-                            try { await JS.InvokeVoidAsync("logs_scroll_bottom", "logs-console"); }
-                            catch { /* JS not ready */ }
-                        }
-                    });
+                    await InvokeAsync(StateHasChanged);
                 }
             }
             catch (OperationCanceledException)
@@ -132,8 +110,6 @@ else
             catch (OperationCanceledException) { return; }
         }
     }
-
-    private void OnFollowTailChanged(ChangeEventArgs e) => _followTail = e.Value is bool b && b;
 
     private void ClearLines()
     {

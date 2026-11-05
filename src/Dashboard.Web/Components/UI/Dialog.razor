@@ -1,0 +1,80 @@
+@* Dialog — modal built on native <dialog> (Style Refactor P1.5). Focus trap,
+   Escape-to-close, and return-focus-to-trigger are native <dialog> behavior;
+   only open/close need JS interop since Blazor can't call showModal() itself.
+   For a destructive action, pass a Title that names the object ("Delete
+   qwen3.8-vllm?") and a specific verb on the confirm button, not "OK". *@
+@inject IJSRuntime JS
+
+<dialog @ref="DialogRef" class="ui-dialog @SizeClass" @onclose="HandleNativeClose">
+    @if (Title is not null || HeaderContent is not null)
+    {
+        <div class="ui-dialog-header">
+            <div>
+                @if (HeaderContent is not null)
+                {
+                    @HeaderContent
+                }
+                else
+                {
+                    <h2 class="ui-dialog-title">@Title</h2>
+                }
+            </div>
+            <button type="button" class="modal-close-btn" style="position:static;" aria-label="Close" @onclick="RequestClose">
+                <Icon Name="close" Size="16" />
+            </button>
+        </div>
+    }
+    <div class="ui-dialog-body">
+        @ChildContent
+    </div>
+    @if (Footer is not null)
+    {
+        <div class="ui-dialog-footer">@Footer</div>
+    }
+</dialog>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public RenderFragment? HeaderContent { get; set; }
+
+    /// <summary>sm (480px, default) | md (640px) | lg (800px).</summary>
+    [Parameter] public string Size { get; set; } = "sm";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private ElementReference DialogRef;
+    private bool _wasOpen;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Open == _wasOpen) return;
+        _wasOpen = Open;
+
+        if (Open)
+            await JS.InvokeVoidAsync("ui_showDialog", DialogRef);
+        else
+            await JS.InvokeVoidAsync("ui_closeDialog", DialogRef);
+    }
+
+    private Task RequestClose() => JS.InvokeVoidAsync("ui_closeDialog", DialogRef).AsTask();
+
+    /// <summary>Fires on .close() from RequestClose, and natively on Escape —
+    /// either way, sync Open back so the caller's state matches reality.</summary>
+    private async Task HandleNativeClose()
+    {
+        _wasOpen = false;
+        Open = false;
+        await OpenChanged.InvokeAsync(false);
+        await OnClosed.InvokeAsync();
+    }
+
+    private string SizeClass => Size.ToLowerInvariant() switch
+    {
+        "md" => "ui-dialog-md",
+        "lg" => "ui-dialog-lg",
+        _ => "",
+    };
+}
