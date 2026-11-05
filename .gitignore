@@ -14,3 +14,6 @@ __pycache__/
 
 # Local-only screenshots taken while verifying UI changes -- never committed.
 plan/screenshots/
+
+# Personal Docker Hub publish script -- local-only, not for the public repo.
+deploy-dockerhub.sh

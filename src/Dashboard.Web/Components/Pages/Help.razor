@@ -22,10 +22,10 @@
         <ol>
             <li>
                 <strong><a href="servers">Servers</a></strong> — register the machine (label, GPU info,
-                models directory) and an instance on it (proxy slug, vLLM port, the supervisor's own URL and
-                its shared token). Use <strong>[Test connection]</strong> before saving — it calls the
-                supervisor directly and shows its GPU and current model, or a clear error if the URL or
-                token is wrong.
+                models directory) and an instance on it (proxy slug, vLLM port, and the supervisor's own
+                URL). Use <strong>[Test connection]</strong> before saving — it calls the supervisor
+                directly and shows its GPU and current model, or a clear error if the URL is wrong or
+                unreachable.
             </li>
             <li>
                 <strong><a href="models-recipes">Models &amp; Recipes</a></strong> — add a model (a local
@@ -62,9 +62,10 @@
                 you to swap something in.
             </li>
             <li>
-                <strong>The token is never shown again once saved</strong> — the Servers page's token field
-                is write-only; leave it blank when editing an instance to keep the current one. It's stored
-                encrypted, and only ever decrypted server-side to call that instance's own supervisor.
+                <strong>No token to manage</strong> — the supervisor's admin API binds to that machine's own
+                loopback address, not the network, so there's nothing for the dashboard to authenticate with
+                beyond reaching it at all. Run the dashboard and supervisor so they share that loopback (e.g.
+                <code>network_mode: host</code>) rather than exposing the admin API on the LAN.
             </li>
             <li>
                 <strong>Changing an instance's proxy slug changes its URL</strong> — every client pointed at
@@ -87,8 +88,7 @@
                     <tr><td class="text-muted">Instance label</td><td>primary</td></tr>
                     <tr><td class="text-muted">Proxy slug</td><td><code>primary</code> — becomes <code>/proxy/primary/v1</code></td></tr>
                     <tr><td class="text-muted">vLLM port</td><td><code>9999</code></td></tr>
-                    <tr><td class="text-muted">Supervisor URL</td><td><code>http://&lt;servername-or-ip&gt;:8080</code></td></tr>
-                    <tr><td class="text-muted">Token</td><td>the shared token your compose file set for that supervisor</td></tr>
+                    <tr><td class="text-muted">Supervisor URL</td><td><code>http://127.0.0.1:&lt;admin-port&gt;</code> — loopback, not the LAN address</td></tr>
                 </tbody>
             </table>
         </div>
@@ -110,13 +110,13 @@
         <ul class="mb-0">
             <li>
                 <strong>"Test connection" fails</strong> — confirm the supervisor URL is reachable from this
-                dashboard (not just from your own machine) and that nothing between them (a firewall, a VPN)
-                is blocking it. A wrong token gives a clear "wrong token" message rather than a generic
-                failure.
+                dashboard (not just from your own machine). Since the admin API only listens on loopback,
+                this almost always means the dashboard and supervisor containers aren't sharing a network
+                namespace (e.g. one isn't on <code>network_mode: host</code>) rather than a firewall issue.
             </li>
             <li>
                 <strong>An instance shows "needs supervisor registration"</strong> — it exists in the
-                dashboard (often from an earlier version's data) but has no supervisor URL/token saved yet.
+                dashboard (often from an earlier version's data) but has no supervisor URL saved yet.
                 Its proxy URL keeps forwarding traffic either way; only swapping is blocked until you
                 register it on the Servers page.
             </li>
