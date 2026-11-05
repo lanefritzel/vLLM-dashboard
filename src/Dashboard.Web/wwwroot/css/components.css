@@ -113,9 +113,12 @@
   color: var(--ui-text);
 }
 
-/* Blazor error UI */
+/* Blazor error UI -- framework JS sets this to display:block itself the
+   moment an unhandled circuit error occurs; it never sets it back to none
+   on a normal page load, so the resting state here must default to hidden
+   or this shows permanently regardless of whether anything is wrong. */
 #blazor-error-ui {
-  display: block;
+  display: none;
   margin: 0 0 var(--ui-space-4);
   padding: 10px 14px;
   border: 1px solid var(--ui-danger);
