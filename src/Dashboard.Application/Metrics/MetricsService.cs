@@ -61,26 +61,4 @@ public sealed class MetricsService : IMetricsService
 
     /// <summary>State for every known source (for the header selector).</summary>
     public IReadOnlyCollection<SourceState> GetStates() => _states.Values.ToList();
-
-    /// <summary>
-    /// Averages ReqTps (itself a per-poll point rate) over samples within `window` --
-    /// equivalent to total-completions-over-window / window-seconds when the poll
-    /// interval is roughly constant, without needing the raw counters this layer
-    /// doesn't keep. 600 is comfortably above SampleStore's own ring capacity (900 @
-    /// up to ~2s/sample) so this never under-fetches the window at a faster poll rate.
-    /// </summary>
-    public double? GetReqRateWindowed(string sourceId, TimeSpan window)
-    {
-        var cutoff = DateTime.UtcNow - window;
-        double sum = 0;
-        var count = 0;
-        foreach (var sample in _samples.GetRecent(sourceId, 600))
-        {
-            if (sample.Ts < cutoff || sample.ReqTps is not { } v)
-                continue;
-            sum += v;
-            count++;
-        }
-        return count > 0 ? sum / count : null;
-    }
 }

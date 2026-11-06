@@ -12,6 +12,12 @@
   margin-bottom: var(--ui-space-4);
 }
 
+.ui-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .chip,
 .ui-chip {
   display: inline-flex;
