@@ -41,8 +41,9 @@
     return c;
   }
 
-  // 8% alpha fill, used only when a chart has exactly one series (a fill
-  // reads as noise once two or more lines overlap it).
+  // 8% alpha fill, used when a chart has exactly one series (a fill reads
+  // as noise once two or more lines overlap it) -- unless a series opts
+  // in/out explicitly via its `fill` property.
   function fillAlphaHex(col) { return col + '14'; }
 
   function tooltipTheme(pal) {
@@ -98,13 +99,15 @@
     var singleSeries = series.length === 1;
     var datasets = series.map(function (s) {
       var col = resolveColor(s.color) || pal.accent;
+      var filled = s.fill !== undefined ? !!s.fill : singleSeries;
       return {
         key: s.key, label: s.label, data: [],
         _colorSpec: s.color,
+        _fill: filled,
         borderColor: col,
-        backgroundColor: singleSeries ? fillAlphaHex(col) : col + '22',
+        backgroundColor: filled ? fillAlphaHex(col) : col + '22',
         pointRadius: 0, pointHoverRadius: 3, borderWidth: 1.75, tension: 0.25,
-        fill: singleSeries, spanGaps: true,
+        fill: filled, spanGaps: true,
         hidden: hiddenKeys.indexOf(s.key) !== -1
       };
     });
@@ -238,8 +241,9 @@
     var singleSeries = chart.data.datasets.length === 1;
     chart.data.datasets.forEach(function (ds) {
       var col = resolveColor(ds._colorSpec) || pal.accent;
+      var filled = ds._fill !== undefined ? !!ds._fill : singleSeries;
       ds.borderColor = col;
-      ds.backgroundColor = singleSeries ? fillAlphaHex(col) : col + '22';
+      ds.backgroundColor = filled ? fillAlphaHex(col) : col + '22';
     });
     try { chart.update('none'); } catch (e) { /* chart may be mid-destroy */ }
   }

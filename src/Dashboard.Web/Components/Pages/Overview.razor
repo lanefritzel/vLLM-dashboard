@@ -722,9 +722,9 @@ else
         if (_expandChart && _expandedChartKey != sourceId)
         {
             var throughputOk = await JS.InvokeAsync<bool>("chart_create", "ov2-throughput",
-                new List<Dictionary<string, string>>
+                new List<Dictionary<string, object>>
                 {
-                    new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)" },
+                    new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)", ["fill"] = true },
                     new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "var(--ui-chart-1)" },
                 }, new { });
             var kvOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv",
