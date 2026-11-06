@@ -26,7 +26,7 @@ from typing import Optional
 
 from .event_push import EventPusher, PushItem
 from .failure_report import FailureReport, build_report
-from .gpu_backend import GpuBackend, GpuInfo
+from .gpu_backend import GpuBackend, GpuInfo, detect_backend
 from .log_store import DeploymentArchive
 from .process_manager import ProcessManager
 from .smoke_test import SmokeResult, resolve_smoke_config, run_smoke_test
@@ -185,6 +185,15 @@ class DeployRunner:
     @property
     def gpu_backend(self) -> GpuBackend:
         return self._gpu_backend
+
+    def redetect_gpu_backend(self) -> GpuInfo:
+        """POST /admin/gpu/recheck -- re-runs full vendor detection (not
+        just a re-query of whatever backend startup picked), so fixing a
+        misdetection doesn't need a supervisor restart. Replaces
+        `_gpu_backend` in place so every other caller (deploy/stop's
+        VRAM-release wait) picks up the new backend immediately too."""
+        self._gpu_backend = detect_backend(self._process_manager)
+        return self._gpu_backend.query()
 
     @property
     def archive(self) -> DeploymentArchive:

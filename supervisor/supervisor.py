@@ -106,7 +106,7 @@ async def main_async() -> None:
     state_store = StateStore()
     process_manager = ProcessManager()
     event_pusher = EventPusher(url=DASHBOARD_EVENT_URL)
-    gpu_backend = detect_backend()  # once, at start (doc 5) -- nvidia-smi, then Intel sysfs, else generic
+    gpu_backend = detect_backend(process_manager)  # once, at start (doc 5) -- nvidia-smi, then Intel sysfs, else generic
     print(f"supervisor: GPU backend detected -- {gpu_backend.vendor}", flush=True)
     deploy_runner = DeployRunner(process_manager, state_store, event_pusher, gpu_backend)
     download_manager = DownloadManager(HfClient(token=HF_TOKEN), models_root=MODELS_ROOT)
