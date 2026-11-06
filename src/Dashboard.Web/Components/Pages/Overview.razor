@@ -21,6 +21,7 @@
 @inject IOnboardingService Onboarding
 @inject IBootReconciler Reconciler
 @inject IMetricsHistory History
+@inject IMetricsService Metrics
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
 
@@ -103,7 +104,7 @@ else
             · served as "@(_activeRecipe?.ServedModelName ?? "main")"
             · Uptime @UptimeText()
             · VRAM @VramText()
-            · @ReqPerSecText() req/s
+            · @ReqPerSecText() req/s (30s avg)
         </p>
 
         @if (_vramWarning is not null)
@@ -483,7 +484,14 @@ else
         ? $"{(used * 100.0 / total):0}%"
         : "n/a";
 
-    private string ReqPerSecText() => _latestSample?.ReqTps is { } v ? v.ToString("0.#") : "—";
+    // A raw 1-poll-interval point rate reads 0 almost all the time once completions
+    // are sparse (e.g. one every several minutes) -- average over a 30s window
+    // instead so this reads as a believable rate rather than a stuck zero.
+    private static readonly TimeSpan ReqRateWindow = TimeSpan.FromSeconds(30);
+
+    private string ReqPerSecText() => _latestSample?.SourceId is { } sourceId && Metrics.GetReqRateWindowed(sourceId, ReqRateWindow) is { } v
+        ? v.ToString("0.#")
+        : "—";
 
     private void OpenCeremony(int? resumeDeploymentId, bool rollback = false)
     {

@@ -385,3 +385,42 @@ def test_admin_deployment_logs_returns_that_deployments_archived_output(tmp_path
         assert missing.json()["lines"] == ""
     finally:
         pm.stop()
+
+
+def test_gpu_endpoint_reflects_the_configured_backend(tmp_path):
+    from supervisor.gpu_backend import FakeBackend
+
+    fake_path = tmp_path / "fake_gpu.json"
+    fake_path.write_text('{"vendor": "fake", "count": 1, "total_mb": 12288, "used_mb": 4096}')
+    pm = ProcessManager()
+    runner = DeployRunner(
+        pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path), gpu_backend=FakeBackend(fake_path)
+    )
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
+    client = TestClient(app)
+
+    resp = client.get("/admin/gpu", headers=auth_headers())
+    assert resp.json() == {"vendor": "fake", "count": 1, "total_mb": 12288, "used_mb": 4096}
+
+
+def test_gpu_recheck_re_detects_instead_of_re_querying_the_frozen_backend(tmp_path, monkeypatch):
+    """Regression test for the recheck endpoint only re-querying whatever
+    backend startup picked (never re-running detect_backend()) -- a future
+    misdetection used to need a full supervisor restart to pick up a fix."""
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))  # starts generic
+    app = create_app(pm, runner, StateStore(tmp_path / "state.json"))
+    client = TestClient(app)
+
+    assert client.get("/admin/gpu", headers=auth_headers()).json()["vendor"] == "generic"
+
+    fake_path = tmp_path / "fake_gpu.json"
+    fake_path.write_text('{"vendor": "fake", "count": 1, "total_mb": 8192, "used_mb": 1024}')
+    monkeypatch.setenv("GPU_BACKEND", "fake")
+    monkeypatch.setenv("GPU_BACKEND_FAKE_PATH", str(fake_path))
+
+    recheck_resp = client.post("/admin/gpu/recheck", headers=auth_headers())
+    assert recheck_resp.json() == {"vendor": "fake", "count": 1, "total_mb": 8192, "used_mb": 1024}
+
+    # The swap persists on the runner, not just the recheck response itself.
+    assert client.get("/admin/gpu", headers=auth_headers()).json()["vendor"] == "fake"

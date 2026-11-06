@@ -213,7 +213,7 @@ def create_app(
 
     @admin.post("/admin/gpu/recheck")
     def gpu_recheck() -> dict:
-        return deploy_runner.gpu_backend.query().to_dict()
+        return deploy_runner.redetect_gpu_backend().to_dict()
 
     @admin.get("/admin/settings")
     def get_settings() -> dict:
