@@ -21,7 +21,6 @@
 @inject IOnboardingService Onboarding
 @inject IBootReconciler Reconciler
 @inject IMetricsHistory History
-@inject IMetricsService Metrics
 
 <PageTitle>Overview — vLLM Dashboard</PageTitle>
 
@@ -99,13 +98,13 @@ else
             <UiButton Variant="secondary" Size="sm" OnClick="StopAsync">Stop</UiButton>
             <UiButton Variant="secondary" Size="sm" Disabled="@(!_canRollback)" OnClick="@(() => OpenCeremony(null, rollback: true))">Rollback</UiButton>
         </div>
-        <p class="ui-page-subtitle" style="margin: 0 0 var(--ui-space-3);">
-            proxy: <code>/proxy/@(_instance.ProxySlug)/v1</code>
-            · served as "@(_activeRecipe?.ServedModelName ?? "main")"
-            · Uptime @UptimeText()
-            · VRAM @VramText()
-            · @ReqPerSecText() req/s (30s avg)
-        </p>
+        <div class="ui-meta-row" style="margin: 0 0 var(--ui-space-3);">
+            <Chip Static="true">proxy: <code>/proxy/@(_instance.ProxySlug)/v1</code></Chip>
+            <Chip Static="true">served as "@(_activeRecipe?.ServedModelName ?? "main")"</Chip>
+            <Chip Static="true">Uptime @UptimeText()</Chip>
+            <Chip Static="true">VRAM @VramText()</Chip>
+            <Chip Static="true">@(_latestSample is null ? "—" : _latestSample.Running.ToString()) running</Chip>
+        </div>
 
         @if (_vramWarning is not null)
         {
@@ -483,15 +482,6 @@ else
     private string VramText() => _gpuInfo is { TotalMb: { } total and > 0, UsedMb: { } used }
         ? $"{(used * 100.0 / total):0}%"
         : "n/a";
-
-    // A raw 1-poll-interval point rate reads 0 almost all the time once completions
-    // are sparse (e.g. one every several minutes) -- average over a 30s window
-    // instead so this reads as a believable rate rather than a stuck zero.
-    private static readonly TimeSpan ReqRateWindow = TimeSpan.FromSeconds(30);
-
-    private string ReqPerSecText() => _latestSample?.SourceId is { } sourceId && Metrics.GetReqRateWindowed(sourceId, ReqRateWindow) is { } v
-        ? v.ToString("0.#")
-        : "—";
 
     private void OpenCeremony(int? resumeDeploymentId, bool rollback = false)
     {
