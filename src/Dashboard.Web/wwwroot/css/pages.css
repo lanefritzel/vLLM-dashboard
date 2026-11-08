@@ -83,3 +83,54 @@
 @media (max-width: 390px) {
   .gallery-shell { max-width: 100%; }
 }
+
+/* Overview > Neuron map. The canvas is deliberately dark in both themes (like a scope). */
+.nm-toolbar { margin-bottom: var(--ui-space-2); }
+.nm-frame {
+  width: 100%;
+  background: #0f1115;
+  border: 1px solid var(--ui-border, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+  overflow: hidden;
+}
+.nm-canvas { display: block; width: 100%; }
+.nm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-3);
+  align-items: center;
+  margin-top: var(--ui-space-2);
+}
+.nm-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.nm-swatch-box { border: 1.5px solid currentColor; background: transparent; }
+.nm-stat { margin-left: auto; }
+
+/* Neuron map palette picker */
+.nm-palettes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: var(--ui-space-2);
+  margin-bottom: var(--ui-space-1);
+}
+.nm-pal {
+  display: block;
+  width: 100%;
+  padding: 6px 8px 5px;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--ui-border, rgba(128, 128, 128, 0.3));
+  border-radius: 8px;
+  cursor: pointer;
+}
+.nm-pal:hover { border-color: var(--ui-border-strong, rgba(128, 128, 128, 0.6)); }
+.nm-pal-on { border-color: var(--ui-accent, #5b8def); box-shadow: 0 0 0 1px var(--ui-accent, #5b8def) inset; }
+.nm-pal-bar { display: block; height: 12px; border-radius: 3px; margin-bottom: 4px; }
+.nm-pal-name { font-size: 12px; }
+.nm-pal-hint { margin-bottom: var(--ui-space-2); min-height: 1.2em; }

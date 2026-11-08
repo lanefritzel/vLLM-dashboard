@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Neuron map palette gallery (local test page)</title>
+<style>
+  body { background:#14161a; color:#d7dae0; font:13px sans-serif; margin:16px; }
+  h3 { margin:0 0 10px; font-weight:500; }
+  #grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
+  .cell { background:#0f1115; border-radius:8px; padding:6px 6px 4px; }
+  .cell .nm { width:100%; } canvas { display:block; width:100%; }
+  .name { font-weight:500; margin:0 0 4px 2px; } .hint { color:#8a8f98; font-size:11px; margin:3px 0 0 2px; min-height:28px; }
+</style></head>
+<body>
+<h3>Neuron map palettes (same recorded Intel data in every panel)</h3>
+<div id="grid"></div>
+<script src="../../../src/Dashboard.Web/wwwroot/js/neuronmap.js"></script>
+<script>
+  var snaps = [], renderers = [], i = 0;
+  var grid = document.getElementById('grid');
+  NeuronMapRenderer.PALETTES.forEach(function (p) {
+    var cell = document.createElement('div'); cell.className = 'cell';
+    cell.innerHTML = '<p class="name">' + p.label + '</p><div class="nm"><canvas></canvas></div><p class="hint">' + p.hint + '</p>';
+    grid.appendChild(cell);
+    renderers.push(new NeuronMapRenderer(cell.querySelector('canvas'), { palette: p.id, rowPx: 3, fullEvery: 4 }));
+  });
+  fetch('../../Dashboard.Infrastructure.Tests/fixtures/neuronmap/real_snapshots.jsonl').then(function (x) { return x.text(); }).then(function (t) {
+    snaps = t.split('\n').filter(Boolean).map(JSON.parse);
+    // the recorded run predates the direction plane: add a stand-in so the two-sided look can be previewed
+    var bits = new Uint8Array(Math.ceil(snaps[0].layers * snaps[0].buckets / 8));
+    snaps.forEach(function (s) { for (var k = 0; k < bits.length; k++) bits[k] = Math.random() * 256; s.sign = btoa(String.fromCharCode.apply(null, bits)); });
+    setInterval(function () { var s = snaps[i++ % snaps.length]; renderers.forEach(function (r) { r.setSnapshot(s); }); }, 140);
+  });
+</script></body></html>

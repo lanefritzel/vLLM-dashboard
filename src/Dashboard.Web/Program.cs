@@ -122,6 +122,15 @@ builder.Services.AddSingleton<Dashboard.Infrastructure.Proxy.IModelProxyService,
 builder.Services.AddSingleton<Dashboard.Infrastructure.Proxy.IInFlightTrafficTracker, Dashboard.Infrastructure.Proxy.InFlightTrafficTracker>();
 builder.Services.AddSingleton<IMetricsHistory, MetricsHistory>();
 
+// Neuron map (Overview section): one stream to the vLLM visualizer plugin per watched
+// instance, only while a browser is viewing it. Infinite timeout: it is a long-lived SSE read.
+builder.Services.Configure<Dashboard.Infrastructure.Visualizer.VisualizerOptions>(builder.Configuration.GetSection("Visualizer"));
+builder.Services.AddHttpClient("visualizer", c => c.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddSingleton<Dashboard.Infrastructure.Visualizer.IVisualizerSink, Dashboard.Infrastructure.Visualizer.SignalRVisualizerSink>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Visualizer.IVisualizerEndpointResolver, Dashboard.Infrastructure.Visualizer.InstanceVisualizerEndpointResolver>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Visualizer.VisualizerFeedService>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Visualizer.VisualizerControlService>();
+
 // Read-only write guard (P12) -- registered before the V2 services below
 // since they all depend on it.
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.IReadOnlyGuard, Dashboard.Infrastructure.Persistence.V2.ReadOnlyGuard>();
@@ -201,6 +210,7 @@ app.MapRazorComponents<App>()
 app.MapHub<MetricsHub>("/metrics-hub").RequireAuthorization();
 app.MapHub<Dashboard.Infrastructure.Proxy.TrafficHub>("/traffic-hub").RequireAuthorization();
 app.MapHub<Dashboard.Infrastructure.Events.DeploymentHub>("/deployment-hub").RequireAuthorization();
+app.MapHub<Dashboard.Infrastructure.Visualizer.VisualizerHub>("/visualizer-hub").RequireAuthorization();
 
 // Supervisor event receiver (P10b) -- machine-to-machine, NOT under /proxy
 // and NOT the cookie login (doc 5): it's reachable on the published port

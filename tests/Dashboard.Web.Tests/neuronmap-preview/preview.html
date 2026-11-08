@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Neuron map preview (local test page)</title>
+<style>
+  body { background:#14161a; color:#d7dae0; font:14px sans-serif; margin:24px; }
+  .nm-frame { width:100%; max-width:1100px; background:#0f1115; border:1px solid #333; border-radius:8px; overflow:hidden; }
+  .nm-canvas { display:block; width:100%; }
+  button { margin-right:8px; } #stat { margin-left:12px; color:#9aa0aa; }
+</style></head>
+<body>
+<h3>Neuron map preview (replays 12 real snapshots from the Intel GPU run)</h3>
+<p><button id="play">Replay</button><button id="scale">Scale: per layer</button><button id="clear">Clear</button><span id="stat"></span></p>
+<div class="nm-frame"><canvas id="c" class="nm-canvas"></canvas></div>
+<script src="../../../src/Dashboard.Web/wwwroot/js/neuronmap.js"></script>
+<script>
+  var snaps = [], mode = 'layer', timer = null, i = 0;
+  var r = new NeuronMapRenderer(document.getElementById('c'), {
+    fullEvery: 4, onStats: function (s) { document.getElementById('stat').textContent =
+      s.perSecond.toFixed(1) + ' updates/s · loudest layer ' + s.loudestLayer + ' · ' + s.hot + ' busy cells'; }
+  });
+  window.__r = r;
+  fetch('../../Dashboard.Infrastructure.Tests/fixtures/neuronmap/real_snapshots.jsonl').then(x => x.text()).then(t => {
+    snaps = t.split('\n').filter(Boolean).map(JSON.parse); play();
+  });
+  function play() { clearInterval(timer); i = 0; timer = setInterval(function () {
+      r.setSnapshot(snaps[i % snaps.length]); i++; if (i > 40) clearInterval(timer); }, 120); }
+  document.getElementById('play').onclick = play;
+  document.getElementById('clear').onclick = function () { r.clear(); };
+  document.getElementById('scale').onclick = function () {
+    mode = mode === 'layer' ? 'global' : 'layer'; r.setScale(mode); this.textContent = 'Scale: ' + (mode === 'layer' ? 'per layer' : 'global'); };
+</script></body></html>

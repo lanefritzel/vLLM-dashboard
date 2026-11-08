@@ -33,4 +33,8 @@
     <ProjectReference Include="..\Dashboard.Infrastructure.Tests\Dashboard.Infrastructure.Tests.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="real_snapshots.jsonl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

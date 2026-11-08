@@ -34,6 +34,10 @@ public sealed class DashboardAppFixture : IAsyncLifetime
     private IPlaywright? _playwright;
 
     public string BaseUrl { get; private set; } = "";
+
+    /// <summary>Port the app is told to find the vLLM visualizer plugin on (neuron map
+    /// E2E tests start a stand-in plugin on it).</summary>
+    public int VisualizerPort { get; private set; }
     public IBrowser Browser { get; private set; } = null!;
 
     public async Task InitializeAsync()
@@ -56,6 +60,8 @@ public sealed class DashboardAppFixture : IAsyncLifetime
         startInfo.EnvironmentVariables["ASPNETCORE_URLS"] = BaseUrl;
         startInfo.EnvironmentVariables["ConnectionStrings__DefaultConnection"] = _postgres.GetConnectionString();
         startInfo.EnvironmentVariables["DetailedErrors"] = "true";
+        VisualizerPort = GetFreeTcpPort();
+        startInfo.EnvironmentVariables["Visualizer__Port"] = VisualizerPort.ToString();
         Directory.CreateDirectory(_dataProtectionDir);
         startInfo.EnvironmentVariables["DATAPROTECTION_KEYS_DIR"] = _dataProtectionDir;
 

@@ -24,6 +24,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="fixtures\neuronmap\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Dashboard.Infrastructure\Dashboard.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Dashboard.Web\Dashboard.Web.csproj" />
   </ItemGroup>

@@ -1,0 +1,299 @@
+@* NeuronMap — Overview section: which parts of the model respond most to each word, live.
+   Fed by the vLLM visualizer plugin through VisualizerHub. Hidden by default; while shown it
+   asks the server to stream from the plugin, and hiding it (or leaving the page) lets the
+   plugin go back to sleep. Everything is drawn client-side (wwwroot/js/neuronmap.js) so
+   Blazor never re-renders per frame. *@
+@using Dashboard.Infrastructure.Persistence.V2
+@using Dashboard.Infrastructure.Visualizer
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject VisualizerControlService Control
+
+<div class="ui-toolbar nm-toolbar">
+    <span class="ui-stat-label">Neuron map</span>
+    @if (_open && Instance is not null)
+    {
+        <Chip Static="true">@StatusText</Chip>
+    }
+    <div class="ui-toolbar-spacer"></div>
+    @if (_open && Instance is not null)
+    {
+        @if (_plugin is { Reachable: true })
+        {
+            <SegmentedControl Items="_pluginItems" Value="@PluginChoice" ValueChanged="OnPluginChangedAsync" />
+            @if (_plugin.PendingDisable)
+            {
+                <UiButton Variant="link" Size="sm" OnClick="@(() => SetPluginAsync(false, true))">Turn off now</UiButton>
+            }
+            @if (_plugin.PendingEnable)
+            {
+                <UiButton Variant="link" Size="sm" OnClick="@(() => SetPluginAsync(true, true))">Turn on now</UiButton>
+            }
+        }
+        <SegmentedControl Items="_scaleItems" Value="@_scale" ValueChanged="OnScaleChangedAsync" />
+        <UiButton Variant="link" Size="sm" OnClick="TogglePalette">Palette: @PaletteLabel</UiButton>
+        <UiButton Variant="link" Size="sm" OnClick="ClearAsync">Clear</UiButton>
+    }
+    <UiButton Variant="link" Size="sm" OnClick="ToggleAsync">@(_open ? "Hide neuron map" : "Show neuron map")</UiButton>
+</div>
+
+@if (_open)
+{
+    @if (Instance is null)
+    {
+        <UiPanel><EmptyState Variant="no-instance" Description="Register an instance on the Servers page." /></UiPanel>
+    }
+    else
+    {
+        @if (_state == "unavailable")
+        {
+            <Callout Tone="info" Title="No neuron-map feed from this instance">
+                The visualizer plugin isn't answering@(string.IsNullOrEmpty(_detail) ? "" : $" ({_detail})").
+                It needs <code>VIS_ENABLED=1</code> in the recipe's environment and its port reachable from the dashboard.
+                This page keeps retrying.
+            </Callout>
+        }
+        @if (_paletteOpen && _palettes.Count > 0)
+        {
+            <div class="nm-palettes" role="listbox" aria-label="Color palette">
+                @foreach (var p in _palettes)
+                {
+                    var pid = p.Id;
+                    <button type="button" class="nm-pal @(pid == _palette ? "nm-pal-on" : "")" role="option"
+                            aria-selected="@(pid == _palette ? "true" : "false")" title="@p.Hint" @onclick="() => PickPaletteAsync(pid)">
+                        <span class="nm-pal-bar" style="background:@p.Css"></span>
+                        <span class="nm-pal-name">@p.Label</span>
+                    </button>
+                }
+            </div>
+            <div class="text-muted small nm-pal-hint">@PaletteHint</div>
+        }
+        <div class="nm-frame"><canvas id="@_canvasId" class="nm-canvas" aria-label="Neuron activity by layer"></canvas></div>
+        <div class="nm-legend text-muted small">
+            <span><i class="nm-swatch" style="background:#1D9E75"></i>layer reads the past</span>
+            <span><i class="nm-swatch" style="background:#7F77DD"></i>layer looks back at everything</span>
+            <span><i class="nm-swatch nm-swatch-box"></i>busiest for this word</span>
+            <span><i class="nm-swatch" style="background:#d6a24a"></i>loudest layers (right)</span>
+            <span id="@_statId" class="nm-stat"></span>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Instance? Instance { get; set; }
+
+    private readonly string _canvasId = "nm-canvas-" + Guid.NewGuid().ToString("N")[..8];
+    private string _statId => _canvasId + "-stat";
+
+    private readonly IReadOnlyList<(string Key, string Label)> _scaleItems =
+        [("layer", "Per layer"), ("global", "Global")];
+
+    private readonly IReadOnlyList<(string Key, string Label)> _pluginItems =
+        [("on", "Plugin on"), ("off", "Plugin off")];
+
+    public sealed class PaletteInfo
+    {
+        public string Id { get; set; } = "";
+        public string Label { get; set; } = "";
+        public string Hint { get; set; } = "";
+        public string Css { get; set; } = "";
+    }
+
+    private List<PaletteInfo> _palettes = new();
+    private string _palette = "heat";
+    private bool _paletteOpen;
+
+    private string PaletteLabel => _palettes.FirstOrDefault(p => p.Id == _palette)?.Label ?? "Heat";
+    private string PaletteHint => _palettes.FirstOrDefault(p => p.Id == _palette)?.Hint ?? "";
+
+    private VisualizerPluginState? _plugin;
+    private Timer? _pollTimer;
+    private int _polling;   // 0/1: skip a tick while the previous one is still running
+
+    private DotNetObjectReference<NeuronMap>? _receiver;
+    private bool _open;
+    private bool _needStart;
+    private bool _started;
+    private bool _disposed;
+    private int? _joinedInstanceId;
+    private string _scale = "layer";
+    private string _state = "idle";
+    private string _detail = "";
+
+    // What the switch shows is what the operator asked for; the chip explains the wait.
+    private string PluginChoice => _plugin is null ? "on"
+        : _plugin.PendingDisable ? "off"
+        : _plugin.PendingEnable ? "on"
+        : _plugin.Enabled ? "on" : "off";
+
+    private string StatusText =>
+        _plugin is { Reachable: true, PendingDisable: true } ? "turning off after this answer…" :
+        _plugin is { Reachable: true, PendingEnable: true } ? "turning on at the next request…" :
+        _plugin is { Reachable: true, Enabled: false } ? "plugin off" :
+        _state switch
+    {
+        "live" => "live",
+        "connecting" => "connecting…",
+        "unavailable" => "not reachable",
+        _ => "off",
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_disposed) return;
+        try
+        {
+            if (firstRender)
+            {
+                var pref = await JS.InvokeAsync<string>("neuronmap_pref");
+                if (pref == "1")
+                {
+                    _open = true;
+                    _needStart = true;
+                    StateHasChanged();
+                    return;
+                }
+            }
+            if (_open && Instance is not null)
+            {
+                if (_needStart)
+                {
+                    _needStart = false;
+                    await StartAsync();
+                }
+                else if (_started && _joinedInstanceId != Instance.Id)
+                {
+                    await JoinAsync();
+                }
+            }
+        }
+        catch (JSDisconnectedException) { }
+        catch (Exception)
+        {
+            // The map is a convenience; never let it break the Overview page.
+            _started = false;
+        }
+    }
+
+    private async Task StartAsync()
+    {
+        _receiver ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("neuronmap_attach", _canvasId, _statId, 4);
+        try
+        {
+            _palettes = (await JS.InvokeAsync<PaletteInfo[]>("neuronmap_palettes")).ToList();
+            _palette = await JS.InvokeAsync<string>("neuronmap_get_palette");
+        }
+        catch (Exception) { /* the default look still works without the picker */ }
+        await JS.InvokeVoidAsync("neuronmap_set_scale", _scale);
+        await JS.InvokeVoidAsync("neuronmap_start", _receiver);
+        _started = true;
+        await JoinAsync();
+        _pollTimer?.Dispose();
+        _pollTimer = new Timer(_ => _ = InvokeAsync(PollPluginAsync), null, TimeSpan.Zero, TimeSpan.FromSeconds(3));
+    }
+
+    private async Task PollPluginAsync()
+    {
+        if (_disposed || !_started || Instance is null) return;
+        if (Interlocked.Exchange(ref _polling, 1) == 1) return;
+        try
+        {
+            var id = Instance.Id.ToString();
+            var state = await Control.GetStateAsync(id);
+            state = await Control.ReconcileAsync(id, state);   // re-apply the saved choice after a vLLM restart
+            _plugin = state;
+            StateHasChanged();
+        }
+        catch (Exception) { /* the switch is a convenience; never break the page */ }
+        finally { Interlocked.Exchange(ref _polling, 0); }
+    }
+
+    private Task OnPluginChangedAsync(string value) => SetPluginAsync(value == "on", false);
+
+    private async Task SetPluginAsync(bool enabled, bool now)
+    {
+        if (Instance is null) return;
+        try
+        {
+            _plugin = await Control.SetEnabledAsync(Instance.Id.ToString(), enabled, now);
+        }
+        catch (Exception) { /* next poll shows the real state */ }
+    }
+
+    private void StopPolling()
+    {
+        _pollTimer?.Dispose();
+        _pollTimer = null;
+        _plugin = null;
+    }
+
+    private async Task JoinAsync()
+    {
+        if (Instance is null) return;
+        _joinedInstanceId = Instance.Id;
+        await JS.InvokeVoidAsync("neuronmap_join", Instance.Id.ToString());
+    }
+
+    private async Task ToggleAsync()
+    {
+        _open = !_open;
+        try
+        {
+            await JS.InvokeVoidAsync("neuronmap_pref", _open ? "1" : "0");
+            if (_open)
+            {
+                _needStart = true;
+            }
+            else
+            {
+                _started = false;
+                _joinedInstanceId = null;
+                _state = "idle";
+                StopPolling();
+                await JS.InvokeVoidAsync("neuronmap_stop");
+            }
+        }
+        catch (Exception) { }
+    }
+
+    private void TogglePalette() => _paletteOpen = !_paletteOpen;
+
+    private async Task PickPaletteAsync(string id)
+    {
+        _palette = id;
+        _paletteOpen = false;
+        try { await JS.InvokeVoidAsync("neuronmap_set_palette", id); } catch (Exception) { }
+    }
+
+    private async Task OnScaleChangedAsync(string value)
+    {
+        _scale = value;
+        try { await JS.InvokeVoidAsync("neuronmap_set_scale", value); } catch (Exception) { }
+    }
+
+    private async Task ClearAsync()
+    {
+        try { await JS.InvokeVoidAsync("neuronmap_clear"); } catch (Exception) { }
+    }
+
+    [JSInvokable]
+    public Task OnStatus(string state, string detail) => InvokeAsync(() =>
+    {
+        if (_disposed) return;
+        _state = state;
+        _detail = detail;
+        StateHasChanged();
+    });
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _pollTimer?.Dispose();
+        try { if (_started) await JS.InvokeVoidAsync("neuronmap_stop"); }
+        catch (Exception) { /* circuit already gone */ }
+        _receiver?.Dispose();
+    }
+}
