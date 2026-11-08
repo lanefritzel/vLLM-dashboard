@@ -56,6 +56,10 @@
         }
         @if (_paletteOpen && _palettes.Count > 0)
         {
+            <div class="nm-opts">
+                <span class="ui-stat-label">Cell gap</span>
+                <SegmentedControl Items="_gapItems" Value="@_gap" ValueChanged="OnGapChangedAsync" />
+            </div>
             <div class="nm-palettes" role="listbox" aria-label="Color palette">
                 @foreach (var p in _palettes)
                 {
@@ -88,6 +92,11 @@
 
     private readonly IReadOnlyList<(string Key, string Label)> _scaleItems =
         [("layer", "Per layer"), ("global", "Global")];
+
+    private readonly IReadOnlyList<(string Key, string Label)> _gapItems =
+        [("0", "None"), ("1", "1 px"), ("2", "2 px")];
+
+    private string _gap = "1";
 
     private readonly IReadOnlyList<(string Key, string Label)> _pluginItems =
         [("on", "Plugin on"), ("off", "Plugin off")];
@@ -184,6 +193,7 @@
         {
             _palettes = (await JS.InvokeAsync<PaletteInfo[]>("neuronmap_palettes")).ToList();
             _palette = await JS.InvokeAsync<string>("neuronmap_get_palette");
+            _gap = (await JS.InvokeAsync<int>("neuronmap_get_gap")).ToString();
         }
         catch (Exception) { /* the default look still works without the picker */ }
         await JS.InvokeVoidAsync("neuronmap_set_scale", _scale);
@@ -265,6 +275,12 @@
         _palette = id;
         _paletteOpen = false;
         try { await JS.InvokeVoidAsync("neuronmap_set_palette", id); } catch (Exception) { }
+    }
+
+    private async Task OnGapChangedAsync(string value)
+    {
+        _gap = value;
+        try { await JS.InvokeVoidAsync("neuronmap_set_gap", int.Parse(value)); } catch (Exception) { }
     }
 
     private async Task OnScaleChangedAsync(string value)

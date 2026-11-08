@@ -134,3 +134,4 @@
 .nm-pal-bar { display: block; height: 12px; border-radius: 3px; margin-bottom: 4px; }
 .nm-pal-name { font-size: 12px; }
 .nm-pal-hint { margin-bottom: var(--ui-space-2); min-height: 1.2em; }
+.nm-opts { display: flex; align-items: center; gap: var(--ui-space-2); margin-bottom: var(--ui-space-2); }

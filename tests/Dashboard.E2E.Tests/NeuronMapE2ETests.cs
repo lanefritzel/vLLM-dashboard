@@ -250,6 +250,55 @@ public class NeuronMapE2ETests
         await page.Context.CloseAsync();
     }
 
+    /// <summary>How many pixels in the middle of one cell row are exactly the panel background, i.e. gap lines.</summary>
+    private static async Task<int> GapPixelsAsync(IPage page) =>
+        await page.EvaluateAsync<int>(@"() => {
+            const c = document.querySelector('.nm-canvas'), dpr = window.devicePixelRatio || 1;
+            const y = Math.round((4 + 10 * 6 + 3) * dpr);   // vertical middle of the 11th layer row
+            const d = c.getContext('2d').getImageData(0, y, c.width, 1).data; let n = 0;
+            for (let x = Math.round(100 * dpr); x < c.width - Math.round(100 * dpr); x++) {
+                const i = x * 4; if (d[i] === 15 && d[i+1] === 17 && d[i+2] === 21) n++; }
+            return n; }");
+
+    [Fact]
+    public async Task Overview_CellGap_DrawsThinLinesBetweenNeurons_AndRemembersTheChoice()
+    {
+        await SeedInstanceAsync();
+        await using var plugin = new StubPlugin(_fixture.VisualizerPort);
+        plugin.MapControl();
+        await plugin.StartAsync();
+
+        var page = await _fixture.NewLoggedInPageAsync();
+        await page.GotoAsync(_fixture.BaseUrl + "/", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
+        await page.GetByRole(AriaRole.Button, new() { Name = "Show neuron map" }).ClickAsync();
+        await Assertions.Expect(page.Locator(".nm-stat")).ToContainTextAsync("updates/s", new() { Timeout = 15000 });
+        await page.GetByRole(AriaRole.Button, new() { Name = "Palette: Heat" }).ClickAsync();
+
+        var oneDefault = await GapPixelsAsync(page);                       // starts at 1 px
+
+        await page.GetByText("None", new() { Exact = true }).ClickAsync();
+        await Task.Delay(600);
+        var none = await GapPixelsAsync(page);
+
+        await page.GetByText("2 px", new() { Exact = true }).ClickAsync();
+        await Task.Delay(600);
+        var two = await GapPixelsAsync(page);
+
+        Assert.True(oneDefault > 60, $"default 1px gap should show lines ({oneDefault})");
+        Assert.True(none < oneDefault, $"no gap should have fewer background pixels ({none} vs {oneDefault})");
+        Assert.True(two > oneDefault, $"2px gap should have more ({two} vs {oneDefault})");
+        Assert.True(two - none > 100, $"2px vs none should differ clearly ({two} vs {none})");
+
+        // Remembered across a reload (still 2 px).
+        await page.ReloadAsync(new() { WaitUntil = WaitUntilState.NetworkIdle });
+        await Assertions.Expect(page.Locator(".nm-stat")).ToContainTextAsync("updates/s", new() { Timeout = 15000 });
+        await Task.Delay(600);
+        var afterReload = await GapPixelsAsync(page);
+        Assert.True(afterReload > oneDefault, $"2px choice should survive a reload ({afterReload} vs {oneDefault})");
+
+        await page.Context.CloseAsync();
+    }
+
     [Fact]
     public async Task Overview_ExplainsWhenThePluginIsNotReachable_WithoutBreakingThePage()
     {

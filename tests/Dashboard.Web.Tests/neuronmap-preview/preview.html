@@ -8,7 +8,7 @@
 </style></head>
 <body>
 <h3>Neuron map preview (replays 12 real snapshots from the Intel GPU run)</h3>
-<p><button id="play">Replay</button><button id="scale">Scale: per layer</button><button id="clear">Clear</button><span id="stat"></span></p>
+<p><button id="play">Replay</button><button id="scale">Scale: per layer</button><button id="clear">Clear</button><button id="gap">Gap: 1px</button><span id="stat"></span></p>
 <div class="nm-frame"><canvas id="c" class="nm-canvas"></canvas></div>
 <script src="../../../src/Dashboard.Web/wwwroot/js/neuronmap.js"></script>
 <script>
@@ -24,6 +24,8 @@
   function play() { clearInterval(timer); i = 0; timer = setInterval(function () {
       r.setSnapshot(snaps[i % snaps.length]); i++; if (i > 40) clearInterval(timer); }, 120); }
   document.getElementById('play').onclick = play;
+  var gaps = [0, 1, 2], gi = 1;
+  document.getElementById('gap').onclick = function () { gi = (gi + 1) % 3; r.setGap(gaps[gi]); this.textContent = 'Gap: ' + (gaps[gi] ? gaps[gi] + 'px' : 'none'); };
   document.getElementById('clear').onclick = function () { r.clear(); };
   document.getElementById('scale').onclick = function () {
     mode = mode === 'layer' ? 'global' : 'layer'; r.setScale(mode); this.textContent = 'Scale: ' + (mode === 'layer' ? 'per layer' : 'global'); };

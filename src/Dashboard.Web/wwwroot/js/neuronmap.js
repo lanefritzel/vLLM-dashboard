@@ -117,12 +117,14 @@
   var PALETTE_BY_ID = {};
   PALETTES.forEach(function (p) { PALETTE_BY_ID[p.id] = p; });
   var DEFAULT_PALETTE = 'heat';
+  var DEFAULT_GAP = 1;
 
   function Renderer(canvas, opts) {
     opts = opts || {};
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.rowPx = opts.rowPx || ROW_PX;
+    this.gap = Math.max(0, Math.min(3, opts.gap == null ? DEFAULT_GAP : opts.gap | 0));   // px between cells
     this.fullEvery = opts.fullEvery || 4;       // every Nth layer is full attention (Qwen3.5 hybrid)
     this.scale = opts.scale || 'layer';         // 'layer' | 'global'
     this.palette = PALETTE_BY_ID[opts.palette] || PALETTE_BY_ID[DEFAULT_PALETTE];
@@ -161,6 +163,11 @@
 
   Renderer.prototype.setPalette = function (id) {
     this.palette = PALETTE_BY_ID[id] || PALETTE_BY_ID[DEFAULT_PALETTE];
+    this.dirty = true; this._kick();
+  };
+
+  Renderer.prototype.setGap = function (px) {
+    this.gap = Math.max(0, Math.min(3, px | 0));
     this.dirty = true; this._kick();
   };
 
@@ -250,6 +257,12 @@
     var plotX = LEFT + STRIP + GAP, plotW = W - plotX - BAR - GAP * 2, rowH = this.rowPx;
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(this.off, plotX, 4, plotW, rows * rowH);
+    if (this.gap > 0) {   // thin background lines between neighbouring cells
+      var g = this.gap, cw = plotW / cols, gx, gy;
+      ctx.fillStyle = '#0f1115';
+      for (gx = 1; gx < cols; gx++) ctx.fillRect(Math.round(plotX + gx * cw - g / 2), 4, g, rows * rowH);
+      for (gy = 1; gy < rows; gy++) ctx.fillRect(plotX, 4 + gy * rowH - Math.floor(g / 2), plotW, g);
+    }
 
     ctx.font = '11px sans-serif'; ctx.textBaseline = 'middle';
     var r;
@@ -323,7 +336,7 @@
     if (renderer) renderer.destroy();
     statEl = statId ? document.getElementById(statId) : null;
     renderer = new Renderer(canvas, {
-      fullEvery: fullEvery || 4, scale: scaleMode, palette: currentPalette(),
+      fullEvery: fullEvery || 4, scale: scaleMode, palette: currentPalette(), gap: currentGap(),
       onStats: function (s) { if (statEl) statEl.textContent = describe(s); }
     });
     return true;
@@ -366,6 +379,17 @@
     try { id = localStorage.getItem('nm-palette') || DEFAULT_PALETTE; } catch (e) {}
     return PALETTE_BY_ID[id] ? id : DEFAULT_PALETTE;
   }
+  function currentGap() {
+    var v = DEFAULT_GAP;
+    try { var raw = localStorage.getItem('nm-gap'); if (raw !== null && raw !== '') v = parseInt(raw, 10); } catch (e) {}
+    return (v >= 0 && v <= 3) ? v : DEFAULT_GAP;
+  }
+  window.neuronmap_get_gap = currentGap;
+  window.neuronmap_set_gap = function (px) {
+    px = Math.max(0, Math.min(3, px | 0));
+    try { localStorage.setItem('nm-gap', String(px)); } catch (e) {}
+    if (renderer) renderer.setGap(px);
+  };
   window.neuronmap_palettes = function () {
     return PALETTES.map(function (p) { return { id: p.id, label: p.label, hint: p.hint, css: p.css }; });
   };
