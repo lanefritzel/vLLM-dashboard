@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Runs the plugin tests in a throwaway local container (no GPU, nothing installed on the host).
-# Needs a local image that has python + torch + vllm, e.g. the CPU POC image:
-#   IMAGE=vllm-cpu-poc:v0.32.0 ./run-tests.sh
+# Needs a local image that has python + torch + vllm, e.g. your built supervisor image:
+#   IMAGE=<that image> ./run-tests.sh
 set -euo pipefail
-IMAGE="${IMAGE:-vllm-cpu-poc:v0.32.0}"
+: "${IMAGE:?set IMAGE to a local image with python, torch and vllm (for example your supervisor image)}"
 SRC="$(cd "$(dirname "$0")" && pwd)"
 # copy to local disk first: bind-mounting from sshfs breaks docker
 TMP="$(mktemp -d "$HOME/vis-tests.XXXXXX")"
