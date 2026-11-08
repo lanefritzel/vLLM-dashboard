@@ -1,7 +1,7 @@
 @* Callout — persistent page-level message (Style Refactor P1.4). For
    transient success/error use Toast instead; don't nest callouts. *@
 <div class="ui-callout ui-callout-@Tone.ToLowerInvariant()">
-    <span class="ui-icon"><Icon Name="@IconName" Size="20" /></span>
+    <Icon Name="@IconName" Size="20" />
     <div>
         @if (!string.IsNullOrEmpty(Title))
         {

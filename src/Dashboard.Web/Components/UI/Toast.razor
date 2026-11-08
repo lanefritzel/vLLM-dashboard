@@ -6,7 +6,7 @@
      @onmouseleave="@(() => ToastService.Resume(Item.Id))"
      @onfocusin="@(() => ToastService.Pause(Item.Id))"
      @onfocusout="@(() => ToastService.Resume(Item.Id))">
-    <span class="ui-icon" aria-hidden="true"><Icon Name="@IconName" Size="18" /></span>
+    <Icon Name="@IconName" Size="18" aria-hidden="true" />
     <div>
         @if (!string.IsNullOrEmpty(Item.Title))
         {
