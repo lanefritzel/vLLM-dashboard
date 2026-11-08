@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: vllm-visualizer
+Version: 0.1.0
+Summary: vLLM neuron-map visualizer plugin (prototype)
