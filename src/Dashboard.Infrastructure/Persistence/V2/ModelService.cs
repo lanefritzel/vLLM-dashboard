@@ -84,7 +84,21 @@ public sealed class ModelService : IModelService
         var model = await db.ModelsV2.FindAsync([id], ct);
         if (model is null)
             return;
+
+        var recipes = await db.DeploymentsV2.CountAsync(d => d.ModelId == id, ct);
+        if (recipes > 0)
+            throw new InvalidOperationException(
+                $"Model '{model.Name}' can't be deleted: it was used by {recipes} deployment{(recipes == 1 ? "" : "s")} " +
+                "that are kept in the Deployments history.");
+
         db.ModelsV2.Remove(model);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsForeignKeyViolation(ex))
+        {
+            throw new InvalidOperationException($"Model '{model.Name}' can't be deleted: something else still refers to it.", ex);
+        }
     }
 }

@@ -73,6 +73,48 @@ public class ModelsRecipesE2ETests
     }
 
     [Fact]
+    public async Task RecipeEditor_AdvancedRows_CanBeRemovedWithTheirXButton()
+    {
+        // Regression: the key/value inputs overflowed their half-width column, so the Extra
+        // args X buttons sat underneath the Environment column and clicks never reached them.
+        // Playwright's ClickAsync refuses to click an obscured element, so merely clicking
+        // each X is the assertion that it is reachable.
+        var (server, _) = await SeedServerAndInstanceAsync();
+        using (var db = _fixture.NewDbContext())
+        {
+            db.RecipesV2.Add(new Recipe
+            {
+                ServerId = server.Id,
+                Name = "with-extras",
+                ServedModelName = "main",
+                ExtraArgs = "[{\"key\":\"a\",\"value\":\"1\"},{\"key\":\"b\",\"value\":\"2\"}]",
+                ExtraEnv = "[{\"key\":\"X\",\"value\":\"1\"}]",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var page = await _fixture.NewLoggedInPageAsync();
+        await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
+        await page.ClickAsync("tr:has-text('with-extras') >> text=Edit");
+
+        var dialog = page.Locator("dialog[open]");
+        await dialog.Locator("summary:has-text('Advanced')").ClickAsync();
+
+        var argKeys = dialog.Locator("input[id^='rc-extra-arg-key-']");
+        var envKeys = dialog.Locator("input[id^='rc-extra-env-key-']");
+        Assert.Equal(2, await argKeys.CountAsync());
+        Assert.Equal(1, await envKeys.CountAsync());
+
+        // Remove the first Extra args row, then the Environment row, each through a real click.
+        await dialog.Locator(".kv-row").Nth(0).Locator("button").ClickAsync();
+        Assert.Equal(1, await argKeys.CountAsync());
+        Assert.Equal("b", await argKeys.First.InputValueAsync());
+
+        await dialog.Locator(".kv-row:has(input[id^='rc-extra-env-key-']) button").ClickAsync();
+        Assert.Equal(0, await envKeys.CountAsync());
+    }
+
+    [Fact]
     public async Task NewRecipe_ServedNamePrefillsToMain_WhenNothingIsActive()
     {
         var (server, _) = await SeedServerAndInstanceAsync();

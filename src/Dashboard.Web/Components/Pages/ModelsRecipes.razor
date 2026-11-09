@@ -88,6 +88,7 @@ else
                         <td>
                             <span class="ui-row-actions">
                                 <UiButton Variant="ghost" Size="sm" OnClick="@(() => NewRecipeFromModelAsync(m))">New recipe</UiButton>
+                                <UiButton Variant="ghost" Size="sm" OnClick="@(() => _editingModel = m)">Edit</UiButton>
                                 <UiButton Variant="danger" Size="sm" OnClick="@(() => DeleteModelAsync(m))">Delete</UiButton>
                             </span>
                         </td>
@@ -146,6 +147,13 @@ else
                      OnSaved="@OnModelSavedAsync" />
 }
 
+@if (_editingModel is not null)
+{
+    <EditModelDialog Model="@_editingModel"
+                      OnCancelled="@(() => _editingModel = null)"
+                      OnSaved="@OnModelEditedAsync" />
+}
+
 @if (_editingRecipe is not null)
 {
     <RecipeEditorDialog Model="@_editingRecipe" IsNew="@_editingIsNew" ModelIdForValidation="@_servingModelId"
@@ -170,6 +178,7 @@ else
     private int _servingModelId;
 
     private bool _addModelOpen;
+    private Model? _editingModel;
     private Recipe? _editingRecipe;
     private bool _editingIsNew;
     private bool _swapBusy;
@@ -300,8 +309,14 @@ else
         }
         catch (Exception ex)
         {
-            await Dialogs.AlertAsync("Could not delete (it may still be referenced by a recipe/deployment): " + ex.Message);
+            await Dialogs.AlertAsync("Could not delete: " + ex.Message);
         }
+    }
+
+    private async Task OnModelEditedAsync(Model saved)
+    {
+        _editingModel = null;
+        _models = (await Models.ListByServerAsync(_selectedServerId)).ToList();
     }
 
     private async Task OnModelSavedAsync(Model saved)

@@ -1,0 +1,100 @@
+@using Dashboard.Infrastructure.Persistence.V2
+@using Dashboard.Web.Components.Shared
+@inject IModelService Models
+
+<Dialog Title="@($"Edit model — {Model.Name}")" Size="md" Open="true"
+        OpenChanged="@(open => { if (!open) _ = RequestCancel(); })"
+        Footer="@DialogFooter">
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <Callout Tone="danger">@_error</Callout>
+    }
+
+    <div class="row g-3">
+        <div class="col-md-12">
+            <UiField Label="Name" For="em-name">
+                <UiInput Id="em-name" Value="@_name" ValueChanged="@(v => _name = v)" Disabled="_busy" />
+            </UiField>
+        </div>
+        <div class="col-md-12">
+            <UiField Label="Weights path (on the server's disk)" For="em-path"
+                     Hint="A folder of weights, or a single .gguf file.">
+                <div style="display:flex; gap: var(--ui-space-2);">
+                    <div style="flex:1;"><UiInput Id="em-path" Value="@_path" ValueChanged="@(v => _path = v)" Disabled="_busy" /></div>
+                    <UiButton Variant="secondary" Size="sm" Disabled="_busy" OnClick="@(() => _showPathPicker = true)">Browse…</UiButton>
+                </div>
+            </UiField>
+        </div>
+        <div class="col-md-6">
+            <UiField Label="Load format" For="em-load-format"
+                     Hint="Use gguf for a .gguf file; auto for normal safetensors folders.">
+                <UiSelect Id="em-load-format" Value="@_loadFormat" ValueChanged="@(v => _loadFormat = v)" Disabled="_busy">
+                    <option value="auto">auto</option>
+                    <option value="gguf">gguf</option>
+                </UiSelect>
+            </UiField>
+        </div>
+    </div>
+</Dialog>
+
+@if (_showPathPicker)
+{
+    <FolderPickerDialog Title="Choose the weights folder" StartPath="@_path"
+        OnSelected="@(p => { _path = p; _showPathPicker = false; })"
+        OnCancelled="@(() => _showPathPicker = false)" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Model Model { get; set; } = null!;
+    [Parameter] public EventCallback<Model> OnSaved { get; set; }
+    [Parameter] public EventCallback OnCancelled { get; set; }
+
+    private string _name = "";
+    private string _path = "";
+    private string _loadFormat = "auto";
+    private bool _busy;
+    private bool _showPathPicker;
+    private string? _error;
+
+    private RenderFragment DialogFooter => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="RequestCancel">Cancel</UiButton>
+        <UiButton Variant="primary" Size="sm" Disabled="@(_busy || string.IsNullOrWhiteSpace(_name) || string.IsNullOrWhiteSpace(_path))" OnClick="SaveAsync">@(_busy ? "Saving…" : "Save")</UiButton>
+    </text>;
+
+    protected override void OnInitialized()
+    {
+        _name = Model.Name;
+        _path = Model.Path;
+        _loadFormat = string.IsNullOrWhiteSpace(Model.LoadFormat) ? "auto" : Model.LoadFormat;
+    }
+
+    private async Task RequestCancel() => await OnCancelled.InvokeAsync();
+
+    private async Task SaveAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            // A copy, so a failed/cancelled save never leaves the page's own row half-edited.
+            var edited = new Model
+            {
+                Id = Model.Id, ServerId = Model.ServerId, DisplayName = Model.DisplayName,
+                SourceType = Model.SourceType, RepoId = Model.RepoId, SizeBytes = Model.SizeBytes,
+                Quantization = Model.Quantization, Config = Model.Config, Status = Model.Status, CreatedAt = Model.CreatedAt,
+                Name = _name.Trim(), Path = _path.Trim(), LoadFormat = _loadFormat,
+            };
+            var saved = await Models.UpdateAsync(edited);
+            await OnSaved.InvokeAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            _error = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

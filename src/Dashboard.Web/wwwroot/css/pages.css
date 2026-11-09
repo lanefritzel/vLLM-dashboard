@@ -135,3 +135,15 @@
 .nm-pal-name { font-size: 12px; }
 .nm-pal-hint { margin-bottom: var(--ui-space-2); min-height: 1.2em; }
 .nm-opts { display: flex; align-items: center; gap: var(--ui-space-2); margin-bottom: var(--ui-space-2); }
+
+/* Recipe editor Advanced rows (key / value / remove). minmax(0, 1fr) lets the inputs
+   shrink inside their half-width column; as plain flex children they kept their
+   intrinsic width, pushed the remove button out of the column, and the neighbouring
+   column then covered it so it couldn't be clicked. */
+.kv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--ui-space-1);
+  margin-bottom: var(--ui-space-1);
+}
+.kv-row > .ui-input { min-width: 0; width: 100%; }

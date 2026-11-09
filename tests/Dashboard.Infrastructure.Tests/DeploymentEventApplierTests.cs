@@ -119,6 +119,79 @@ public class DeploymentEventApplierTests(PostgresFixture postgres)
         Assert.Equal(1, reloaded!.LastSeenSeq);
     }
 
+    private static async Task<Deployment> SeedActivePreviousAsync(IServiceScopeFactory scopeFactory, Deployment pending)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var previous = new Deployment
+        {
+            InstanceId = pending.InstanceId, ModelId = pending.ModelId, RecipeId = pending.RecipeId,
+            ArgsSnapshot = "[]", Status = "active", StartedAt = DateTime.UtcNow,
+        };
+        db.DeploymentsV2.Add(previous);
+        await db.SaveChangesAsync();
+        return previous;
+    }
+
+    private static SupervisorPushEvent State(Deployment d, int seq, string state, Dictionary<string, object?>? detail = null) =>
+        new() { DeploymentId = d.Id.ToString(), Seq = seq, Kind = "state", State = state, Detail = detail };
+
+    [Fact]
+    public async Task FailedDeploy_AfterTheOldProcessWasStopped_MarksThePreviousActiveRowStopped()
+    {
+        var (applier, scopeFactory) = await NewApplierAsync();
+        var (_, _, _, _, deployment) = await SeedPendingDeploymentAsync(scopeFactory);
+        var previous = await SeedActivePreviousAsync(scopeFactory, deployment);
+
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, State(deployment, 1, "stopping"), CancellationToken.None);
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, State(deployment, 2, "starting"), CancellationToken.None);
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, State(deployment, 3, "failed"), CancellationToken.None);
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal("failed", (await db.DeploymentsV2.FindAsync(deployment.Id))!.Status);
+        var reloadedPrevious = (await db.DeploymentsV2.FindAsync(previous.Id))!;
+        Assert.Equal("stopped", reloadedPrevious.Status);
+        Assert.Equal("swapped", reloadedPrevious.StopReason);
+        Assert.NotNull(reloadedPrevious.StoppedAt);
+    }
+
+    [Fact]
+    public async Task FailedDeploy_ThatNeverTouchedTheOldProcess_LeavesThePreviousRowActive()
+    {
+        var (applier, scopeFactory) = await NewApplierAsync();
+        var (_, _, _, _, deployment) = await SeedPendingDeploymentAsync(scopeFactory);
+        var previous = await SeedActivePreviousAsync(scopeFactory, deployment);
+
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, State(deployment, 1, "failed"), CancellationToken.None);
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal("failed", (await db.DeploymentsV2.FindAsync(deployment.Id))!.Status);
+        Assert.Equal("active", (await db.DeploymentsV2.FindAsync(previous.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task FailedRollback_StopsThePreviousActiveRowWithRollbackReason()
+    {
+        var (applier, scopeFactory) = await NewApplierAsync();
+        var (_, _, _, _, deployment) = await SeedPendingDeploymentAsync(scopeFactory);
+        using (var scope = scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            (await db.DeploymentsV2.FindAsync(deployment.Id))!.PendingStopReason = "rollback";
+            await db.SaveChangesAsync();
+        }
+        var previous = await SeedActivePreviousAsync(scopeFactory, deployment);
+
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, State(deployment, 1, "starting"), CancellationToken.None);
+        await applier.ApplyWithGapCatchUpAsync(deployment.Id, UnusedAdminUrl, State(deployment, 2, "failed"), CancellationToken.None);
+
+        using var scope2 = scopeFactory.CreateScope();
+        var db2 = scope2.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal("rollback", (await db2.DeploymentsV2.FindAsync(previous.Id))!.StopReason);
+    }
+
     [Fact]
     public async Task FailedStateEvent_WritesFailureColumnsFromItsOwnDetail()
     {

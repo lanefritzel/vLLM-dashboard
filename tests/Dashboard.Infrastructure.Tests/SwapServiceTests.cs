@@ -198,7 +198,7 @@ public class SwapServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Swap_ToACrashingModel_RowFailedWithFailureReport_PreviousRecordIntactAndNotRestored()
+    public async Task Swap_ToACrashingModel_RowFailedWithFailureReport_PreviousRowStoppedAndNotRestored()
     {
         var (swap, applier, scopeFactory, adminUrl) = await NewSwapServiceAsync();
         var (server, instance, model) = await SeedAsync(scopeFactory, adminUrl);
@@ -219,11 +219,13 @@ public class SwapServiceTests : IAsyncDisposable
         Assert.NotNull(secondRow.ExitCode);
         Assert.False(string.IsNullOrWhiteSpace(secondRow.LogTail));
 
-        // The previous (good) deployment's row must still be intact/active --
-        // the old model is NOT silently restored (no new row for it), but the
-        // dashboard's own bookkeeping for it was never touched by the failed attempt.
+        // The supervisor stopped the old model before the new one crashed, and there is
+        // no auto-rollback -- so the previous row must no longer claim to be "active".
+        // It is stopped (reason "swapped"), and the old model is NOT silently restored
+        // (no new row for it).
         var reloadedFirst = await GetAsync(scopeFactory, firstRow.Id);
-        Assert.Equal("active", reloadedFirst!.Status);
+        Assert.Equal("stopped", reloadedFirst!.Status);
+        Assert.Equal("swapped", reloadedFirst.StopReason);
     }
 
     [Fact]

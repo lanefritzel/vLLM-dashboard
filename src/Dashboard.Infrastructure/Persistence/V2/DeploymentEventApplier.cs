@@ -157,6 +157,7 @@ public sealed class DeploymentEventApplier : IDeploymentEventApplier
                 break;
             case "failed":
                 await _deployments.TransitionAsync(deploymentId, status: "failed", ct: ct);
+                await StopReplacedPreviousAsync(deploymentId, deployment.InstanceId, deployment.PendingStopReason, ct);
                 break;
             case "crashed":
                 // Only ever emitted by the supervisor for a deployment that
@@ -170,6 +171,32 @@ public sealed class DeploymentEventApplier : IDeploymentEventApplier
                 await _deployments.TransitionAsync(deploymentId, status: "stopped", stopReason: "cancelled", stoppedAt: DateTime.UtcNow, ct: ct);
                 break;
         }
+    }
+
+    /// <summary>A deploy that failed AFTER the supervisor stopped or replaced the old
+    /// process (it records "stopping"/"starting" before it does) leaves nothing serving the
+    /// old model -- there is no auto-rollback -- so the previous "active" row would be a lie.
+    /// Mark it stopped with the same reason a successful swap would have given it. A deploy
+    /// that failed before touching the old process (no such event) leaves the old row alone.</summary>
+    private async Task StopReplacedPreviousAsync(int deploymentId, int instanceId, string? pendingStopReason, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var oldProcessWasTouched = await db.DeploymentEventsV2
+            .AnyAsync(e => e.DeploymentId == deploymentId && (e.State == "stopping" || e.State == "starting"), ct);
+        if (!oldProcessWasTouched)
+            return;
+
+        var previous = await db.DeploymentsV2
+            .FirstOrDefaultAsync(d => d.InstanceId == instanceId && d.Status == "active" && d.Id != deploymentId, ct);
+        if (previous is null)
+            return;
+
+        previous.Status = "stopped";
+        previous.StopReason = pendingStopReason ?? "swapped";
+        previous.StoppedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
     }
 
     private async Task ApplyReportAsync(int deploymentId, int seq, Dictionary<string, object?>? report, CancellationToken ct)

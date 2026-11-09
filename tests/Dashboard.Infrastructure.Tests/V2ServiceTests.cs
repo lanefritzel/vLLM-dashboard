@@ -103,6 +103,116 @@ public class V2ServiceTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task ModelService_Update_PersistsEditedPathAndLoadFormat_FromADetachedCopy_AndKeepsOtherColumns()
+    {
+        // What the Edit model dialog sends: a fresh object with the same Id, not a tracked entity.
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var service = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var created = await service.CreateAsync(new Model
+        {
+            ServerId = server.Id, Name = "gemma", Path = "/models/gemma/dir", LoadFormat = "auto",
+            SourceType = "huggingface", RepoId = "org/gemma", SizeBytes = 123, Quantization = "Q4_K_M",
+        });
+
+        await service.UpdateAsync(new Model
+        {
+            Id = created.Id, ServerId = created.ServerId, Name = "gemma", Path = "/models/gemma/g-q4.gguf", LoadFormat = "gguf",
+            SourceType = created.SourceType, RepoId = created.RepoId, SizeBytes = created.SizeBytes,
+            Quantization = created.Quantization, Status = created.Status, CreatedAt = created.CreatedAt,
+        });
+
+        var reloaded = await service.GetAsync(created.Id);
+        Assert.Equal("/models/gemma/g-q4.gguf", reloaded!.Path);
+        Assert.Equal("gguf", reloaded.LoadFormat);
+        Assert.Equal("org/gemma", reloaded.RepoId);
+        Assert.Equal(123, reloaded.SizeBytes);
+        Assert.Equal("Q4_K_M", reloaded.Quantization);
+    }
+
+    [Fact]
+    public async Task ModelService_Update_RejectsABlankPath()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var service = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var created = await service.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateAsync(new Model
+        {
+            Id = created.Id, ServerId = server.Id, Name = "m", Path = "  ",
+        }));
+
+        Assert.Equal("/models/m", (await service.GetAsync(created.Id))!.Path);
+    }
+
+    private static async Task<Deployment> SeedDeploymentAsync(IServiceScopeFactory scopeFactory, int serverId, int modelId, int recipeId)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var instance = new Instance { ServerId = serverId, Label = "i", ProxySlug = "i" + Guid.NewGuid().ToString("N") };
+        db.InstancesV2.Add(instance);
+        await db.SaveChangesAsync();
+        var deployment = new Deployment { InstanceId = instance.Id, ModelId = modelId, RecipeId = recipeId, ArgsSnapshot = "[]", Status = "stopped", StopReason = "swapped" };
+        db.DeploymentsV2.Add(deployment);
+        await db.SaveChangesAsync();
+        return deployment;
+    }
+
+    [Fact]
+    public async Task RecipeService_Delete_OfARecipeWithDeploymentHistory_ExplainsWhy_AndKeepsTheRecipe()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipes = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
+        var recipe = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "used", ServedModelName = "main" });
+        await SeedDeploymentAsync(scopeFactory, server.Id, model.Id, recipe.Id);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => recipes.DeleteAsync(recipe.Id));
+
+        Assert.Contains("can't be deleted", ex.Message);
+        Assert.Contains("1 deployment", ex.Message);
+        Assert.NotNull(await recipes.GetAsync(recipe.Id));
+    }
+
+    [Fact]
+    public async Task RecipeService_Delete_OfAnUnusedRecipe_Works_EvenWhenOtherRecipesAreUsed()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipes = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
+        var used = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "used", ServedModelName = "main" });
+        var unused = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "unused", ServedModelName = "main" });
+        await SeedDeploymentAsync(scopeFactory, server.Id, model.Id, used.Id);
+
+        await recipes.DeleteAsync(unused.Id);
+
+        Assert.Null(await recipes.GetAsync(unused.Id));
+        Assert.NotNull(await recipes.GetAsync(used.Id));
+    }
+
+    [Fact]
+    public async Task ModelService_Delete_OfAModelWithDeploymentHistory_ExplainsWhy_AndKeepsTheModel()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var recipes = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
+        var recipe = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "r", ServedModelName = "main" });
+        await SeedDeploymentAsync(scopeFactory, server.Id, model.Id, recipe.Id);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => models.DeleteAsync(model.Id));
+
+        Assert.Contains("can't be deleted", ex.Message);
+        Assert.NotNull(await models.GetAsync(model.Id));
+    }
+
+    [Fact]
     public async Task RecipeService_CrudRoundTrips()
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();

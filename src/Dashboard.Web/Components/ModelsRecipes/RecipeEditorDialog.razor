@@ -136,7 +136,7 @@
                         </div>
                         @foreach (var (row, i) in _extraArgs.Select((r, i) => (r, i)))
                         {
-                            <div style="display:flex; gap: var(--ui-space-1); margin-bottom: var(--ui-space-1);">
+                            <div class="kv-row">
                                 <UiInput Id="@($"rc-extra-arg-key-{i}")" Value="@row.Key" ValueChanged="@(v => _extraArgs[i] = (v, row.Value))" Placeholder="key (no --)" />
                                 <UiInput Id="@($"rc-extra-arg-value-{i}")" Value="@row.Value" ValueChanged="@(v => _extraArgs[i] = (row.Key, v))" Placeholder="value (blank = flag)" />
                                 <UiButton Variant="danger" Size="sm" OnClick="@(() => _extraArgs.RemoveAt(i))">✕</UiButton>
@@ -150,7 +150,7 @@
                         </div>
                         @foreach (var (row, i) in _extraEnv.Select((r, i) => (r, i)))
                         {
-                            <div style="display:flex; gap: var(--ui-space-1); margin-bottom: var(--ui-space-1);">
+                            <div class="kv-row">
                                 <UiInput Id="@($"rc-extra-env-key-{i}")" Value="@row.Key" ValueChanged="@(v => _extraEnv[i] = (v, row.Value))" Placeholder="key" />
                                 <UiInput Id="@($"rc-extra-env-value-{i}")" Value="@row.Value" ValueChanged="@(v => _extraEnv[i] = (row.Key, v))" Placeholder="value" />
                                 <UiButton Variant="danger" Size="sm" OnClick="@(() => _extraEnv.RemoveAt(i))">✕</UiButton>

@@ -29,7 +29,7 @@
                     <label class="form-label">Model</label>
                     <select class="form-select" @bind="_pickedModelId" @bind:after="@OnPickedModelChangedAsync">
                         <option value="0">-- choose a model --</option>
-                        @foreach (var m in Models_)
+                        @foreach (var m in _models)
                         {
                             <option value="@m.Id">@m.Name</option>
                         }
@@ -39,7 +39,7 @@
                     <label class="form-label">Recipe</label>
                     <select class="form-select" @bind="_pickedRecipeId" disabled="@(_pickedModelId == 0)">
                         <option value="0">-- choose a recipe --</option>
-                        @foreach (var r in Recipes_)
+                        @foreach (var r in _recipes)
                         {
                             <option value="@r.Id">@r.Name</option>
                         }
@@ -110,7 +110,7 @@
                 <div class="text-muted small mt-2">@_lastDetail</div>
             }
 
-            <div class="log-pane mt-2" id="ceremony-log" style="max-height:160px; overflow-y:auto; font-family:monospace; font-size:0.8rem;">
+            <div class="log-pane mt-2" id="ceremony-log" @ref="_logPaneRef" style="max-height:160px; overflow-y:auto; font-family:monospace; font-size:0.8rem;">
                 @foreach (var line in _logLines)
                 {
                     <div>@line</div>
@@ -212,8 +212,18 @@
     private CancellationTokenSource? _logPollCts;
     private bool _hubStarted;
 
+    // The pickers' own copy: starts from the page's lists (instant first paint) and is
+    // replaced with a fresh read when the dialog opens, so a model downloaded or a recipe
+    // added in another tab/page since Overview loaded shows up without a page refresh.
+    private List<Model> _models = new();
+    private List<Recipe> _recipes = new();
+
     protected override async Task OnInitializedAsync()
     {
+        _models = Models_;
+        _recipes = Recipes_;
+        await RefreshPickerListsAsync();
+
         if (ResumeDeploymentId is { } id)
         {
             _deploymentId = id;
@@ -240,8 +250,36 @@
         }
     }
 
+    private async Task RefreshPickerListsAsync()
+    {
+        try
+        {
+            _models = (await Models.ListByServerAsync(Instance.ServerId)).ToList();
+            _recipes = (await Recipes.ListByServerAsync(Instance.ServerId)).ToList();
+        }
+        catch
+        {
+            // Keep the page's lists -- a transient read failure shouldn't block a swap.
+        }
+    }
+
+    private ElementReference _logPaneRef;
+    private int _lastScrolledLineCount = -1;
+
+    /// <summary>Keeps the progress log pinned to its newest line. The pane is rebuilt from
+    /// the supervisor's log archive every poll, so without this it sat at the top while the
+    /// interesting lines (the failure, the weight-loading progress) were below the fold.</summary>
+    private async Task ScrollLogToBottomAsync()
+    {
+        if (_phase != Phase.Progress || _logLines.Count == _lastScrolledLineCount) return;
+        _lastScrolledLineCount = _logLines.Count;
+        try { await JS.InvokeVoidAsync("ui_scrollToBottom", _logPaneRef); }
+        catch { /* JS not ready yet (prerender) -- the next render retries */ }
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        await ScrollLogToBottomAsync();
         if (_phase != Phase.Progress || _hubStarted) return;
         _receiver = DotNetObjectReference.Create(this);
         try
@@ -406,8 +444,8 @@
 
     private async Task GoToPreviewAsync()
     {
-        var newModel = Models_.First(m => m.Id == _pickedModelId);
-        var newRecipe = Recipes_.First(r => r.Id == _pickedRecipeId);
+        var newModel = _models.First(m => m.Id == _pickedModelId);
+        var newRecipe = _recipes.First(r => r.Id == _pickedRecipeId);
 
         _diff = BuildDiff(CurrentModel, CurrentRecipe, newModel, newRecipe);
 
