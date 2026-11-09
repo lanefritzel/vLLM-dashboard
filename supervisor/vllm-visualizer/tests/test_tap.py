@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import sys
 import threading
 import time
@@ -201,16 +202,206 @@ class TapTests(unittest.TestCase):
         self.assertEqual(tap.S.errors, 5)  # stops counting once disabled
         self.assertFalse(tap.stats()["armed"])
 
+    def test_bfloat16_output_still_uses_aminmax_and_keeps_the_sign(self):
+        m = _FakeMlp(lambda x: -_row_of(2, 5.0).to(torch.bfloat16))
+        tap._attach(m, "language_model.model.layers.0.mlp", WIDTH)
+        self._start_worker()
+        tap.S.armed_until = time.monotonic() + 30
+        m.act_fn(torch.zeros(1))
+        snap = self._wait_snapshot()
+        self.assertTrue(tap.S.use_aminmax)
+        self.assertEqual(tap.S.errors, 0)
+        self.assertEqual(sign_bit(snap, 0, 2), 1)  # the strongest response was negative
+
     def test_install_is_quiet_when_vllm_class_missing(self):
         saved = sys.modules.get("vllm.model_executor.models.qwen2_moe", "absent")
         sys.modules["vllm.model_executor.models.qwen2_moe"] = None  # import raises
         try:
             tap.install()  # must not raise
         finally:
+            tap._PENDING.clear()
+            while tap._FINDER in sys.meta_path:
+                sys.meta_path.remove(tap._FINDER)
             if saved == "absent":
                 sys.modules.pop("vllm.model_executor.models.qwen2_moe", None)
             else:
                 sys.modules["vllm.model_executor.models.qwen2_moe"] = saved
+
+
+class _FakeLlamaMlp(nn.Module):
+    """Same call shape as vLLM's LlamaMLP / Qwen2MLP: prefix last, width positional or keyword."""
+
+    def __init__(self, hidden_size, intermediate_size, hidden_act, quant_config=None, prefix=""):
+        super().__init__()
+        self.act_fn = _Act(lambda x: _row_of(0, 1.0))
+
+
+class _FakeSubclassMlp(_FakeLlamaMlp):
+    pass
+
+
+class InstallTests(unittest.TestCase):
+    """install() on stand-in vLLM modules: generic across MLP classes, signature styles and subclasses."""
+
+    def setUp(self):
+        tap.S = tap._State()
+        tap.S.server_started = True
+        self._mods = {}
+        tap._PENDING.clear()
+
+    def tearDown(self):
+        for name in self._mods:
+            sys.modules.pop(name, None)
+        tap._PENDING.clear()
+        while tap._FINDER in sys.meta_path:
+            sys.meta_path.remove(tap._FINDER)
+
+    def test_class_is_patched_when_its_module_is_imported_later(self):
+        import importlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            pkg = os.path.join(d, "vislazy")
+            os.makedirs(pkg)
+            open(os.path.join(pkg, "__init__.py"), "w").close()
+            with open(os.path.join(pkg, "mod.py"), "w") as f:
+                f.write(
+                    "from torch import nn\n"
+                    "class LazyMLP(nn.Module):\n"
+                    "    def __init__(self, hidden_size, intermediate_size, prefix=''):\n"
+                    "        super().__init__()\n"
+                    "        self.act_fn = nn.Identity()\n"
+                )
+            sys.path.insert(0, d)
+            old = os.environ.get("VIS_MLP_CLASSES")
+            os.environ["VIS_MLP_CLASSES"] = "vislazy.mod:LazyMLP"
+            try:
+                tap.install()
+                self.assertNotIn("vislazy.mod", sys.modules)  # install() did not import it
+                mod = importlib.import_module("vislazy.mod")
+                self.assertTrue(mod.LazyMLP.__dict__.get("_vis_patched"))
+                m = mod.LazyMLP(8, WIDTH, prefix="model.layers.0.mlp")
+                self.assertEqual(len(m.act_fn._forward_hooks), 1)
+            finally:
+                sys.path.remove(d)
+                sys.modules.pop("vislazy", None)
+                sys.modules.pop("vislazy.mod", None)
+                if old is None:
+                    os.environ.pop("VIS_MLP_CLASSES", None)
+                else:
+                    os.environ["VIS_MLP_CLASSES"] = old
+
+    def test_gemma4_and_other_architectures_are_in_the_default_list(self):
+        for spec in ("gemma4:Gemma4MLP", "gemma3:Gemma3MLP", "qwen2:Qwen2MLP", "llama:LlamaMLP", "qwen2_moe:Qwen2MoeMLP"):
+            self.assertIn(spec, tap.MLP_CLASSES)
+
+    def _fake_module(self, short, **classes):
+        import types
+
+        name = f"vllm.model_executor.models.{short}"
+        mod = types.ModuleType(name)
+        for k, v in classes.items():
+            setattr(mod, k, v)
+        sys.modules[name] = mod
+        self._mods[name] = mod
+        return mod
+
+    def _block_defaults(self):
+        for spec in tap.MLP_CLASSES:
+            short = spec.split(":")[0]
+            name = f"vllm.model_executor.models.{short}"
+            if name not in sys.modules:
+                sys.modules[name] = None  # import raises: class "missing in this vLLM"
+                self._mods[name] = None
+
+    def test_patches_every_known_class_that_exists_and_skips_the_rest(self):
+        class Llama(_FakeLlamaMlp):
+            pass
+
+        class Qwen2(_FakeLlamaMlp):
+            pass
+
+        self._fake_module("llama", LlamaMLP=Llama)
+        self._fake_module("qwen2", Qwen2MLP=Qwen2)
+        self._block_defaults()
+        tap.install()
+        self.assertTrue(Llama.__dict__.get("_vis_patched"))
+        self.assertTrue(Qwen2.__dict__.get("_vis_patched"))
+
+    def test_keyword_and_positional_construction_both_attach(self):
+        class Llama(_FakeLlamaMlp):
+            pass
+
+        self._fake_module("llama", LlamaMLP=Llama)
+        self._block_defaults()
+        tap.install()
+        kw = Llama(hidden_size=8, intermediate_size=WIDTH, hidden_act="silu", prefix="model.layers.3.mlp")
+        pos = Llama(8, WIDTH, "silu", None, "model.layers.4.mlp")
+        self.assertEqual(len(kw.act_fn._forward_hooks), 1)
+        self.assertEqual(len(pos.act_fn._forward_hooks), 1)
+        self.assertEqual(tap.S.max_idx, 4)
+
+    def test_subclass_and_parent_patched_hook_only_once(self):
+        class Parent(_FakeLlamaMlp):
+            pass
+
+        class Child(Parent):
+            pass
+
+        self._fake_module("llama", LlamaMLP=Parent)
+        self._fake_module("mistral", MistralMLP=Child)
+        self._block_defaults()
+        tap.install()
+        m = Child(8, WIDTH, "silu", None, "model.layers.0.mlp")
+        self.assertEqual(len(m.act_fn._forward_hooks), 1)
+
+    def test_extra_classes_from_the_environment(self):
+        class Custom(_FakeLlamaMlp):
+            pass
+
+        self._fake_module("mymodel", CustomMLP=Custom)
+        self._block_defaults()
+        old = os.environ.get("VIS_MLP_CLASSES")
+        os.environ["VIS_MLP_CLASSES"] = "mymodel:CustomMLP"
+        try:
+            tap.install()
+        finally:
+            if old is None:
+                os.environ.pop("VIS_MLP_CLASSES", None)
+            else:
+                os.environ["VIS_MLP_CLASSES"] = old
+        self.assertTrue(Custom.__dict__.get("_vis_patched"))
+
+    def test_other_layer_naming_schemes(self):
+        for i, prefix in enumerate(["transformer.h.0.mlp", "model.blocks.1.feed_forward", "model.layers.2.mlp"]):
+            m = _FakeMlp(lambda x: x)
+            tap._attach(m, prefix, None)
+            self.assertEqual(len(m.act_fn._forward_hooks), 1, prefix)
+
+    def test_one_shared_activation_module_still_gives_every_layer_its_own_hook(self):
+        """vLLM's Gemma gets one activation module from a registry and gives it to all layers."""
+        shared = _Act(lambda x: _row_of(0, 1.0))
+
+        class Mlp(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.act_fn = shared
+
+        mlps = [Mlp() for _ in range(4)]
+        for i, m in enumerate(mlps):
+            tap._attach(m, f"language_model.model.layers.{i}.mlp", WIDTH)
+        self.assertEqual(tap.S.max_idx, 3)
+        tap.S.armed_until = time.monotonic() + 30
+        for m in mlps:
+            m.act_fn(torch.zeros(1))
+        self.assertEqual(tap.S.armed_hook_calls, 4)  # one hook per layer, none lost, none doubled
+
+    def test_module_without_an_activation_is_ignored(self):
+        class NoAct:
+            pass
+
+        tap._attach(NoAct(), "model.layers.0.mlp", WIDTH)
+        self.assertEqual(tap.S.max_idx, -1)
 
 
 class HttpTests(unittest.TestCase):

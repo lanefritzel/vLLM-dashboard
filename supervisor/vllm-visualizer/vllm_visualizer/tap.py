@@ -26,6 +26,7 @@ Environment:
   VIS_MAX_ERRORS=20   errors before the tap disables itself
   VIS_IDLE_GAP=0.6    seconds without a model step that count as 'idle' (for a graceful /disable)
   VIS_PREFILL_MIN=32  a step with this many tokens is a new prompt arriving (graceful /enable boundary)
+  VIS_MLP_CLASSES=    extra MLP classes to tap, "module:Class,..." (module relative to vllm.model_executor.models)
 
 Live master switch (no restart): POST /enable, POST /disable and POST /disable?now=1. Allowed from
 loopback, or with the token when VIS_TOKEN is set. While disabled every hook returns at once.
@@ -40,10 +41,13 @@ from __future__ import annotations
 
 import base64
 import hmac
+import importlib.abc
+import inspect
 import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from collections import deque
@@ -78,7 +82,49 @@ except ValueError:
 PREFILL_MIN = _int_env("VIS_PREFILL_MIN", 32)
 SLOTS = 4
 
-_LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)\.mlp$")
+_LAYER_RE = re.compile(r"(?:^|\.)(?:layers|h|blocks)\.(\d+)\.(?:mlp|feed_forward)$")
+
+# Dense MLP classes to tap ("module:Class", module relative to vllm.model_executor.models).
+MLP_CLASSES = (
+    "qwen2_moe:Qwen2MoeMLP",  # Qwen3.5 / Qwen3-Next (dense and the shared expert)
+    "qwen2:Qwen2MLP",         # Qwen2, Qwen2.5, Qwen3
+    "qwen3_moe:Qwen3MoeMLP",
+    "llama:LlamaMLP",         # Llama and most Llama-style models
+    "mistral:MistralMLP",
+    "granite:GraniteMLP",
+    "granitemoeshared:GraniteMoeSharedMLP",
+    "gemma:GemmaMLP",
+    "gemma2:Gemma2MLP",
+    "gemma3:Gemma3MLP",
+    "gemma3n:Gemma3nMLP",
+    "gemma4:Gemma4MLP",
+    "commandr:CohereMLP",
+    "deepseek_v2:DeepseekV2MLP",
+    "exaone:ExaoneGatedMLP",
+    "exaone4:Exaone4GatedMLP",
+    "falcon_h1:FalconH1MLP",
+    "glm4_moe:Glm4MoeMLP",
+    "internlm2:InternLM2MLP",
+    "minicpm:MiniCPMMLP",
+    "nemotron:NemotronMLP",
+    "nemotron_h:NemotronHMLP",
+    "orion:OrionMLP",
+    "solar:SolarMLP",
+    "stablelm:StablelmMLP",
+    "apertus:ApertusMLP",
+    "hyperclovax:HyperCLOVAXMLP",
+    "lfm2:Lfm2MLP",
+    "zamba2:Zamba2MLP",
+    "olmo_hybrid:OlmoHybridMLP",
+    "ernie45_moe:Ernie4_5_MoeMLP",
+    "bailing_moe:BailingMLP",
+    "openpangu:OpenPanguMLP",
+    "step1:StepMLP",
+    "step3_text:Step3TextMLP",
+    "step3p5:Step3p5MLP",
+    "mimo_v2:MiMoV2MLP",
+    "rnj1:Rnj1MLP",
+)
 
 
 class _NoopEvent:
@@ -102,6 +148,7 @@ class _State:
         self.min_idx = 10**9
         self.max_idx = -1
         self.gpu_buf = None
+        self.acts: dict = {}  # id(activation module) -> (owner mlp, hook handle, idx, first, module)
         self.free: deque = deque()  # free pinned slots
         self.slots: list = []
         self.pending: deque = deque()
@@ -153,39 +200,154 @@ def _watchdog_tick() -> None:
         _disable_now("manual")
 
 
-def install() -> None:
-    try:
-        from vllm.model_executor.models import qwen2_moe
+def _targets() -> list[tuple[str, str]]:
+    extra = [t.strip() for t in os.environ.get("VIS_MLP_CLASSES", "").split(",") if t.strip()]
+    out = []
+    for spec in (*MLP_CLASSES, *extra):
+        mod, _, name = spec.partition(":")
+        if mod and name:
+            out.append((mod if "." in mod else f"vllm.model_executor.models.{mod}", name))
+    return out
 
-        cls = qwen2_moe.Qwen2MoeMLP
-    except Exception as e:  # unknown vLLM layout: stay out of the way
-        logger.error("vllm_visualizer: cannot find Qwen2MoeMLP (%s); plugin inactive", e)
-        return
-    if getattr(cls, "_vis_patched", False):
+
+def _patch_class(cls) -> None:
+    if cls.__dict__.get("_vis_patched"):
         return
     orig_init = cls.__init__
+    try:
+        sig = inspect.signature(orig_init)
+    except (TypeError, ValueError):
+        sig = None
 
     def patched_init(self, *args, **kwargs):
         orig_init(self, *args, **kwargs)
         try:
-            _attach(self, kwargs.get("prefix", ""), kwargs.get("intermediate_size"))
+            prefix, width = "", None
+            if sig is not None:  # works whether vLLM passes these by keyword or by position
+                bound = sig.bind_partial(self, *args, **kwargs).arguments
+                prefix = bound.get("prefix", "") or ""
+                width = bound.get("intermediate_size")
+            _attach(self, prefix, width)
         except Exception:
             S.note_error("attach failed")
 
     cls.__init__ = patched_init
     cls._vis_patched = True
-    logger.warning("vllm_visualizer: patched Qwen2MoeMLP (VIS_ENABLED=1)")
 
 
-def _attach(mlp, prefix: str, width) -> None:
+_PENDING: dict[str, list[str]] = {}   # module name -> class names still waiting for that module to load
+
+
+def _patch_module(module) -> list[str]:
+    done = []
+    for name in _PENDING.pop(getattr(module, "__name__", ""), []):
+        try:
+            _patch_class(getattr(module, name))
+            done.append(name)
+        except Exception as e:  # class missing in this vLLM version: skip it quietly
+            logger.debug("vllm_visualizer: skipping %s.%s (%s)", module.__name__, name, e)
+    return done
+
+
+class _PatchOnImport(importlib.abc.MetaPathFinder):
+    """Patches a listed class the moment its module is imported, so the plugin never imports vLLM's
+    model files itself (it only taps the architecture that is actually being loaded)."""
+
+    def find_spec(self, name, path, target=None):
+        if name not in _PENDING:
+            return None
+        for finder in sys.meta_path:
+            if finder is self or not hasattr(finder, "find_spec"):
+                continue
+            try:
+                spec = finder.find_spec(name, path, target)
+            except Exception:
+                continue
+            if spec is None or spec.loader is None or not hasattr(spec.loader, "exec_module"):
+                continue
+            loader, orig_exec = spec.loader, spec.loader.exec_module
+
+            def exec_module(module, _orig=orig_exec):
+                _orig(module)
+                try:
+                    if _patch_module(module):
+                        logger.warning("vllm_visualizer: tapping MLP classes in %s", module.__name__)
+                except Exception:
+                    S.note_error("patch on import failed")
+
+            loader.exec_module = exec_module
+            return spec
+        return None
+
+
+_FINDER = _PatchOnImport()
+
+
+def install() -> None:
+    """Tap every known dense-MLP class, patching each one as its module loads.
+
+    Qwen2MLP is also what Qwen3 uses; LlamaMLP covers Llama and most Llama-style models; Gemma 4 has its
+    own. Classes missing from this vLLM version are skipped; add more with
+    VIS_MLP_CLASSES="module:Class,...". Mixture-of-experts layers (fused experts) are not tapped."""
+    for module, name in _targets():
+        _PENDING.setdefault(module, []).append(name)
+    patched = []
+    for module in list(_PENDING):
+        loaded = sys.modules.get(module)
+        if loaded is not None:  # already imported: patch now
+            patched += _patch_module(loaded)
+    if _PENDING and _FINDER not in sys.meta_path:
+        sys.meta_path.insert(0, _FINDER)  # the rest are patched when (and if) they get imported
+    if patched:
+        logger.warning("vllm_visualizer: patched %s (VIS_ENABLED=1)", ", ".join(patched))
+    else:
+        logger.warning("vllm_visualizer: ready, tapping MLP classes as vLLM imports them (VIS_ENABLED=1)")
+
+
+def _own_activation(mlp, shared):
+    """Replace this layer's activation with a pass-through wrapper that only this layer owns."""
+    from torch import nn
+
+    class _OwnActivation(nn.Module):
+        def __init__(self, inner):
+            super().__init__()
+            self.inner = inner
+
+        def forward(self, *args, **kwargs):
+            return self.inner(*args, **kwargs)
+
+    wrapper = _OwnActivation(shared)
+    mlp.act_fn = wrapper
+    return wrapper
+
+
+def _attach(mlp, prefix: str, width=None) -> None:
     m = _LAYER_RE.search(prefix or "")
-    if not m or "mtp" in prefix or "visual" in prefix or not width:
+    act = getattr(mlp, "act_fn", None)
+    if not m or "mtp" in prefix or "visual" in prefix or act is None:
         return
+    if getattr(mlp, "_vis_attached", False):  # a subclass and its parent can both be patched
+        return
+    mlp._vis_attached = True
     idx = int(m.group(1))
     first = idx < S.min_idx   # the first layer of a step also stamps the step time
     S.min_idx = min(S.min_idx, idx)
     S.max_idx = max(S.max_idx, idx)
-    mlp.act_fn.register_forward_hook(_make_hook(idx, first))
+    hook = _make_hook(idx, first)
+    seen = S.acts.get(id(act))
+    if seen is None or seen[4] is not act:
+        # normal case: the layer owns its activation module, hook it directly (no extra call per layer)
+        S.acts[id(act)] = (mlp, act.register_forward_hook(hook), idx, first, act)
+    else:
+        # vLLM can hand every layer the SAME activation module (Gemma's comes from a registry), and a hook
+        # on a shared module cannot tell the layers apart. Give each layer its own thin wrapper instead,
+        # including the layer that was hooked first.
+        owner, handle, oidx, ofirst, _ = seen
+        if handle is not None:
+            handle.remove()
+            _own_activation(owner, act).register_forward_hook(_make_hook(oidx, ofirst))
+            S.acts[id(act)] = (owner, None, oidx, ofirst, act)
+        _own_activation(mlp, act).register_forward_hook(hook)
     if not S.server_started:
         S.server_started = True
         _start_background()
@@ -269,8 +431,15 @@ def _capture(idx: int, output) -> None:
     buf = S.gpu_buf[idx]
     if S.use_aminmax:
         try:
-            # one kernel: per-bucket min and max, written straight into the buffer
-            torch.aminmax(row, dim=-1, out=(buf[0], buf[1]))
+            if row.dtype == buf.dtype:
+                # one kernel: per-bucket min and max, written straight into the buffer
+                torch.aminmax(row, dim=-1, out=(buf[0], buf[1]))
+            else:
+                # bfloat16 models (Gemma, many Qwen builds): out= needs matching dtypes, so reduce first,
+                # then copy the two tiny results across (still a few KB per layer)
+                lo, hi = torch.aminmax(row, dim=-1)
+                buf[0].copy_(lo)
+                buf[1].copy_(hi)
         except Exception:
             S.use_aminmax = False
             logger.warning("vllm_visualizer: aminmax unavailable, using abs+amax fallback")
