@@ -1,0 +1,85 @@
+# Isolated test stack for trying a build of the dashboard + supervisor next to a live llm-stack
+# on the SAME machine without touching it. Everything here is named vis-* and lives in its own
+# compose project (vis-test).
+#
+# Why nothing can collide with the live stack: the live stack runs on the host network, so its
+# ports (dashboard 8080, supervisor admin 18001, vLLM 9999, plugin 9998, Postgres ...) are real
+# host ports. Here the supervisor owns a PRIVATE network namespace and the dashboard and Postgres
+# join it (network_mode: service:supervisor), so all of them talk over loopback inside it, using
+# the same ports as the live stack, without ever binding a host port. The ONE port published to
+# the host is the dashboard UI: ${VIS_DASHBOARD_PORT:-18080} -> 8080.
+#
+# restart is "no" on purpose: a test stack must not come back by itself after a reboot and grab
+# the GPU from the live model.
+name: vis-test
+
+services:
+  supervisor:
+    build:
+      context: ./supervisor-src
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-intel/llm-scaler-vllm:0.26.0-b2}
+    image: vis-supervisor:test
+    container_name: vis-supervisor
+    restart: "no"
+    networks: [vis-net]
+    ports:
+      - "${VIS_DASHBOARD_PORT:-18080}:8080"   # the dashboard's UI, published through the namespace owner
+    devices:
+      - /dev/dri
+    ipc: host
+    privileged: true
+    volumes:
+      - ${MODELS_DIR:-./models}:/models:ro
+      - vis-supervisor-state:/state
+    environment:
+      ADMIN_PORT: "18001"
+      DASHBOARD_EVENT_URL: "http://127.0.0.1:8080/internal/supervisor-events"
+      VIS_ENABLED: "1"
+
+  postgres:
+    image: postgres:16
+    container_name: vis-postgres
+    restart: "no"
+    network_mode: "service:supervisor"
+    depends_on: [supervisor]
+    environment:
+      POSTGRES_DB: dashboard
+      POSTGRES_USER: dashboard
+      POSTGRES_PASSWORD: dashboard
+    volumes:
+      - vis-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dashboard:
+    build:
+      context: ./dashboard-src
+      dockerfile: deploy/Dockerfile
+    image: vis-dashboard:test
+    container_name: vis-dashboard
+    restart: "no"
+    network_mode: "service:supervisor"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
+      Kestrel__Endpoints__Http__Url: "http://+:8080"
+      DATAPROTECTION_KEYS_DIR: /data/dataprotection
+      MODELS_BROWSE_ROOT: /models
+    volumes:
+      - vis-dataprotection:/data
+      - ${MODELS_DIR:-./models}:/models:ro
+
+networks:
+  vis-net:
+    name: vis-test-net
+
+volumes:
+  vis-pgdata:
+  vis-dataprotection:
+  vis-supervisor-state:
