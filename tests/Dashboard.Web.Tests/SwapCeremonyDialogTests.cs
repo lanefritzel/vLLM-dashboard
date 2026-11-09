@@ -53,6 +53,108 @@ public class SwapCeremonyDialogTests : BunitContext
             .Add(c => c.ResumeDeploymentId, 5));
     }
 
+    private IRenderedComponent<SwapCeremonyDialog> RenderProgressWithEvents(params string[] states) =>
+        RenderProgressWithEvents(states.Select(st => (st, (string?)null)).ToArray());
+
+    private IRenderedComponent<SwapCeremonyDialog> RenderProgressWithEvents(params (string State, string? Detail)[] evts)
+    {
+        var events = evts.Select((e, i) => new DeploymentEvent { DeploymentId = 5, Seq = i + 1, State = e.State, Detail = e.Detail }).ToList();
+        Services.AddSingleton(ProxyStub.Create<IModelService>());
+        Services.AddSingleton(ProxyStub.Create<IRecipeService>());
+        Services.AddSingleton(ProxyStub.Create<IDeploymentService>(h =>
+        {
+            h["GetAsync"] = _ => Task.FromResult<Deployment?>(new Deployment { Id = 5, InstanceId = 1, Status = "pending" });
+            h["ListEventsAsync"] = _ => Task.FromResult<IReadOnlyList<DeploymentEvent>>(events);
+        }));
+        Services.AddSingleton(ProxyStub.Create<ISwapService>());
+        Services.AddSingleton(ProxyStub.Create<ISupervisorClient>(h => h["GetDeploymentLogsAsync"] = _ => Task.FromResult("")));
+        Services.AddSingleton(ProxyStub.Create<IBootReconciler>());
+        Services.AddSingleton(ProxyStub.Create<IDialogService>());
+        JSInterop.Mode = JSRuntimeMode.Loose;
+
+        return Render<SwapCeremonyDialog>(p => p
+            .Add(c => c.Instance, new Instance { Id = 1, ServerId = 1, Label = "i", ProxySlug = "i", AdminUrl = "http://sup.invalid" })
+            .Add(c => c.Models_, new List<Model>())
+            .Add(c => c.Recipes_, new List<Recipe>())
+            .Add(c => c.ResumeDeploymentId, 5));
+    }
+
+    /// <summary>The six step labels in order -> their css state (step-done/current/failed/pending).</summary>
+    private static string[] StepClasses(IRenderedComponent<SwapCeremonyDialog> cut) =>
+        cut.FindAll("ol.ceremony-steps li").Select(li => li.ClassList.First(c => c.StartsWith("step-"))).ToArray();
+
+    [Fact]
+    public void Steps_FollowTheSupervisorsEvents_FirstStepIncluded()
+    {
+        // "stopping" is the supervisor's own name for step 1; it used to never match.
+        var cut = RenderProgressWithEvents("stopping");
+        Assert.Equal(["step-current", "step-pending", "step-pending", "step-pending", "step-pending", "step-pending", "step-pending"], StepClasses(cut));
+    }
+
+    [Fact]
+    public void Steps_EarlierOnesAreDone_AndTheLatestIsCurrent()
+    {
+        var cut = RenderProgressWithEvents("stopping", "releasing_gpu", "starting", "loading", "warming_up");
+        Assert.Equal(["step-done", "step-done", "step-done", "step-done", "step-current", "step-pending", "step-pending"], StepClasses(cut));
+    }
+
+    [Fact]
+    public void Steps_WhileVllmIsStillImporting_WeightsAreNotShownAsLoading()
+    {
+        // The supervisor only reports "loading" once vLLM says it is loading the model;
+        // before that the process is merely starting.
+        var cut = RenderProgressWithEvents("stopping", "releasing_gpu", "starting");
+        Assert.Equal(["step-done", "step-done", "step-current", "step-pending", "step-pending", "step-pending", "step-pending"], StepClasses(cut));
+    }
+
+    [Fact]
+    public void Steps_AReadyDeploy_NeverShowsAFailedStep_EvenBeforeTheRowSettles()
+    {
+        // Regression: after "ready" but before the row flipped to active, the last step was painted red.
+        var cut = RenderProgressWithEvents("stopping", "releasing_gpu", "starting", "loading", "warming_up", "waiting_health", "ready");
+        var classes = StepClasses(cut);
+        Assert.DoesNotContain("step-failed", classes);
+        Assert.Equal(["step-done", "step-done", "step-done", "step-done", "step-done", "step-done", "step-pending"], classes);
+    }
+
+    [Fact]
+    public void Steps_AFailedDeploy_MarksTheStepItFailedInAsFailed()
+    {
+        var cut = RenderProgressWithEvents("stopping", "releasing_gpu", "starting", "loading", "failed");
+        Assert.Equal(["step-done", "step-done", "step-done", "step-failed", "step-pending", "step-pending", "step-pending"], StepClasses(cut));
+    }
+
+    private static string[] StepTexts(IRenderedComponent<SwapCeremonyDialog> cut) =>
+        cut.FindAll("ol.ceremony-steps li").Select(li => li.TextContent.Trim()).ToArray();
+
+    [Fact]
+    public void LoadingStep_ShowsTheRealShardProgressVllmReported()
+    {
+        var cut = RenderProgressWithEvents(
+            ("starting", null), ("loading", """{"weights_pct":0,"shards":"0/2"}"""), ("loading", """{"weights_pct":50,"shards":"1/2"}"""));
+
+        Assert.Equal("Load weights — 50% · shard 1/2", StepTexts(cut)[3]);
+    }
+
+    [Fact]
+    public void WarmupStep_ShowsWhatVllmIsDoing_AndCudaGraphProgress()
+    {
+        var cut = RenderProgressWithEvents(
+            ("loading", """{"weights_pct":100,"shards":"1/1"}"""),
+            ("warming_up", """{"graphs_pct":40,"note":"capturing CUDA graphs"}"""));
+
+        Assert.Equal("Warm up engine — CUDA graphs 40% · capturing CUDA graphs", StepTexts(cut)[4]);
+        Assert.Equal("Load weights", StepTexts(cut)[3]); // finished steps carry no progress text
+    }
+
+    [Fact]
+    public void StartingStep_ShowsVllmsOwnNote()
+    {
+        var cut = RenderProgressWithEvents(("starting", null), ("starting", """{"note":"engine core starting"}"""));
+
+        Assert.Equal("Start new process — engine core starting", StepTexts(cut)[2]);
+    }
+
     [Fact]
     public void ProgressLog_ScrollsToTheBottom_WhenLinesArrive()
     {

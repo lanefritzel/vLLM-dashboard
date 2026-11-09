@@ -46,7 +46,7 @@ def test_deploy_from_idle_skips_stopping_and_releasing_gpu(tmp_path):
         assert ok is True
 
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "ready", "smoke"]
+        assert states == ["starting", "waiting_health", "ready", "smoke"]
         assert runner.state == "ready"
     finally:
         pm.stop()
@@ -63,7 +63,7 @@ def test_redeploy_goes_through_stop_and_release_and_updates_last_good_argv(tmp_p
         assert ok is True
 
         states = [e.state for e in runner.events_for("d2")]
-        assert states == ["stopping", "releasing_gpu", "starting", "loading", "waiting_health", "ready", "smoke"]
+        assert states == ["stopping", "releasing_gpu", "starting", "waiting_health", "ready", "smoke"]
         assert pm.info.pid != old_pid
         assert pm.info.argv == fake_argv(port_b, "model-b")
 
@@ -150,7 +150,7 @@ def test_slow_start_beyond_health_timeout_fails_with_health_timeout_and_kills_ch
         assert runner.state == "failed"
         assert elapsed < 5, "should fail at ~health_timeout, not hang"
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "failed"]
+        assert states == ["starting", "waiting_health", "failed"]
 
         report = runner.events_for("d1")[-1].detail
         assert report["reason"] == "health_timeout"
@@ -175,7 +175,7 @@ def test_child_exiting_during_loading_fails_fast_not_at_health_timeout(tmp_path)
         assert ok is False
         assert elapsed < 10, f"fail-fast should take seconds, took {elapsed:.1f}s"
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "failed"]
+        assert states == ["starting", "waiting_health", "failed"]
 
         report = runner.events_for("d1")[-1].detail
         assert report["reason"] == "bad_args"
@@ -200,7 +200,7 @@ def test_fake_crash_during_loading_fails_fast_with_process_exited(tmp_path):
         assert ok is False
         assert elapsed < 10, f"fail-fast should take seconds, took {elapsed:.1f}s"
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "failed"]
+        assert states == ["starting", "waiting_health", "failed"]
 
         report = runner.events_for("d1")[-1].detail
         assert report["reason"] == "process_exited"
@@ -277,9 +277,9 @@ def test_events_for_a_past_deployment_survive_a_restart(tmp_path):
     fresh_runner = DeployRunner(fresh_pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path))
 
     all_events = fresh_runner.events_for("d1")
-    assert [e.state for e in all_events] == ["starting", "loading", "waiting_health", "failed"]
+    assert [e.state for e in all_events] == ["starting", "waiting_health", "failed"]
 
-    after = fresh_runner.events_for("d1", after=all_events[1].seq)
+    after = fresh_runner.events_for("d1", after=all_events[0].seq)
     assert [e.state for e in after] == ["waiting_health", "failed"]
 
 
@@ -314,7 +314,7 @@ def test_successful_deploy_runs_smoke_test_by_default_and_passes(tmp_path):
         assert runner.last_smoke_ok is True
 
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "ready", "smoke"]
+        assert states == ["starting", "waiting_health", "ready", "smoke"]
         smoke_event = runner.events_for("d1")[-1]
         assert smoke_event.detail == {"outcome": "pass"}
     finally:
@@ -336,7 +336,7 @@ def test_smoke_test_failure_is_warn_and_ready_not_a_deploy_failure(tmp_path):
         assert pm.is_running(), "a failed smoke test must not kill a model that's actually up"
 
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "ready", "smoke"]
+        assert states == ["starting", "waiting_health", "ready", "smoke"]
         smoke_event = runner.events_for("d1")[-1]
         assert smoke_event.detail["outcome"] == "fail"
         assert "excerpt" in smoke_event.detail
@@ -355,7 +355,7 @@ def test_smoke_skip_true_omits_the_smoke_event(tmp_path):
         assert runner.last_smoke_ok is None
 
         states = [e.state for e in runner.events_for("d1")]
-        assert states == ["starting", "loading", "waiting_health", "ready"]
+        assert states == ["starting", "waiting_health", "ready"]
     finally:
         pm.stop()
 
@@ -386,3 +386,76 @@ def test_run_smoke_test_now_raises_not_serving_when_idle(tmp_path):
             assert exc.state == "idle"
     finally:
         pm.stop()
+
+
+# --- real start-up progress (replays a captured vLLM 0.33 log through the fake server) ---------
+
+STARTUP_LOG = Path(__file__).parent / "fixtures" / "vllm_0.33_gemma4_awq_startup.log"
+
+
+def _startup_script(tmp_path, gap: float = 1.6) -> str:
+    """The real captured log, cut into the phases it really contains with a pause between them
+    (longer than the supervisor's one-second watch interval, so each phase is seen on its own)."""
+    lines = STARTUP_LOG.read_text().splitlines()
+
+    def idx(marker: str) -> int:
+        return next(i for i, line in enumerate(lines) if marker in line)
+
+    cuts = [idx("Loading model from scratch"), idx("0% Completed") + 1, idx("Model loading took") + 1,
+            idx("Starting vLLM server on")]
+    out, prev = [], 0
+    for cut in cuts:
+        out += lines[prev:cut]
+        out.append(f"#sleep {gap}")
+        prev = cut
+    out += lines[prev:]
+    path = tmp_path / "startup.log"
+    path.write_text("\n".join(out) + "\n")
+    return str(path)
+
+
+def test_real_startup_log_drives_loading_and_warmup_states_in_order(tmp_path):
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+    argv = fake_argv(port, "model-a") + ["--fake-startup-log", _startup_script(tmp_path)]
+    try:
+        ok = run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=60))
+        assert ok is True
+        events = runner.events_for("d1")
+        states = [e.state for e in events]
+        assert states[0] == "starting"
+        # loading is reported only once vLLM says it is loading the model, warming_up only after
+        # "Model loading took", and waiting_health only once its server is starting.
+        order = [s for i, s in enumerate(states) if s not in states[:i]]
+        assert order == ["starting", "loading", "warming_up", "waiting_health", "ready", "smoke"], states
+        loading = [e for e in events if e.state == "loading"]
+        assert any((e.detail or {}).get("weights_pct") == 0 for e in loading)
+        warming = [e for e in events if e.state == "warming_up"]
+        assert (warming[0].detail or {}).get("weights_pct") == 100
+    finally:
+        pm.stop()
+
+
+def test_loading_is_not_reported_while_vllm_is_still_importing(tmp_path):
+    """The bug: 'Load weights' used to finish ~1s after spawn. A start-up that has printed only its
+    import/config lines must still be 'starting'."""
+    lines = STARTUP_LOG.read_text().splitlines()
+    cut = next(i for i, line in enumerate(lines) if "Loading model from scratch" in line)
+    script = tmp_path / "importing.log"
+    script.write_text("\n".join(lines[:cut] + ["#sleep 30"]) + "\n")
+
+    runner, pm = new_runner(tmp_path)
+    port = free_port()
+    argv = fake_argv(port, "model-a") + ["--fake-startup-log", str(script)]
+
+    async def scenario():
+        runner.start_deploy(argv, deployment_id="d1", health_timeout=60)
+        await asyncio.sleep(4)  # several watch passes while it is "still importing"
+        return [e.state for e in runner.events_for("d1")], runner.state
+
+    try:
+        states, current = run(scenario())
+    finally:
+        pm.stop()
+    assert current == "starting"
+    assert "loading" not in states and "waiting_health" not in states

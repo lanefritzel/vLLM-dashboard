@@ -1,0 +1,117 @@
+supervisor: GPU backend detected -- nvidia
+supervisor: boot decision -- replay=True (AUTO_START=last_good and last run was healthy -- replaying)
+W1109 01:13:28.076000 58 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1109 01:13:28.077000 58 torch/_library/opaque_object.py:288] register_opaque_type is deprecated, use register_custom_class instead
+W1109 01:13:28.077000 58 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+vllm_visualizer: ready, tapping MLP classes as vLLM imports them (VIS_ENABLED=1)
+(APIServer pid=58) INFO 11-09 01:13:35 [startup.py:38] 
+(APIServer pid=58) INFO 11-09 01:13:35 [startup.py:38]        █     █     █▄   ▄█
+(APIServer pid=58) INFO 11-09 01:13:35 [startup.py:38]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.33.0
+(APIServer pid=58) INFO 11-09 01:13:35 [startup.py:38]   █▄█▀ █     █     █     █  model   /models/huihui-gemma-uncensored
+(APIServer pid=58) INFO 11-09 01:13:35 [startup.py:38]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=58) INFO 11-09 01:13:35 [startup.py:38] 
+(APIServer pid=58) INFO 11-09 01:13:35 [startup.py:96] non-default args: {'model_tag': '/models/huihui-gemma-uncensored', 'port': 9999, 'model': '/models/huihui-gemma-uncensored', 'max_model_len': 2048, 'enforce_eager': True, 'served_model_name': ['main'], 'bl
+(APIServer pid=58) INFO 11-09 01:13:50 [model.py:744] Resolved architecture: Gemma4UnifiedForConditionalGeneration
+(APIServer pid=58) INFO 11-09 01:13:50 [model.py:2170] Using max model len 2048
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.gemma3n
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.gemma4
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.qwen2
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.deepseek_v2
+(APIServer pid=58) INFO 11-09 01:13:56 [scheduler.py:310] Chunked prefill is enabled with max_num_batched_tokens=4096.
+(APIServer pid=58) INFO 11-09 01:13:56 [config.py:364] Gemma4 model has heterogeneous head dimensions {'sliding_attention': 256, 'full_attention': 512}. FA4 not available, forcing TRITON_ATTN backend.
+(APIServer pid=58) WARNING 11-09 01:13:56 [vllm.py:1778] Enforce eager set, disabling torch.compile, CUDAGraphs, and JIT kernel warmup. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none and --kernel_config.enable_jit_warmup=False
+(APIServer pid=58) WARNING 11-09 01:13:56 [vllm.py:1802] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(APIServer pid=58) INFO 11-09 01:13:56 [kernel.py:480] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(APIServer pid=58) INFO 11-09 01:13:56 [vllm.py:2005] Cudagraph is disabled under eager mode
+(APIServer pid=58) WARNING 11-09 01:13:56 [cuda.py:341] Forcing --disable_chunked_mm_input for models with multimodal-bidirectional attention.
+(APIServer pid=58) INFO 11-09 01:13:56 [compilation.py:317] Enabled custom fusions: norm_quant, act_quant
+W1109 01:14:35.811000 128 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1109 01:14:35.812000 128 torch/_library/opaque_object.py:288] register_opaque_type is deprecated, use register_custom_class instead
+W1109 01:14:35.812000 128 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+vllm_visualizer: ready, tapping MLP classes as vLLM imports them (VIS_ENABLED=1)
+(EngineCore pid=128) INFO 11-09 01:14:43 [core.py:139] Initializing a V1 LLM engine (v0.33.0) with config: model='/models/huihui-gemma-uncensored', speculative_config=None, tokenizer='/models/huihui-gemma-uncensored', skip_tokenizer_init=False, tokenizer_mode=
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.qwen2
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.deepseek_v2
+(EngineCore pid=128) INFO 11-09 01:14:44 [parallel_state.py:1929] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_6f139828f2be4bbc846e63677a78cd3a backend=nccl
+(EngineCore pid=128) INFO 11-09 01:14:44 [parallel_state.py:2385] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank N/A, EPLB rank N/A
+(EngineCore pid=128) INFO 11-09 01:14:44 [gpu_worker.py:513] Using V2 Model Runner
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.gemma3n
+vllm_visualizer: tapping MLP classes in vllm.model_executor.models.gemma4
+(EngineCore pid=128) INFO 11-09 01:14:46 [model_runner.py:399] Loading model from scratch...
+(EngineCore pid=128) INFO 11-09 01:14:46 [__init__.py:945] Using MarlinLinearKernel for mixed-precision linear
+(EngineCore pid=128) INFO 11-09 01:14:46 [compressed_tensors_wNa16.py:153] Using MarlinLinearKernel for CompressedTensorsWNA16
+(EngineCore pid=128) INFO 11-09 01:14:46 [cuda.py:448] Using AttentionBackendEnum.TRITON_ATTN backend.
+(EngineCore pid=128) INFO 11-09 01:14:46 [cuda.py:448] Using AttentionBackendEnum.TRITON_ATTN backend.
+(EngineCore pid=128) INFO 11-09 01:14:50 [base_loader.py:82] Initializing model took 4.001101 seconds
+(EngineCore pid=128) INFO 11-09 01:14:50 [weight_utils.py:1144] Filesystem type for checkpoints: EXT4. Checkpoint size: 7.68 GiB. Available RAM: 21.33 GiB.
+(EngineCore pid=128) INFO 11-09 01:14:50 [weight_utils.py:1167] Auto-prefetch is disabled because the filesystem (EXT4) is not a recognized network FS (NFS/Lustre). If you want to force prefetching, start vLLM with --safetensors-load-strategy=prefetch.
+
+Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:02<00:00,  2.56s/it]
+
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:02<00:00,  2.56s/it]
+
+(EngineCore pid=128) INFO 11-09 01:14:52 [default_loader.py:506] Loading weights took 2.62 seconds
+(EngineCore pid=128) INFO 11-09 01:14:54 [model_runner.py:428] Model loading took 8.12 GiB memory and 8.896682 seconds
+(EngineCore pid=128) INFO 11-09 01:14:54 [topk_topp_sampler.py:149] Using FlashInfer for top-p & top-k sampling.
+(EngineCore pid=128) INFO 11-09 01:14:54 [torch_utils.py:281] Reducing Torch threads from 4 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.
+(EngineCore pid=128) INFO 11-09 01:14:54 [utils.py:381] Using LBNHC KV cache layout.
+(APIServer pid=58) INFO 11-09 01:15:09 [base.py:283] Multi-modal warmup completed in 37.153s
+(EngineCore pid=128) INFO 11-09 01:15:25 [encoder_runner.py:131] Encoder cache will be initialized with a budget of 4096 tokens, and profiled with 1 video items of the maximum feature size.
+(EngineCore pid=128) INFO 11-09 01:15:34 [gpu_worker.py:772] Available KV cache memory: 1.61 GiB
+(EngineCore pid=128) INFO 11-09 01:15:34 [kv_cache_utils.py:1147] GPU KV cache size: 4,979 tokens, Maximum concurrency for 2,048 tokens per request: 2.43x
+(EngineCore pid=128) INFO 11-09 01:15:34 [kv_cache_utils.py:865] kv cache group sizes (16, 16, 16, 16, 16, 64)
+(EngineCore pid=128) INFO 11-09 01:15:34 [kv_cache_utils.py:866] kv lcm block sizes 64
+(EngineCore pid=128) INFO 11-09 01:15:34 [gpu_worker.py:1066] Free memory on device (11.27/11.63 GiB) on startup. Desired GPU memory utilization is (0.95, 11.05 GiB). Actual usage is 8.52 GiB for consumed memory (weights + non-torch), 0.92 GiB for peak activat
+(EngineCore pid=128) INFO 11-09 01:15:34 [core.py:412] init engine (profile, create kv cache, warmup model) took 40.19 s
+(EngineCore pid=128) WARNING 11-09 01:15:34 [vllm.py:1778] Enforce eager set, disabling torch.compile, CUDAGraphs, and JIT kernel warmup. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none and --kernel_config.enable_jit_warmup=False
+(EngineCore pid=128) WARNING 11-09 01:15:34 [vllm.py:1802] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(EngineCore pid=128) INFO 11-09 01:15:34 [kernel.py:480] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(EngineCore pid=128) INFO 11-09 01:15:34 [vllm.py:2005] Cudagraph is disabled under eager mode
+(EngineCore pid=128) INFO 11-09 01:15:34 [compilation.py:317] Enabled custom fusions: norm_quant, act_quant
+(APIServer pid=58) INFO 11-09 01:15:35 [entry.py:135] Supported tasks: ['generate']
+(APIServer pid=58) INFO 11-09 01:15:35 [factories.py:105] Scale-out endpoints are disabled. Restart vllm serve with --enable-scale-out to enable them.
+(APIServer pid=58) INFO 11-09 01:15:37 [hf.py:736] Detected the chat template content format to be 'openai'. You can set `--chat-template-content-format` to override this.
+(APIServer pid=58) WARNING 11-09 01:15:37 [model.py:1907] Default vLLM sampling parameters have been overridden by the model's `generation_config.json`: `{'temperature': 1.0, 'top_k': 64, 'top_p': 0.95}`. If this is not intended, please relaunch vLLM instance 
+(APIServer pid=58) INFO 11-09 01:15:38 [entry.py:139] Starting vLLM server on http://0.0.0.0:9999
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:188] Available routes are:
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /openapi.json, Methods: HEAD, GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /docs, Methods: HEAD, GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /docs/oauth2-redirect, Methods: HEAD, GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /redoc, Methods: HEAD, GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /load, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /version, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /kv_event_sources, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /health, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /metrics, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /tokenize, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /detokenize, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/models, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/systemone, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/decisions, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /ping, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /ping, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /invocations, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/chat/completions, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/chat/completions/batch, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/responses, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/responses/{response_id}, Methods: GET
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/responses/{response_id}/cancel, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/completions, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/messages, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/messages/count_tokens, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /generative_scoring, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /scale_elastic_ep, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /is_scaling_elastic_ep, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/chat/completions/render, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/messages/render, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/completions/render, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/responses/render, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/chat/completions/derender, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /v1/completions/derender, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /inference/v1/generate, Methods: POST
+(APIServer pid=58) INFO 11-09 01:15:38 [launcher.py:197] Route: /inference/v1/abort_requests, Methods: POST
+INFO:     Started server process [58]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

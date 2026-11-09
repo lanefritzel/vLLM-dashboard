@@ -84,7 +84,7 @@ def test_cancel_while_the_new_child_is_loading_kills_it_and_goes_idle(tmp_path):
             fake_argv(port_b, "model-b", "--fake-slow-start", "30"), deployment_id="d2", health_timeout=60,
         )
         for _ in range(100):
-            if runner.state in ("starting", "loading", "waiting_health"):
+            if runner.state in ("starting", "waiting_health"):
                 break
             await asyncio.sleep(0.05)
         else:
@@ -119,12 +119,16 @@ def test_cancel_is_responsive_even_with_a_long_health_timeout(tmp_path):
         deployment_id = runner.start_deploy(
             fake_argv(port, "model-a", "--fake-slow-start", "300"), deployment_id="d1", health_timeout=300,
         )
+        # The fake prints no vLLM start-up markers, so it stays in "starting" (the supervisor
+        # does not claim a phase it has not seen) until /health answers, which --fake-slow-start
+        # delays for 300 s -- the cancel has to wake the start-up watch within about a second.
         for _ in range(100):
-            if runner.state == "waiting_health":
+            if runner.state == "starting":
                 break
             await asyncio.sleep(0.05)
         else:
-            raise AssertionError("never reached waiting_health")
+            raise AssertionError("never reached starting")
+        await asyncio.sleep(1.5)  # let the start-up watch run a pass or two
 
         start = time.monotonic()
         await runner.cancel_deploy(deployment_id)
@@ -268,7 +272,7 @@ def test_restart_gets_a_new_pid_with_the_same_argv_and_reaches_ready(tmp_path):
         assert pm.info.pid != old_pid
         assert pm.info.argv == old_argv
         states = [e.state for e in runner.events_for(deployment_id)]
-        assert states == ["stopping", "releasing_gpu", "starting", "loading", "waiting_health", "ready", "smoke"]
+        assert states == ["stopping", "releasing_gpu", "starting", "waiting_health", "ready", "smoke"]
 
     try:
         run(scenario())
@@ -296,7 +300,7 @@ def test_restart_honors_a_caller_supplied_deployment_id(tmp_path):
             raise AssertionError("restart never reached ready")
 
         states = [e.state for e in runner.events_for("dashboard-row-42")]
-        assert states == ["stopping", "releasing_gpu", "starting", "loading", "waiting_health", "ready", "smoke"]
+        assert states == ["stopping", "releasing_gpu", "starting", "waiting_health", "ready", "smoke"]
 
     try:
         run(scenario())

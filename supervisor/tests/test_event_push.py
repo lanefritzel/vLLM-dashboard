@@ -63,7 +63,7 @@ def test_deploy_pushes_state_events_in_order_with_a_final_ready_and_a_log_batch(
         log_pushes = [r["body"] for r in stub.requests if r["body"]["kind"] == "log"]
 
         states = [p["state"] for p in state_pushes]
-        assert states == ["starting", "loading", "waiting_health", "ready", "smoke"]
+        assert states == ["starting", "waiting_health", "ready", "smoke"]
         seqs = [r["body"]["seq"] for r in stub.requests]
         assert seqs == sorted(seqs)
         assert len(set(seqs)) == len(seqs)
@@ -170,7 +170,7 @@ def test_deploy_completes_while_stub_is_down_and_delivers_once_it_restarts(tmp_p
             # whatever it last saw -- say seq 0 (nothing) -- and GET
             # .../events?after=0 must return exactly what the stub missed.
             missed = runner.events_for("d1", after=0)
-            assert [e.state for e in missed] == ["starting", "loading", "waiting_health", "ready", "smoke"]
+            assert [e.state for e in missed] == ["starting", "waiting_health", "ready", "smoke"]
         finally:
             restarted.stop()
 

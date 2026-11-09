@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
-import re
 import threading
 import time
 import urllib.error
@@ -30,6 +29,7 @@ from .gpu_backend import GpuBackend, GpuInfo, detect_backend
 from .log_store import DeploymentArchive
 from .process_manager import ProcessManager
 from .smoke_test import SmokeResult, resolve_smoke_config, run_smoke_test
+from .startup_phases import StartupTracker
 from .state import StateStore, SupervisorState
 
 RELEASING_GPU_INITIAL_WAIT_SECONDS = 2.0
@@ -46,24 +46,7 @@ HEALTH_HEARTBEAT_INTERVAL_SECONDS = 10.0
 CRASH_WATCH_POLL_INTERVAL_SECONDS = 1.0
 LOG_BATCH_INTERVAL_SECONDS = 1.0
 DEFAULT_CHILD_PORT = 9999
-WEIGHT_WATCH_INTERVAL_SECONDS = 2.0
-# Bail out of _watch_weight_loading fast when nothing at all has matched yet
-# -- deliberately just over one WEIGHT_WATCH_INTERVAL_SECONDS cycle, so a
-# model/vLLM version that never prints this pattern gives up on its first
-# real check rather than sitting idle. self._state stays "loading" for the
-# whole span this runs, so staying here needlessly also blocks a prompt
-# transition to "waiting_health" that other code (tests included) expects.
-WEIGHT_WATCH_NO_SIGNAL_TIMEOUT_SECONDS = 1.5
-# vLLM's own tqdm progress output (confirmed against two real deploys' own
-# captured log_tail on real hardware, P16a) -- e.g. "Loading safetensors
-# checkpoint shards:  50% Completed | 1/2 [00:58<00:58, 58.71s/it]" and,
-# once genuinely finished, a line like "Loading weights took 60.87 seconds"
-# immediately followed later by "Model loading took 18.35 GiB memory and
-# 127.981414 seconds" (gpu_model_runner.py's own final summary -- the one
-# used here, since a model with a drafter/MTP pass repeats the checkpoint-
-# shards pattern twice and this is the one line that's always last).
-WEIGHT_PCT_PATTERN = re.compile(r"Loading safetensors checkpoint shards:\s+(\d+)% Completed")
-WEIGHTS_DONE_PATTERN = re.compile(r"Model loading took .+ seconds")
+STARTUP_WATCH_INTERVAL_SECONDS = 1.0
 
 
 @dataclass
@@ -335,59 +318,28 @@ class DeployRunner:
         except asyncio.CancelledError:
             pass
 
-    async def _watch_weight_loading(
-        self, deployment_id: str, port: int, max_wait: float, cancel_event: threading.Event,
+    async def _watch_startup(
+        self, deployment_id: str, port: int, max_wait: float, cancel_event: Optional[threading.Event] = None,
     ) -> float:
-        """Best-effort real progress for the "loading" step (P16a: this step
-        previously flipped to Done the instant the process spawned, with
-        nothing behind it -- "Load weights" showed complete before any VRAM
-        was even in use). Watches the child's own captured output via
-        ProcessManager.logs() -- the SAME non-destructive ring-buffer read
-        GET /admin/logs itself uses, never a second reader of the pipe and
-        never interfering with _run_log_batch's own destructive drain --
-        for vLLM's own tqdm weight-loading percentage and its final
-        completion line, emitting a real "loading" heartbeat with
-        weights_pct as it goes.
+        """Reports vLLM's REAL startup progress while it comes up (see startup_phases.py for the
+        phases and the real log they were taken from): "starting" until it prints that it is
+        loading the model, "loading" with the shard-bar percentage while weights are read,
+        "warming_up" (profiling, KV cache, CUDA graphs) after "Model loading took", and it
+        returns once vLLM says its server is starting.
 
-        Also does its own lightweight `/health` probe each pass and exits
-        the moment that succeeds, regardless of whether a log marker was
-        ever found: a model (or the fake-vllm test double) that loads fast,
-        or doesn't print either tqdm pattern at all, must not sit here
-        burning its whole timeout budget hunting for text that's never
-        coming while the server is already up and the real health-wait loop
-        that follows could simply confirm it in one call. Without this, a
-        process already healthy would wait out the FULL budget here before
-        the health-wait loop ever got a chance to run at all, with zero
-        budget left for it (confirmed turning every existing fake-vllm
-        based deploy test into an instant failure before this check was
-        added).
+        Reads the child's output through ProcessManager.logs() -- the same non-destructive
+        ring-buffer read GET /admin/logs uses, never a second reader of the pipe and never
+        interfering with _run_log_batch's own drain. A stage is only reported when its marker
+        actually appears in the output; nothing is faked, so a server that prints none of the
+        markers (the fake-vllm test double, or a vLLM version with different wording) simply
+        stays in "starting" until /health answers.
 
-        Capped at `max_wait` (health_timeout) as an outer ceiling, but never
-        actually runs anywhere near it unless it's genuinely seeing progress:
-        if NO weight-loading pattern has matched at all within the first
-        WEIGHT_WATCH_NO_SIGNAL_TIMEOUT_SECONDS, it gives up immediately
-        rather than sitting around for the rest of the budget -- a vLLM
-        version/model that never prints this pattern at all is distinguished
-        (fast bail) from one that's actively printing real progress (keeps
-        watching, up to the full budget, since that's clearly the real
-        signal). This matters beyond just speed: `self._state` stays
-        "loading" for as long as this runs, and other code (tests included)
-        reasonably expects a prompt transition to "waiting_health" when
-        there's nothing real to show -- confirmed two existing tests broke
-        when this bailed only at the full shared budget instead.
-
-        Deliberately does NOT reduce the health-wait loop's own budget
-        afterward (the caller passes `health_timeout` here AND keeps the
-        full original value for that loop) -- they're different concerns
-        sharing one ceiling each, not one budget split between them. A
-        pathological case where neither this nor the real health check ever
-        succeeds now takes up to ~2x health_timeout to finally fail instead
-        of exactly health_timeout, which is an acceptable tradeoff: the
-        alternative (sharing one budget) made the real health-wait loop's
-        own fail-fast reason unreliable whenever this phase used any of it.
+        Also probes /health each pass and returns the moment it succeeds, and returns if the
+        process exits, the deploy is cancelled, or `max_wait` elapses. Returns the seconds spent
+        here so the caller can give the final health wait only what is left of the budget.
         """
-        last_pct: Optional[int] = None
-        found_any_signal = False
+        tracker = StartupTracker()
+        last_key = None
         start = time.monotonic()
         health_url = f"http://127.0.0.1:{port}/health"
         while time.monotonic() - start < max_wait:
@@ -395,21 +347,19 @@ class DeployRunner:
                 break
             if cancel_event is not None and cancel_event.is_set():
                 break
-            text = self._process_manager.logs()
-            pct_matches = WEIGHT_PCT_PATTERN.findall(text)
-            if pct_matches:
-                found_any_signal = True
-                pct = int(pct_matches[-1])
-                if pct != last_pct:
-                    last_pct = pct
-                    self._record(deployment_id, "loading", {"weights_pct": pct})
-            if WEIGHTS_DONE_PATTERN.search(text):
+            snap = tracker.update(self._process_manager.logs())
+            if snap.stage == "server_up":
                 break
+            key = (snap.stage, snap.weights_pct, snap.graphs_pct, snap.note)
+            if key != last_key:
+                first = last_key is None
+                last_key = key
+                # "starting" with nothing to add was already recorded when the process spawned.
+                if not (first and snap.stage == "starting" and snap.note is None):
+                    self._record(deployment_id, snap.stage, snap.detail() or None)
             if await asyncio.to_thread(_quick_health_check, health_url):
                 break
-            if not found_any_signal and time.monotonic() - start >= WEIGHT_WATCH_NO_SIGNAL_TIMEOUT_SECONDS:
-                break
-            await asyncio.sleep(WEIGHT_WATCH_INTERVAL_SECONDS)
+            await asyncio.sleep(STARTUP_WATCH_INTERVAL_SECONDS)
         return time.monotonic() - start
 
     async def _run_deploy(
@@ -437,10 +387,9 @@ class DeployRunner:
             self._record(deployment_id, "starting")
             await asyncio.to_thread(self._process_manager.spawn, argv, env)
             log_batch_task = asyncio.create_task(self._run_log_batch(deployment_id))
-            self._record(deployment_id, "loading")
             served_model_name = _extract_value(argv, "--served-model-name")
             port = _extract_port(argv)
-            await self._watch_weight_loading(deployment_id, port, health_timeout, cancel_event)
+            startup_elapsed = await self._watch_startup(deployment_id, port, health_timeout, cancel_event)
             self._record(deployment_id, "waiting_health")
 
             # A large model's health wait can run for minutes (confirmed via
@@ -454,18 +403,17 @@ class DeployRunner:
             # there -- so this instead calls it repeatedly with a short
             # sub-timeout, emitting a "waiting_health" heartbeat (with
             # elapsed_seconds) back on the event loop between sub-calls.
-            # health_timeout is NOT reduced by weight_watch_elapsed -- see
-            # _watch_weight_loading's own docstring for why they're each
-            # capped at the full health_timeout independently rather than
-            # splitting one shared budget (that approach starved this loop
-            # of its own time whenever weight-watching used any at all,
-            # breaking its fail-fast reason).
+            # _watch_startup already spent part of health_timeout watching vLLM
+            # start up (and probes /health itself the whole time), so this loop only
+            # gets what is left -- one shared budget, with a floor so a deploy that
+            # used it all still gets a final health check and a proper failure report.
+            health_budget = max(1.0, health_timeout - startup_elapsed)
             healthy = False
             timed_out_while_alive = False
             elapsed = 0.0
-            sub_timeout = min(HEALTH_HEARTBEAT_INTERVAL_SECONDS, health_timeout)
-            while elapsed < health_timeout:
-                this_timeout = min(sub_timeout, health_timeout - elapsed)
+            sub_timeout = min(HEALTH_HEARTBEAT_INTERVAL_SECONDS, health_budget)
+            while elapsed < health_budget:
+                this_timeout = min(sub_timeout, health_budget - elapsed)
                 healthy, timed_out_while_alive = await asyncio.to_thread(
                     _wait_for_health, port, served_model_name, this_timeout, self._process_manager.is_running,
                     cancel_event,
@@ -479,7 +427,7 @@ class DeployRunner:
                 # "fails exactly at the timeout" test) spuriously grows an
                 # extra "waiting_health" event between the real one and the
                 # terminal "failed" that follows.
-                if elapsed < health_timeout:
+                if elapsed < health_budget:
                     self._record(deployment_id, "waiting_health", {"elapsed_seconds": round(elapsed)})
 
             if not healthy:
@@ -766,7 +714,7 @@ def _extract_port(argv: list[str], default: int = DEFAULT_CHILD_PORT) -> int:
 
 
 def _quick_health_check(health_url: str) -> bool:
-    """A single, fast GET /health probe -- used only by _watch_weight_loading
+    """A single, fast GET /health probe -- used only by _watch_startup
     to bail out early once the server is already responding, so that watcher
     never outlives the real health-wait loop that follows it. Deliberately
     not the served-model-name check _wait_for_health does -- that loop is

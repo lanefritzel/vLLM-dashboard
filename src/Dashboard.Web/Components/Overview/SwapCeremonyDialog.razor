@@ -101,7 +101,7 @@
                 @foreach (var step in Steps)
                 {
                     var state = StepState(step.Key);
-                    <li class="@StepCssClass(state)">@step.Label</li>
+                    <li class="@StepCssClass(state)">@step.Label@StepSuffix(step.Key, state)</li>
                 }
             </ol>
 
@@ -176,10 +176,11 @@
 
     private static readonly (string Key, string Label)[] Steps =
     {
-        ("stop", "Stop old process"),
+        ("stopping", "Stop old process"), // key = the supervisor's own state name
         ("releasing_gpu", "Release GPU"),
         ("starting", "Start new process"),
         ("loading", "Load weights"),
+        ("warming_up", "Warm up engine"),
         ("waiting_health", "Health check"),
         ("smoke", "Smoke test"),
     };
@@ -197,7 +198,7 @@
     private int _deploymentId;
     private DateTime _deployStartedAt;
     private int _maxSeenStepIndex = -1;
-    private bool _terminalSeen;
+    private string? _terminalState; // "ready" | "failed" | "crashed", from the event itself
     private string? _lastDetail;
     private readonly List<string> _logLines = new();
 
@@ -380,14 +381,60 @@
     // interval just has nothing to add on top of.
     public Task OnLog(string line) => Task.CompletedTask;
 
+    /// <summary>What vLLM itself reported for a start-up phase (supervisor's startup_phases.py):
+    /// the shard-bar percentage while weights load, CUDA-graph capture progress, and a short note.</summary>
+    private sealed record PhaseInfo(int? Pct, string? Shards, int? GraphsPct, string? Note);
+
+    private readonly Dictionary<string, PhaseInfo> _phaseInfo = new();
+
+    private static bool IsPhaseState(string state) => state is "starting" or "loading" or "warming_up";
+
+    private static PhaseInfo? ParsePhaseInfo(string? detailJson)
+    {
+        if (string.IsNullOrWhiteSpace(detailJson)) return null;
+        try
+        {
+            var el = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(detailJson);
+            if (el.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            int? Int(string name) => el.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number ? v.GetInt32() : null;
+            string? Str(string name) => el.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+            return new PhaseInfo(Int("weights_pct"), Str("shards"), Int("graphs_pct"), Str("note"));
+        }
+        catch { return null; }
+    }
+
+    private string StepSuffix(string key, StepStatus status)
+    {
+        if (status != StepStatus.Current || !_phaseInfo.TryGetValue(key, out var info)) return "";
+        var parts = new List<string>();
+        if (key == "loading")
+        {
+            if (info.Pct is { } pct) parts.Add($"{pct}%");
+            if (info.Shards is { } shards) parts.Add($"shard {shards}");
+        }
+        if (key == "warming_up" && info.GraphsPct is { } g) parts.Add($"CUDA graphs {g}%");
+        if (info.Note is { } note) parts.Add(note);
+        return parts.Count == 0 ? "" : " — " + string.Join(" · ", parts);
+    }
+
     private void ApplyState(string state, string? detail)
     {
-        _lastDetail = detail;
+        if (IsPhaseState(state))
+        {
+            // Shown inline on the step itself; the footer line is for everything else.
+            _lastDetail = null;
+            var info = ParsePhaseInfo(detail);
+            if (info is not null) _phaseInfo[state] = info;
+        }
+        else
+        {
+            _lastDetail = detail;
+        }
         var idx = Array.FindIndex(Steps, s => s.Key == state);
         if (idx >= 0)
             _maxSeenStepIndex = Math.Max(_maxSeenStepIndex, idx);
         if (state is "ready" or "crashed" or "failed")
-            _terminalSeen = true;
+            _terminalState = state;
     }
 
     private StepStatus StepState(string key)
@@ -404,8 +451,14 @@
         // a LATER step's event has actually arrived.
         var idx = Array.FindIndex(Steps, s => s.Key == key);
         if (idx < 0) return StepStatus.Pending;
-        if (_terminalSeen && !_resultSucceeded && idx == _maxSeenStepIndex)
+        // Decide failure from the terminal EVENT, not from _resultSucceeded: that flag is only
+        // set once the deployment row has settled (up to ~3s after the event), so using it
+        // painted the last step red on a deploy that actually succeeded.
+        if (_terminalState is "failed" or "crashed" && idx == _maxSeenStepIndex)
             return StepStatus.Failed;
+        // "ready" is not one of the steps: it means every step that ran has finished.
+        if (_terminalState == "ready" && idx <= _maxSeenStepIndex)
+            return StepStatus.Done;
         if (idx < _maxSeenStepIndex)
             return StepStatus.Done;
         if (idx == _maxSeenStepIndex)
@@ -509,7 +562,8 @@
             _deploymentId = result.DeploymentId!.Value;
             _deployStartedAt = DateTime.UtcNow;
             _maxSeenStepIndex = -1;
-            _terminalSeen = false;
+            _terminalState = null;
+            _phaseInfo.Clear();
             _logLines.Clear();
             _phase = Phase.Progress;
         }
@@ -598,7 +652,8 @@
             _deploymentId = result.DeploymentId!.Value;
             _deployStartedAt = DateTime.UtcNow;
             _maxSeenStepIndex = -1;
-            _terminalSeen = false;
+            _terminalState = null;
+            _phaseInfo.Clear();
             _logLines.Clear();
             _hubStarted = false;
             _logPollCts?.Cancel();
@@ -620,7 +675,8 @@
                 _deploymentId = id;
                 _deployStartedAt = DateTime.UtcNow;
                 _maxSeenStepIndex = -1;
-                _terminalSeen = false;
+                _terminalState = null;
+            _phaseInfo.Clear();
                 _logLines.Clear();
                 _hubStarted = false;
                 _logPollCts?.Cancel();

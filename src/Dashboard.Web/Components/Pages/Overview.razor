@@ -312,6 +312,7 @@ else
     private static string SupervisorStateText(string? state) => state switch
     {
         "loading" => "loading the model",
+        "warming_up" => "warming up the engine",
         "waiting_health" => "waiting for the health check",
         "starting" => "starting",
         "stopping" => "stopping the previous model",

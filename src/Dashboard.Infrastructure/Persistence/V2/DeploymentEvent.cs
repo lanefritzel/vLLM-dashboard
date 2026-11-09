@@ -11,8 +11,9 @@ public class DeploymentEvent
     public int DeploymentId { get; set; }
     public int Seq { get; set; }
 
-    /// <summary>stop | releasing_gpu | starting | loading | waiting_health | ready |
-    /// crashed | failed | smoke.</summary>
+    /// <summary>stopping | releasing_gpu | starting | loading | warming_up | waiting_health |
+    /// ready | crashed | failed | smoke. loading/warming_up/starting carry vLLM's own reported
+    /// progress in <see cref="Detail"/> (weights_pct, shards, graphs_pct, note).</summary>
     public string State { get; set; } = "";
 
     public string? Detail { get; set; }

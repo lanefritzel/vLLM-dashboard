@@ -118,6 +118,19 @@ def make_handler(state: FakeVllmState) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+def replay_startup_log(path: str) -> None:
+    """Prints a captured vLLM start-up log so the supervisor's start-up phase tracking has real
+    text to read. The port is not bound yet, exactly as with real vLLM, which only starts serving
+    after it has finished loading and warming up."""
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            if line.startswith("#sleep "):
+                time.sleep(float(line.split()[1]))
+            else:
+                print(line, flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1", help="bind address (compose needs 0.0.0.0 to be reachable from other containers)")
@@ -127,6 +140,11 @@ def main() -> None:
     parser.add_argument("--fake-crash", action="store_true", help="exit non-zero immediately instead of serving")
     parser.add_argument("--fake-exit-after", type=float, default=None, metavar="SECS", help="die mid-run")
     parser.add_argument("--fake-bad-output", action="store_true", help="omit 'OK' from completions")
+    parser.add_argument(
+        "--fake-startup-log", default=None, metavar="FILE",
+        help="before binding the port, print this file to stdout line by line like a real vLLM start-up; "
+             "a line '#sleep N' pauses N seconds instead of printing",
+    )
 
     # Accepted-but-ignored (P10a): ArgBuilder (Dashboard.Core.Recipes) always
     # emits --max-model-len/--gpu-memory-utilization/--max-num-batched-tokens/
@@ -157,6 +175,9 @@ def main() -> None:
     if args.fake_crash:
         print("fake-vllm: --fake-crash set, exiting non-zero immediately.", flush=True)
         sys.exit(1)
+
+    if args.fake_startup_log:
+        replay_startup_log(args.fake_startup_log)
 
     state = FakeVllmState(args.served_model_name, args.fake_slow_start, args.fake_bad_output)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
