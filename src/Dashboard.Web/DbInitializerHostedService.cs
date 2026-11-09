@@ -8,21 +8,39 @@ namespace Dashboard.Web;
 
 public sealed class DbInitializerHostedService(
     IServiceScopeFactory scopeFactory,
-    ILogger<DbInitializerHostedService> logger) : IHostedService
+    ILogger<DbInitializerHostedService> logger,
+    int maxAttempts = 10,
+    int retryDelayMs = 3000) : IHostedService
 {
+    // Retries because on a fresh `docker compose up` the dashboard can win the race
+    // against Postgres (or Postgres isn't reachable yet); without a retry the
+    // migrations never run and the first request fails with "relation ... does not exist".
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        try
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            using var scope = scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.MigrateAsync(cancellationToken);
-            await SeedConfigDefaultsAsync(db, cancellationToken);
-            logger.LogInformation("Database initialized (migrations applied, config seeded).");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Database initialization failed");
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                await db.Database.MigrateAsync(cancellationToken);
+                await SeedConfigDefaultsAsync(db, cancellationToken);
+                logger.LogInformation("Database initialized (migrations applied, config seeded).");
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                var last = attempt >= maxAttempts;
+                logger.LogError(ex, "Database initialization failed (attempt {Attempt}/{Max}){Retry}",
+                    attempt, maxAttempts, last ? "" : "; retrying");
+                if (last) return;
+                try { await Task.Delay(retryDelayMs, cancellationToken); }
+                catch (OperationCanceledException) { return; }
+            }
         }
     }
 

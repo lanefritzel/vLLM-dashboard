@@ -133,11 +133,16 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    expose:
-      - "5432"
+    # The dashboard runs with network_mode: host (below), so it reaches Postgres
+    # through the host, not the Compose network -- `expose` alone is not enough.
+    # Bound to loopback so Postgres isn't opened to your LAN.
+    ports:
+      - "127.0.0.1:5432:5432"
 
   dashboard:
     image: lanedfritz/vllm-dashboard:latest
+    # Re-pull on every `up` so a stale cached `latest` can't give you an old UI.
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       postgres:
@@ -177,10 +182,12 @@ services:
     restart: unless-stopped
     network_mode: host
     devices:
-      - /dev/dri          # Intel/AMD GPU passthrough; use NVIDIA's device
-                           # reservation syntax instead for an NVIDIA host.
+      - /dev/dri          # Intel/AMD GPU passthrough. NVIDIA host: remove this
+                           # and use the GPU reservation shown below instead.
     volumes:
-      - /path/to/your/hf-models:/models:ro   # same host path as the dashboard's mount above
+      # Read-write: the dashboard's "Download model" runs here and writes into it.
+      # Same host path as the dashboard's (read-only) mount above.
+      - /path/to/your/hf-models:/models
       - supervisor-state:/state
     ipc: host
     privileged: true
@@ -199,6 +206,31 @@ volumes:
   dataprotection:
   supervisor-state:
 ```
+
+### NVIDIA hosts
+
+Three changes to the `supervisor` service (needs the NVIDIA Container Toolkit
+on the host):
+
+```yaml
+  supervisor:
+    build:
+      context: https://github.com/lanefritzel/vLLM-dashboard.git#main:supervisor
+      args:
+        BASE_IMAGE: vllm/vllm-openai:v0.33.0     # instead of intel/llm-scaler-vllm
+    # remove the `devices: - /dev/dri` block and add:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+Everything else (dashboard, Postgres, the rest of the supervisor service) is
+the same. The supervisor detects the GPU vendor at start-up, and the neuron
+map plugin works on both.
 
 Change `POSTGRES_PASSWORD` (and the matching password in the connection
 string) before running this anywhere other than a trusted home network.

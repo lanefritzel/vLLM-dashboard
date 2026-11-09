@@ -165,6 +165,24 @@ public class V2SchemaMigrationTests(PostgresFixture postgres)
         Assert.Equal(0, await db.DeploymentEventsV2.CountAsync());
     }
 
+    [Fact]
+    public async Task UnreachableDatabase_IsRetriedThenGivenUpOn_WithoutThrowing()
+    {
+        var services = new ServiceCollection();
+        // Port 1 on loopback: connection refused immediately, no Postgres needed.
+        services.AddDbContext<AppDbContext>(o => o.UseNpgsql(
+            "Host=127.0.0.1;Port=1;Database=x;Username=x;Password=x;Timeout=1;Pooling=false"));
+        using var provider = services.BuildServiceProvider();
+        var logger = new CapturingLogger<Dashboard.Web.DbInitializerHostedService>();
+        var hosted = new Dashboard.Web.DbInitializerHostedService(
+            provider.GetRequiredService<IServiceScopeFactory>(), logger, maxAttempts: 3, retryDelayMs: 10);
+
+        await hosted.StartAsync(CancellationToken.None); // must not throw
+
+        Assert.Equal(3, logger.Entries.Count(e => e.Level == LogLevel.Error));
+        Assert.Equal(2, logger.Entries.Count(e => e.Message.Contains("retrying")));
+    }
+
     private sealed class CapturingLogger<T> : ILogger<T>
     {
         public List<(LogLevel Level, Exception? Exception, string Message)> Entries { get; } = new();
