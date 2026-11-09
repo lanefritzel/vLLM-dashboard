@@ -9,6 +9,8 @@
     <li><a href="#getting-started">Getting started</a></li>
     <li><a href="#how-it-works">How it works</a></li>
     <li><a href="#walkthrough">Walkthrough example</a></li>
+    <li><a href="#choosing-settings">Choosing recipe settings</a></li>
+    <li><a href="#eager-vs-graphs">Eager mode vs CUDA graphs (and the neuron map)</a></li>
     <li><a href="#troubleshooting">Troubleshooting</a></li>
 </ul>
 
@@ -105,6 +107,162 @@
     </UiPanel>
 </div>
 
+<div style="margin-bottom: var(--ui-space-4);" id="choosing-settings">
+    <UiPanel Title="Choosing recipe settings">
+        <p>
+            Good settings depend on your GPU memory, the model, and how many people use it at once, so
+            there is no single recipe that suits everyone. This is how to work them out for your own
+            hardware: estimate, load, read what vLLM reports, then adjust.
+        </p>
+
+        <h3 class="h6">1. How much memory the weights need</h3>
+        <p>
+            Weights take roughly <strong>parameters × bytes per parameter</strong>: about 2 bytes for
+            16-bit (<code>bfloat16</code>/<code>float16</code>), 1 for 8-bit (<code>fp8</code>/int8), and
+            about 0.5 to 0.6 for 4-bit (AWQ, GPTQ, GGUF Q4). A 7B model is about 14&nbsp;GB in 16-bit and
+            4 to 5&nbsp;GB in 4-bit. Multimodal models add a vision encoder on top. The size of the
+            weights on disk is a good estimate; once loaded, vLLM prints the exact figure
+            (<code>Model loading took … GiB memory</code>).
+        </p>
+
+        <h3 class="h6">2. GPU memory utilization: the budget</h3>
+        <p>
+            This is the fraction of the card's total memory vLLM may use for everything: weights,
+            working memory for each step, CUDA graphs (if enabled), and the KV cache. What is left for
+            the KV cache is:
+        </p>
+        <CodeBlock Code="@BudgetFormula" ShowCopy="false" />
+        <p>
+            Start at <strong>0.90</strong>. If the model barely fits, raise it toward <strong>0.93 to
+            0.95</strong>; if other programs share the GPU, or vLLM fails at startup with an out-of-memory
+            error, lower it. vLLM prints what it ended up with as
+            <code>Available KV cache memory</code> and <code>GPU KV cache size: N tokens</code>.
+        </p>
+
+        <h3 class="h6">3. Max model length: what the KV cache must hold</h3>
+        <p>The KV cache stores two numbers (key and value) per layer for every token in every active conversation:</p>
+        <CodeBlock Code="@KvFormula" ShowCopy="false" />
+        <p>
+            Layers, KV heads and head size are in the model's <code>config.json</code>
+            (<code>num_hidden_layers</code>, <code>num_key_value_heads</code>, and
+            <code>hidden_size ÷ num_attention_heads</code> unless <code>head_dim</code> is given). Models
+            that use sliding-window or hybrid attention need less than this formula says.
+            <strong>Max model length × the number of simultaneous requests</strong> should fit in that
+            token count; vLLM prints <code>Maximum concurrency for N tokens per request: X×</code>, and
+            you want X to be at least the number of people using it at once. If it is below 1, the
+            model will not start at that length.
+        </p>
+
+        <h3 class="h6">A worked example (illustrative numbers, not a recommendation)</h3>
+        <p>
+            A 16&nbsp;GB card and an 8B model in 4-bit (about 5.5&nbsp;GB of weights) with 32 layers, 8 KV
+            heads and head size 128, at utilization 0.90, with CUDA graphs on:
+        </p>
+        <CodeBlock Code="@WorkedExample" ShowCopy="false" />
+        <p>
+            So a max model length of 32768 fits once (about 1.6× concurrency) and 8192 fits about six
+            times over. With Enforce eager on, the 1&nbsp;GB for graphs is freed and the cache grows by that much.
+        </p>
+
+        <h3 class="h6">4. The other settings</h3>
+        <ul>
+            <li>
+                <strong>Max batched tokens</strong> — how many tokens vLLM processes in one step. Larger
+                values speed up long prompts but need more working memory. Typical values are 2048 to
+                8192. Multimodal models need at least the per-image token count (see below).
+            </li>
+            <li>
+                <strong><code>max-num-seqs</code></strong> (an Extra arg) — how many conversations run at
+                once. For one or two users, a small value (such as 2 to 4) reduces memory and the number of
+                CUDA graphs captured. Raise it for many concurrent users.
+            </li>
+            <li>
+                <strong>KV cache dtype</strong> — <code>fp8</code> halves the KV cache, so roughly twice the
+                tokens fit, if your GPU and vLLM build support it.
+            </li>
+            <li>
+                <strong>Data type</strong> — leave at <code>auto</code> unless the hint under the field
+                (for example on the Intel stack) says otherwise.
+            </li>
+            <li>
+                <strong>Block size</strong> — leave at the default unless your hardware's vLLM build
+                documents a different one (the Intel example in the README uses 64).
+            </li>
+            <li>
+                <strong>Enforce eager</strong> — see <a href="#eager-vs-graphs">Eager mode vs CUDA graphs</a>
+                below: speed against start-up time, memory, and the neuron map.
+            </li>
+        </ul>
+
+        <h3 class="h6">5. Load, read the log, adjust</h3>
+        <p>Start conservative, swap, and read the start-up log (the swap dialog shows it live):</p>
+        <ul>
+            <li>
+                <strong>"the KV cache … is larger than the available KV cache memory … estimated maximum
+                model length is N"</strong> — lower Max model length to about N, or raise the utilization,
+                or use a smaller or more quantized model.
+            </li>
+            <li>
+                <strong>Out-of-memory while loading</strong> — lower the utilization, free GPU memory used by
+                other programs, or use a smaller or more quantized model.
+            </li>
+            <li>
+                <strong>The load works but the KV cache is tiny</strong> (the concurrency figure is barely
+                1×) — the same fixes, or turn Enforce eager on to free the graph memory.
+            </li>
+        </ul>
+
+        <h3 class="h6">Things that commonly bite</h3>
+        <ul>
+            <li>
+                <strong>Multimodal models need room for an image.</strong> vLLM refuses to start unless
+                <em>Max batched tokens</em> is at least the model's per-image token count, which can be
+                more than the default 2048 (one model needed 2496). The error reads
+                <code>max_tokens_per_mm_item (…) &gt; max_num_batched_tokens</code>.
+            </li>
+            <li>
+                <strong>Multimodal GGUF files may not load.</strong> vLLM's GGUF support is limited. If a
+                model works in another runtime (such as Ollama) but not here, look for an AWQ or other
+                safetensors build of it.
+            </li>
+            <li>
+                <strong>Only use speculative decoding the model supports.</strong> A model without
+                multi-token-prediction heads rejects the <code>mtp</code> method; leave speculative decoding
+                off unless the model is meant for it.
+            </li>
+        </ul>
+        <p class="mb-0 text-muted">
+            The project README has a worked recipe for a large MoE model on an Intel GPU, and the specific
+            models and settings that were measured on one NVIDIA test machine.
+        </p>
+    </UiPanel>
+</div>
+
+<div style="margin-bottom: var(--ui-space-4);" id="eager-vs-graphs">
+    <UiPanel Title="Eager mode vs CUDA graphs (and the neuron map)">
+        <ul class="mb-0">
+            <li>
+                <strong>Enforce eager on</strong> runs the model one operation at a time from Python. It
+                loads quickly and is the safest setting, but on a machine with a slow CPU it can be the
+                bottleneck: vLLM waits on one busy CPU core while the GPU sits partly idle.
+            </li>
+            <li>
+                <strong>Enforce eager off</strong> lets vLLM compile the model and capture CUDA graphs,
+                which replays the whole forward pass in one go. It was much faster for generation on the
+                same box, at the cost of a longer first start (the swap's <em>Warm up engine</em> step shows
+                the compile and graph capture) and more GPU memory (graphs come out of the utilization budget, see step 2 above).
+            </li>
+            <li>
+                <strong>The Overview neuron map only works with Enforce eager on.</strong> It reads each
+                layer through Python hooks, and those do not run inside a captured CUDA graph or compiled
+                code, so the map stays blank. Set <code>VIS_ENABLED</code> = <code>0</code> in the recipe's
+                environment vars for a graph recipe so the plugin stays out of the way, and keep a separate
+                eager recipe for the model when you want to watch the map.
+            </li>
+        </ul>
+    </UiPanel>
+</div>
+
 <div id="troubleshooting">
     <UiPanel Title="Troubleshooting">
         <ul class="mb-0">
@@ -126,6 +284,21 @@
                 defaults, vLLM may fall back to the model's own (sometimes very large) native context length.
             </li>
             <li>
+                <strong>The neuron map is blank but the model answers</strong> — the recipe almost certainly
+                has <em>Enforce eager</em> off (CUDA graphs); the map needs eager mode. See
+                <a href="#eager-vs-graphs">Eager mode vs CUDA graphs</a>. Also check that the plugin isn't
+                switched off (<code>VIS_ENABLED=0</code>, or <strong>Plugin on/off</strong> in the Neuron map
+                section).
+            </li>
+            <li>
+                <strong>Loading weights takes minutes</strong> — vLLM reads the whole model from disk.
+                The first load of a model that isn't in the operating system's file cache is limited by
+                your disk (about 55&nbsp;MB/s from a busy spinning disk: a 7.7&nbsp;GB model took 2.5 minutes
+                where a cached load took 3 seconds). Loading it again soon after is much faster. The swap
+                steps show real progress: <em>Start new process</em> (vLLM importing, about a minute on a
+                slow CPU), <em>Load weights</em>, <em>Warm up engine</em>, then <em>Health check</em>.
+            </li>
+            <li>
                 <strong>A swap seems stuck</strong> — the first load of an uncached Hugging Face model
                 downloads its weights first, which can take a long time on a slow connection; the swap
                 ceremony's progress steps and live log view show exactly where it is. If it's genuinely
@@ -135,3 +308,25 @@
         </ul>
     </UiPanel>
 </div>
+
+@code {
+    private const string BudgetFormula = """
+KV cache memory = total memory × utilization
+                  − weights
+                  − working memory      (roughly 1 to 2 GB, more for multimodal or large batches)
+                  − CUDA graphs         (roughly 0.5 to 2 GB; none when Enforce eager is on)
+""";
+
+    private const string KvFormula = """
+KV bytes per token = 2 × layers × KV heads × head size × bytes per value
+                     (16-bit values = 2 bytes; fp8 KV cache = 1 byte)
+tokens that fit    = KV cache memory ÷ KV bytes per token
+""";
+
+    private const string WorkedExample = """
+budget          = 16 × 0.90                  = 14.4 GB
+KV cache        = 14.4 − 5.5 − 1.5 − 1.0     =  6.4 GB
+KV per token    = 2 × 32 × 8 × 128 × 2 bytes = 128 KB
+tokens that fit = 6.4 GB ÷ 128 KB            ≈ 52,000 tokens
+""";
+}

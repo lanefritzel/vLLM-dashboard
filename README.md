@@ -274,6 +274,14 @@ configuration on the standard host-network stack. These variables go on the
 | `VIS_IDLE_GAP` | `0.6` | Seconds with no model step that count as "no request in flight" (used by a graceful off). |
 | `VIS_PREFILL_MIN` | `32` | A step with at least this many tokens counts as a new prompt arriving (used by a graceful on). |
 
+**The neuron map needs "Enforce eager" on.** The plugin reads each layer through
+Python forward hooks. With eager mode off, vLLM compiles the model and captures
+CUDA graphs, and hooks do not run inside a captured graph, so the map stays
+blank (the model still answers normally). For a recipe that runs with CUDA graphs,
+add the environment variable `VIS_ENABLED=0` to the recipe so the plugin stays out
+of the way, and keep a separate eager recipe for the same model for when you want
+to watch the map. See [Eager mode vs CUDA graphs](#eager-mode-vs-cuda-graphs).
+
 Less common tuning (`VIS_BUCKET`, `VIS_ARM_TTL`, `VIS_MAX_STREAMS`,
 `VIS_MAX_ERRORS`) is documented in the plugin's own README. The plugin only
 reads numbers vLLM already computes, never changes a response, and switches
@@ -350,3 +358,53 @@ Your own values will differ; this is here for the escape-hatch fields
 The **Extra args** row is the general escape hatch for any vLLM flag the
 typed recipe fields don't cover — like this model's Mamba-cache options —
 without waiting on the dashboard to add a dedicated field for it.
+
+### Known recipes
+
+Settings that were actually loaded and served, as a starting point. They were
+tested on one box (**NVIDIA RTX 3060 12 GB, Intel i7-4790, vLLM 0.33.0**), so
+treat them as a starting point for your own hardware, not a guarantee. Fields not
+listed are left at their defaults (KV cache dtype `auto`, dtype `auto`, speculative
+decoding off). These are examples from one machine; the dashboard's **Help** page has a
+hardware-neutral guide to working out your own settings (memory budget, KV cache size,
+max model length, and how to read vLLM's start-up log).
+
+| Model | Max len | GPU mem | Enforce eager | Batched tokens | Block | Extra |
+|---|---|---|---|---|---|---|
+| `Qwen/Qwen3-0.6B` | 40960 | 0.90 | on | 8192 | 64 | Small, loads in under a minute; a good first test. |
+| `unsloth/gemma-3-4b-it` | 4096 | 0.90 | on | 2048 | 16 | Fits comfortably in 12 GB. |
+| `nicklas373/Huihui-gemma-4-12B-it-abliterated-AWQ` (Gemma 4 12B, 4-bit AWQ, **fast**) | 1024 | 0.93 | **off** | 4096 | 16 | Extra arg `max-num-seqs` = `4`; env var `VIS_ENABLED` = `0`. |
+| same model, **eager** (neuron map works) | 2048 | 0.95 | on | 4096 | 16 | About 12 tokens/s on that box, far slower than the row above. |
+
+Things that bit during testing:
+
+- **Gemma 4 is multimodal**, so vLLM refuses to start unless *Max batched tokens*
+  is at least **2496** (room for one image). The default 2048 fails with
+  `max_tokens_per_mm_item (2496) > max_num_batched_tokens`.
+- **Gemma 4 GGUF files do not load** in vLLM 0.33 (multimodal GGUF is not
+  supported). Use an AWQ or other safetensors build of the same model.
+- **Qwen3-0.6B cannot use `mtp` speculative decoding**; leave it off.
+- **On a 12 GB card with CUDA graphs on**, graphs and compile buffers come out of
+  the GPU memory budget. At 0.85 a 12B 4-bit model leaves almost nothing for the
+  KV cache; use 0.93 to 0.95 and cap `max-num-seqs`.
+
+### Eager mode vs CUDA graphs
+
+- **Enforce eager on** runs the model one operation at a time from Python. It
+  starts quickly and is the safest setting, but on a slow CPU it can be the
+  bottleneck: on the test box vLLM waited on one busy CPU core while the GPU was
+  about a third busy.
+- **Enforce eager off** lets vLLM compile the model and capture CUDA graphs, which
+  replays the whole forward pass at once. It was much faster for generation on the
+  same box, at the cost of a longer first start (the swap's *Warm up engine* step
+  shows the compile and graph capture) and more GPU memory.
+- **The neuron map only works with eager on** (see above).
+
+### Why a model load can take minutes
+
+vLLM reads the whole model from disk, so the first load of a model that is not in
+the operating system's file cache is limited by your disk. From a busy spinning
+disk (about 55 MB/s) a 7.7 GB model took 2.5 minutes to read; the same file read
+from cache took 3 seconds. The swap dialog shows where the time goes: *Start new
+process* (vLLM importing, about a minute on a slow CPU), *Load weights*, *Warm up
+engine*, then *Health check*.
