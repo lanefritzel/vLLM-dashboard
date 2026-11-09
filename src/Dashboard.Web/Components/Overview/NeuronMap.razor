@@ -51,7 +51,16 @@
             <Callout Tone="info" Title="No neuron-map feed from this instance">
                 The visualizer plugin isn't answering@(string.IsNullOrEmpty(_detail) ? "" : $" ({_detail})").
                 It needs <code>VIS_ENABLED=1</code> in the recipe's environment and its port reachable from the dashboard.
-                This page keeps retrying.
+                A recipe set up for speed (<em>Enforce eager</em> off) normally has <code>VIS_ENABLED=0</code>
+                on purpose, so no map is expected for it. This page keeps retrying.
+            </Callout>
+        }
+        else if (ShowNoDataHint)
+        {
+            <Callout Tone="info" Title="Connected, but no activity yet">
+                Send the model a prompt. If answers are coming back and this stays blank, the recipe
+                probably has <em>Enforce eager</em> off (CUDA graphs): the neuron map only works in eager
+                mode. See <a href="help#eager-vs-graphs">Eager mode vs CUDA graphs</a> in Help.
             </Callout>
         }
         @if (_paletteOpen && _palettes.Count > 0)
@@ -129,6 +138,21 @@
     private string _scale = "layer";
     private string _state = "idle";
     private string _detail = "";
+    private bool _everHadData; // sticky: Clear resets the canvas, but data did arrive
+    private DateTime? _liveSince;
+
+    /// <summary>How long the feed must be connected without a single snapshot before the page
+    /// explains why. A person who just opened the map hasn't sent a prompt yet.</summary>
+    [Parameter] public TimeSpan NoDataHintAfter { get; set; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>The hint is for a feed that is connected (plugin loaded and on) but has never
+    /// produced a snapshot -- the signature of a CUDA-graph recipe, where hooks don't run.</summary>
+    public static bool ShouldShowNoDataHint(string state, bool hasData, TimeSpan? liveFor, bool pluginTurnedOff, TimeSpan threshold) =>
+        state == "live" && !hasData && !pluginTurnedOff && liveFor is { } t && t >= threshold;
+
+    private bool ShowNoDataHint => ShouldShowNoDataHint(
+        _state, _everHadData, _liveSince is { } since ? DateTime.UtcNow - since : null,
+        _plugin is { Reachable: true, Enabled: false } or { Reachable: true, PendingDisable: true }, NoDataHintAfter);
 
     // What the switch shows is what the operator asked for; the chip explains the wait.
     private string PluginChoice => _plugin is null ? "on"
@@ -261,6 +285,8 @@
                 _started = false;
                 _joinedInstanceId = null;
                 _state = "idle";
+                _everHadData = false;
+                _liveSince = null;
                 StopPolling();
                 await JS.InvokeVoidAsync("neuronmap_stop");
             }
@@ -298,8 +324,18 @@
     public Task OnStatus(string state, string detail) => InvokeAsync(() =>
     {
         if (_disposed) return;
+        if (state == "live" && _state != "live") _liveSince = DateTime.UtcNow;
+        if (state != "live") _liveSince = null;
         _state = state;
         _detail = detail;
+        StateHasChanged();
+    });
+
+    [JSInvokable]
+    public Task OnHasData(bool hasData) => InvokeAsync(() =>
+    {
+        if (_disposed) return;
+        if (hasData) _everHadData = true;
         StateHasChanged();
     });
 

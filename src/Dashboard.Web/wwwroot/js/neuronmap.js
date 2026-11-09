@@ -324,6 +324,7 @@
 
   // ---- SignalR bridge ------------------------------------------------------------------------
   var conn = null, joinedId = null, renderer = null, statEl = null, scaleMode = 'layer';
+  var statusReceiver = null, hadData = false;
 
   function describe(s) {
     return s.snapshots ? (s.perSecond.toFixed(1) + ' updates/s · loudest layer ' + s.loudestLayer + ' · ' + s.hot + ' busy cells')
@@ -337,12 +338,22 @@
     statEl = statId ? document.getElementById(statId) : null;
     renderer = new Renderer(canvas, {
       fullEvery: fullEvery || 4, scale: scaleMode, palette: currentPalette(), gap: currentGap(),
-      onStats: function (s) { if (statEl) statEl.textContent = describe(s); }
+      onStats: function (s) {
+        if (statEl) statEl.textContent = describe(s);
+        // Tell the page only when data starts/stops arriving (not every frame): it uses this to
+        // explain a map that is connected but blank (usually a CUDA-graph recipe).
+        var has = !!s.snapshots;
+        if (has !== hadData) {
+          hadData = has;
+          if (statusReceiver) { try { statusReceiver.invokeMethodAsync('OnHasData', has); } catch (e) {} }
+        }
+      }
     });
     return true;
   };
 
   window.neuronmap_start = function (receiver) {
+    statusReceiver = receiver; hadData = false;
     if (conn) { try { conn.stop(); } catch (e) {} conn = null; }
     var c = new signalR.HubConnectionBuilder()
       .withUrl('/visualizer-hub')
