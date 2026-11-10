@@ -109,12 +109,13 @@ public sealed class ModelProxyService : IModelProxyService
 
         if (!string.IsNullOrWhiteSpace(requestedModelName))
         {
-            var error = await CheckModelActiveAsync(instance, requestedModelName, ct);
+            var (error, rewrittenBody) = await CheckModelActiveAsync(instance, requestedModelName, requestBody, ct);
             if (error is { } e)
             {
                 await WriteErrorAsync(context, e.StatusCode, e.Message);
                 return;
             }
+            requestBody = rewrittenBody;
         }
 
         await ForwardAsync(context, inferenceBaseUrl, instance, path, requestBody, requestedModelName, ct);
@@ -122,35 +123,69 @@ public sealed class ModelProxyService : IModelProxyService
 
     private readonly record struct ProxyError(int StatusCode, string Message);
 
-    /// <summary>Returns null when the requested model is already the active one --
-    /// never swaps, never calls the supervisor or Docker. Compares against each
-    /// RECIPE's own served_model_name, not the dashboard's internal catalog
-    /// Model.Name (P15a fix): a real vLLM backend only ever answers to its own
-    /// --served-model-name once deployed, so that's the only value a real client
-    /// can legitimately send as "model" -- the Instances page's own client
-    /// snippet (P15a) tells clients exactly that. A name that isn't any recipe's
-    /// served name on this server at all gets 404; one that is, but belongs to a
-    /// recipe that isn't the active deployment, gets the helpful "swap it in the
-    /// dashboard" 400 (doc 3, P11's own error case) instead of being silently
-    /// forwarded against the wrong backend.</summary>
-    private async Task<ProxyError?> CheckModelActiveAsync(Instance instance, string requestedModelName, CancellationToken ct)
+    /// <summary>Decides whether a request's <c>"model"</c> can be forwarded; never swaps,
+    /// never calls the supervisor or Docker. Returns the (possibly rewritten) body to
+    /// forward, or an error. Accepted names, in order:
+    /// <list type="number">
+    /// <item>the active recipe's served_model_name (what vLLM itself answers to) -- body
+    /// forwarded untouched, exactly as before (P15a);</item>
+    /// <item>the active deployment's catalog model name -- the name <c>GET /v1/models</c>
+    /// lists -- rewritten to the served name before forwarding, so a client that picks a
+    /// model from the list can use it. Without this, discovery listed names completions
+    /// rejected (every recipe typically serves as "main").</item>
+    /// </list>
+    /// A name that is a recipe's served name or a catalog model, but not the active one,
+    /// gets the helpful "swap it in the dashboard" 400 (doc 3, P11's own error case)
+    /// instead of being silently forwarded against the wrong backend; anything else is 404.</summary>
+    private async Task<(ProxyError? Error, string Body)> CheckModelActiveAsync(
+        Instance instance, string requestedModelName, string body, CancellationToken ct)
     {
         var active = await _deployments.GetActiveAsync(instance.Id, ct);
         if (active is not null)
         {
             var activeRecipe = await _recipes.GetAsync(active.RecipeId, ct);
-            if (activeRecipe is not null && string.Equals(activeRecipe.ServedModelName, requestedModelName, StringComparison.Ordinal))
-                return null; // already serving the right model — nothing to do
+            if (activeRecipe is not null)
+            {
+                if (string.Equals(activeRecipe.ServedModelName, requestedModelName, StringComparison.Ordinal))
+                    return (null, body); // already the served name -- forward untouched
+
+                var activeModel = await _models.GetAsync(active.ModelId, ct);
+                if (activeModel is not null &&
+                    string.Equals(activeModel.Name, requestedModelName, StringComparison.Ordinal))
+                    return (null, RewriteModelField(body, activeRecipe.ServedModelName) ?? body);
+            }
         }
 
         var registered = (await _recipes.ListByServerAsync(instance.ServerId, ct))
-            .Any(r => string.Equals(r.ServedModelName, requestedModelName, StringComparison.Ordinal));
+                .Any(r => string.Equals(r.ServedModelName, requestedModelName, StringComparison.Ordinal))
+            || (await _models.ListByServerAsync(instance.ServerId, ct))
+                .Any(m => string.Equals(m.Name, requestedModelName, StringComparison.Ordinal));
         if (!registered)
-            return new ProxyError(StatusCodes.Status404NotFound, $"Model '{requestedModelName}' is not registered.");
+            return (new ProxyError(StatusCodes.Status404NotFound, $"Model '{requestedModelName}' is not registered."), body);
 
-        return new ProxyError(
+        return (new ProxyError(
             StatusCodes.Status400BadRequest,
-            $"Model '{requestedModelName}' is registered but not active — swap it in the dashboard.");
+            $"Model '{requestedModelName}' is registered but not active — swap it in the dashboard."), body);
+    }
+
+    /// <summary>Returns the JSON body with its top-level <c>"model"</c> set to
+    /// <paramref name="servedName"/>, leaving every other field as it was. Null when the
+    /// body isn't a JSON object (the caller then forwards it unchanged). Pure/no I/O.</summary>
+    internal static string? RewriteModelField(string? json, string servedName)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(json) is not System.Text.Json.Nodes.JsonObject obj)
+                return null;
+            obj["model"] = servedName;
+            return obj.ToJsonString();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static async Task<string> BufferRequestBodyAsync(HttpContext context, CancellationToken ct)
