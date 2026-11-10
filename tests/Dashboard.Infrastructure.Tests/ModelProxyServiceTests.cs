@@ -24,6 +24,10 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
     private IHost? _dashboardHost;
     private IHost? _fakeUpstream;
 
+    /// <summary>The last request body the fake upstream (standing in for vLLM) received --
+    /// lets a test assert what the proxy actually forwarded, e.g. a rewritten "model".</summary>
+    private string? _lastUpstreamBody;
+
     public async ValueTask DisposeAsync()
     {
         if (_dashboardHost is not null) await _dashboardHost.StopAsync();
@@ -41,6 +45,8 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         var app = builder.Build();
         app.MapPost("/v1/chat/completions", async (HttpContext context) =>
         {
+            using (var reader = new StreamReader(context.Request.Body))
+                _lastUpstreamBody = await reader.ReadToEndAsync();
             context.Response.ContentType = "text/event-stream";
             foreach (var chunk in sseChunks)
             {
@@ -221,6 +227,80 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
         Assert.Contains("registered but not active", body);
         Assert.Contains("swap it in the dashboard", body);
     }
+
+    [Fact]
+    public async Task CatalogNameFromModelsList_OfTheActiveModel_IsRewrittenToTheServedName()
+    {
+        var sseChunks = new[] { "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n", "data: [DONE]\n\n" };
+        var upstream = await StartFakeUpstreamAsync(sseChunks, TimeSpan.Zero);
+        var (scopeFactory, client, _) = await StartDashboardHostAsync();
+        await SeedAsync(scopeFactory, upstream);
+
+        // "model-a" is what GET /v1/models lists; the active recipe serves it as "main".
+        var response = await client.PostAsync("/proxy/main/v1/chat/completions",
+            new StringContent("""{"model":"model-a","messages":[{"role":"user","content":"hi"}],"temperature":0.2,"stream":true}""",
+                System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("OK", await response.Content.ReadAsStringAsync());
+        using var forwarded = System.Text.Json.JsonDocument.Parse(_lastUpstreamBody!);
+        Assert.Equal("main", forwarded.RootElement.GetProperty("model").GetString());
+        // every other field survives the rewrite
+        Assert.Equal(0.2, forwarded.RootElement.GetProperty("temperature").GetDouble());
+        Assert.True(forwarded.RootElement.GetProperty("stream").GetBoolean());
+        Assert.Equal("hi", forwarded.RootElement.GetProperty("messages")[0].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task ServedName_StillForwardedUntouched()
+    {
+        var upstream = await StartFakeUpstreamAsync(["data: [DONE]\n\n"], TimeSpan.Zero);
+        var (scopeFactory, client, _) = await StartDashboardHostAsync();
+        await SeedAsync(scopeFactory, upstream);
+
+        const string body = """{"model":"main","messages":[]}""";
+        var response = await client.PostAsync("/proxy/main/v1/chat/completions",
+            new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(body, _lastUpstreamBody); // byte-for-byte, no rewrite
+    }
+
+    [Fact]
+    public async Task CatalogNameOfAModelThatIsNotActive_ReturnsTheSwapItInTheDashboardError()
+    {
+        var upstream = await StartFakeUpstreamAsync([], TimeSpan.Zero);
+        var (scopeFactory, client, _) = await StartDashboardHostAsync();
+        await SeedAsync(scopeFactory, upstream);
+
+        // "model-b" is listed by /v1/models but model-a is the one deployed.
+        var response = await client.PostAsync("/proxy/main/v1/chat/completions",
+            new StringContent("""{"model":"model-b","messages":[]}""", System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("registered but not active", body);
+        Assert.Null(_lastUpstreamBody); // never forwarded
+    }
+
+    [Theory]
+    [InlineData("""{"model":"model-a","n":1}""", "main")]
+    [InlineData("""{"n":1}""", "main")]
+    public void RewriteModelField_SetsModelAndKeepsOtherFields(string json, string served)
+    {
+        var rewritten = ModelProxyService.RewriteModelField(json, served);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(rewritten!);
+        Assert.Equal(served, doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal(1, doc.RootElement.GetProperty("n").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("[1,2]")]
+    public void RewriteModelField_NonObjectBody_ReturnsNull(string json) =>
+        Assert.Null(ModelProxyService.RewriteModelField(json, "main"));
 
     [Fact]
     public async Task UnregisteredModel_Returns404()
