@@ -12,9 +12,9 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 
-<PageTitle>Instances — vLLM Dashboard</PageTitle>
+<PageTitle>Engine Instances — vLLM Dashboard</PageTitle>
 
-<h1 class="page-title">Instances</h1>
+<h1 class="page-title">Engine Instances</h1>
 
 @if (_loading)
 {
@@ -22,11 +22,11 @@
 }
 else if (_rows.Count == 0)
 {
-    <UiPanel><EmptyState Variant="no-data" Title="No instances configured yet" Description="Register one on the Servers page." /></UiPanel>
+    <UiPanel><EmptyState Variant="no-data" Title="No engine instances configured yet" Description="Register one on the Servers page." /></UiPanel>
 }
 else
 {
-    <TableShell Caption="Instances" ColumnCount="5">
+    <TableShell Caption="Engine Instances" ColumnCount="5">
         <Header>
             <th scope="col">Label</th>
             <th scope="col">Proxy URL</th>

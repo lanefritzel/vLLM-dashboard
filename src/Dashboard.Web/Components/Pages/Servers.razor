@@ -38,11 +38,11 @@ else
                      Description="@($"{server.DockerHost ?? "no Docker host"} · {server.GpuName ?? "no GPU set"} {(server.GpuCount > 1 ? $"x{server.GpuCount}" : "")} {(server.GpuMemGb is { } gb ? $"({gb} GB)" : "")} · models dir: {(string.IsNullOrWhiteSpace(server.ModelsDir) ? "—" : server.ModelsDir)}")"
                      HeaderActions="@ServerHeaderActions(server)"
                      Flush="true">
-                <TableShell Caption="@($"Instances on {server.Label}")" ColumnCount="5"
+                <TableShell Caption="@($"Engine Instances on {server.Label}")" ColumnCount="5"
                             IsEmpty="@(!HasInstances(server.Id))"
-                            EmptyTitle="No instances on this server yet">
+                            EmptyTitle="No engine instances on this server yet">
                     <Header>
-                        <th scope="col">Instance</th>
+                        <th scope="col">Engine Instance</th>
                         <th scope="col">Proxy slug</th>
                         <th scope="col">Port</th>
                         <th scope="col">Supervisor</th>
@@ -69,7 +69,7 @@ else
                         }
                     </ChildContent>
                     <Footer>
-                        <UiButton Variant="secondary" Size="sm" OnClick="@(() => OpenNewInstance(server))">+ Add instance</UiButton>
+                        <UiButton Variant="secondary" Size="sm" OnClick="@(() => OpenNewInstance(server))">+ Add engine instance</UiButton>
                     </Footer>
                 </TableShell>
             </UiPanel>
@@ -133,7 +133,7 @@ else
 
 @if (_editingInstance is not null)
 {
-    <Dialog Title="@(_instanceIsNew ? "Add instance" : "Edit instance")" Size="md"
+    <Dialog Title="@(_instanceIsNew ? "Add engine instance" : "Edit engine instance")" Size="md"
             Open="@(_editingInstance is not null)" OpenChanged="@(open => { if (!open) CloseInstanceDialog(); })"
             Footer="@InstanceDialogFooter">
         <form id="instance-form" @onsubmit="SaveInstanceAsync" @onsubmit:preventDefault="true" class="row g-3">

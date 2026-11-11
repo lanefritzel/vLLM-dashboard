@@ -134,7 +134,7 @@ public class LlamaCppE2ETests : IAsyncDisposable
         await serverDialog.Locator("button:has-text('Save')").ClickAsync();
         await serverDialog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden });
 
-        await page.ClickAsync("button:has-text('+ Add instance')");
+        await page.ClickAsync("button:has-text('+ Add engine instance')");
         var instanceDialog = page.Locator("dialog[open]");
         await instanceDialog.Locator("label:has-text('Label') + input").FillAsync("primary");
         await instanceDialog.Locator("label:has-text('Proxy slug') + input").FillAsync("slug-" + Guid.NewGuid().ToString("n"));
