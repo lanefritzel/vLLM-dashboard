@@ -396,6 +396,108 @@ public class V2ServiceTests(PostgresFixture postgres)
             new Recipe { ServerId = server.Id, Name = "bad", ServedModelName = "main", Dtype = "bfloat16" }));
     }
 
+    private static async Task AddInstanceAsync(IServiceScopeFactory scopeFactory, int serverId, string engine, string slug)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        db.InstancesV2.Add(new Instance { ServerId = serverId, Label = slug, ProxySlug = slug, Engine = engine });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task RecipeService_CreateWithBfloat16_OnIntelServerWhoseInstancesAreAllLlamaCpp_Passes()
+    {
+        // The Intel dtype rule is a vLLM kernel limit; it must not reject a recipe that only llama.cpp will run.
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory, gpuName: "Intel Arc A770");
+        await AddInstanceAsync(scopeFactory, server.Id, "llamacpp", "llama-a");
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
+
+        var created = await service.CreateAsync(new Recipe { ServerId = server.Id, Name = "ok", ServedModelName = "main", Dtype = "bfloat16" });
+        Assert.True(created.Id > 0);
+    }
+
+    [Fact]
+    public async Task RecipeService_CreateWithBfloat16_OnIntelServerWithAVllmInstance_StillRejected()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory, gpuName: "Intel Arc A770");
+        await AddInstanceAsync(scopeFactory, server.Id, "llamacpp", "llama-a");
+        await AddInstanceAsync(scopeFactory, server.Id, "vllm", "vllm-a"); // mixed: the recipe could land on vLLM
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(
+            new Recipe { ServerId = server.Id, Name = "bad", ServedModelName = "main", Dtype = "bfloat16" }));
+    }
+
+    [Fact]
+    public async Task RecipeService_ValidateDraft_ExplicitLlamaCppEngine_IgnoresVllmOnlyRules()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory, gpuName: "Intel Arc A770"); // no instances at all
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var draft = new Recipe { ServerId = server.Id, Name = "d", ServedModelName = "main", Dtype = "bfloat16" };
+
+        var asLlama = await service.ValidateDraftAsync(draft, null, Dashboard.Core.Models.SourceType.LlamaCpp);
+        Assert.Empty(asLlama.HardBlocks);
+
+        var defaulted = await service.ValidateDraftAsync(draft, null); // no instances, no explicit engine -> vLLM rules
+        Assert.Contains(defaulted.HardBlocks, i => i.Code == "dtype_bfloat16_blocked_on_intel");
+    }
+
+    [Fact]
+    public async Task RecipeService_ValidateAsync_UsesTheGivenEngine()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory, gpuName: "Intel Arc A770");
+        var service = new RecipeService(scopeFactory, new ReadOnlyGuard());
+        var modelId = await SeedModelAndRecipeAsync(scopeFactory, server.Id, dtype: "bfloat16");
+
+        var asLlama = await service.ValidateAsync(modelId.RecipeId, modelId.ModelId, Dashboard.Core.Models.SourceType.LlamaCpp);
+        Assert.DoesNotContain(asLlama.HardBlocks, i => i.Code == "dtype_bfloat16_blocked_on_intel");
+    }
+
+    private static async Task<(int ModelId, int RecipeId)> SeedModelAndRecipeAsync(IServiceScopeFactory scopeFactory, int serverId, string dtype)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var model = new Model { ServerId = serverId, Name = "m", Path = "/models/m" };
+        // bypasses RecipeService so a rule-violating (legacy-shaped) row can exist
+        var recipe = new Recipe { ServerId = serverId, Name = "r", ServedModelName = "main", Dtype = dtype };
+        db.ModelsV2.Add(model);
+        db.RecipesV2.Add(recipe);
+        await db.SaveChangesAsync();
+        return (model.Id, recipe.Id);
+    }
+
+    // --- Instance.Engine persistence ---
+
+    [Fact]
+    public async Task InstanceService_EnginePersists_AndSurvivesAnUpdateThatCarriesIt()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var service = new InstanceService(scopeFactory, new ReadOnlyGuard());
+
+        var created = await service.CreateAsync(new Instance { ServerId = server.Id, Label = "l", ProxySlug = "l", Engine = "llamacpp" });
+        Assert.Equal("llamacpp", (await service.GetAsync(created.Id))!.Engine);
+
+        created.Label = "renamed";
+        await service.UpdateAsync(created);
+        Assert.Equal("llamacpp", (await service.GetAsync(created.Id))!.Engine);
+    }
+
+    [Fact]
+    public async Task InstanceService_UnknownEngine_IsRejected_NotSilentlyTreatedAsVllm()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var service = new InstanceService(scopeFactory, new ReadOnlyGuard());
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(
+            new Instance { ServerId = server.Id, Label = "l", ProxySlug = "l", Engine = "llama" }));
+    }
+
     [Fact]
     public async Task RecipeService_CreateWithFloat16OnIntelServer_Passes()
     {

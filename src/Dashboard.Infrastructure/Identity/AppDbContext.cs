@@ -197,6 +197,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.Property(i => i.Id).UseIdentityAlwaysColumn();
             entity.Property(i => i.Label).IsRequired();
             entity.Property(i => i.ProxySlug).IsRequired();
+            entity.Property(i => i.Engine).HasMaxLength(20).IsRequired().HasDefaultValue(Dashboard.Core.Models.SourceTypeExtensions.ToStorage(Dashboard.Core.Models.SourceType.Vllm));
             entity.HasIndex(i => i.ProxySlug).IsUnique();
             entity.Property(i => i.CreatedAt).HasDefaultValueSql("now()");
             // Restrict: a server with instances on it shouldn't vanish out from under

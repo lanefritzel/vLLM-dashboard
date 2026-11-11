@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @attribute [Authorize]
 @using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
 @using Dashboard.Core.Supervisor
 @using Dashboard.Infrastructure.Persistence.V2
 @using Dashboard.Web.Components.Shared
@@ -147,7 +148,17 @@ else
                 </UiField>
             </div>
             <div class="col-md-4">
-                <UiField Label="vLLM port" For="in-port">
+                <UiField Label="Engine" For="in-engine">
+                    <UiSelect Id="in-engine" @bind-Value="_inEngine">
+                        @foreach (var engine in EngineCapabilities.Options)
+                        {
+                            <option value="@engine.Storage">@engine.Label</option>
+                        }
+                    </UiSelect>
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="Engine port" For="in-port">
                     <UiInput Id="in-port" Type="number" Value="@_inPort.ToString()" ValueChanged="@(v => _inPort = int.TryParse(v, out var n) ? n : _inPort)" />
                 </UiField>
             </div>
@@ -223,6 +234,7 @@ else
     private bool _instanceIsNew;
     private string _inLabel = "";
     private string _inProxySlug = "";
+    private string _inEngine = EngineCapabilities.DefaultEngine.Storage;
     private int _inPort = 9999;
     private string _inContainerName = "";
     private int _inPollIntervalMs = 1000;
@@ -334,7 +346,7 @@ else
         _editingInstanceServerId = server.Id;
         _editingInstance = new Instance { ServerId = server.Id };
         _instanceIsNew = true;
-        _inLabel = ""; _inProxySlug = ""; _inPort = 9999; _inContainerName = ""; _inPollIntervalMs = 1000;
+        _inLabel = ""; _inProxySlug = ""; _inEngine = EngineCapabilities.DefaultEngine.Storage; _inPort = 9999; _inContainerName = ""; _inPollIntervalMs = 1000;
         _inAdminUrl = "";
         _testResult = null;
         _autoStartOn = null;
@@ -347,6 +359,7 @@ else
         _instanceIsNew = false;
         _inLabel = instance.Label;
         _inProxySlug = instance.ProxySlug;
+        _inEngine = instance.Engine;
         _inPort = instance.Port;
         _inContainerName = instance.ContainerName ?? "";
         _inPollIntervalMs = instance.PollIntervalMs;
@@ -431,7 +444,7 @@ else
             var instance = new Instance
             {
                 Id = _editingInstance!.Id, ServerId = _editingInstanceServerId,
-                Label = _inLabel.Trim(), ProxySlug = _inProxySlug.Trim(), Port = Math.Max(1, _inPort),
+                Label = _inLabel.Trim(), ProxySlug = _inProxySlug.Trim(), Engine = _inEngine, Port = Math.Max(1, _inPort),
                 ContainerName = string.IsNullOrWhiteSpace(_inContainerName) ? null : _inContainerName.Trim(),
                 PollIntervalMs = Math.Max(100, _inPollIntervalMs),
                 AdminUrl = string.IsNullOrWhiteSpace(_inAdminUrl) ? null : _inAdminUrl.Trim(),

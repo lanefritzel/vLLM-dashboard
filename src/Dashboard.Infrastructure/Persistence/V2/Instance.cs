@@ -1,3 +1,5 @@
+using Dashboard.Core.Models;
+
 namespace Dashboard.Infrastructure.Persistence.V2;
 
 /// <summary>A vLLM instance on a <see cref="Server"/> (table <c>instances</c>) — the
@@ -32,6 +34,13 @@ public class Instance
     /// itself is unreachable. Null until set (e.g. at supervisor registration,
     /// P15b) -- those actions simply aren't offered without it.</summary>
     public string? ContainerName { get; set; }
+
+    /// <summary>Which inference engine this instance's supervisor wraps, stored as
+    /// <see cref="SourceType"/>'s storage string ("vllm" | "llamacpp"). Drives which arg
+    /// builder, compatibility rules and metrics source apply (P3).</summary>
+    public string Engine { get; set; } = SourceType.Vllm.ToStorage();
+
+    public SourceType EngineType => SourceTypeExtensions.FromStorage(Engine);
 
     public int Port { get; set; } = 9999;
     public int PollIntervalMs { get; set; } = 1000;

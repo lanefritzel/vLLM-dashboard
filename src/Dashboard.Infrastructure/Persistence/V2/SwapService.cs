@@ -61,8 +61,10 @@ public sealed class SwapService : ISwapService
         var server = await _servers.GetAsync(recipe.ServerId, ct) ?? throw new KeyNotFoundException($"No server with id {recipe.ServerId}.");
 
         // 1 - pre-flight: P09a compatibility + P09b validation, full model-aware check.
+        var engine = instance.EngineType;
+        var coreRecipe = CoreRecipeMappers.ToCoreRecipe(recipe, engine);
         var compat = CompatibilityPass.Check(
-            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(recipe), CoreRecipeMappers.ToCoreServer(server));
+            CoreRecipeMappers.ToCoreModel(model), coreRecipe, CoreRecipeMappers.ToCoreServer(server));
         if (compat.HardBlocks.Count > 0)
             throw new ArgumentException(string.Join(" ", compat.HardBlocks.Select(i => i.Message)));
 
@@ -85,8 +87,8 @@ public sealed class SwapService : ISwapService
         }
 
         // 2 - build {argv, env} (P09a).
-        var built = ArgBuilder.Build(
-            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(recipe),
+        var built = new ArgBuilderFactory().Create(engine).Build(
+            CoreRecipeMappers.ToCoreModel(model), coreRecipe,
             CoreRecipeMappers.ToCoreInstance(instance), CoreRecipeMappers.ToCoreServer(server));
 
         // 3 - insert "pending" deployment row, args_snapshot = argv. The partial
