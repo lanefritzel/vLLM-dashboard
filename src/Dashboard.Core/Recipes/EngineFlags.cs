@@ -8,4 +8,5 @@ public static class EngineFlags
     public const string VllmMaxModelLen = "--max-model-len";
     public const string LlamaCppAlias = "--alias";
     public const string LlamaCppCtxSize = "--ctx-size";
+    public const string LlamaCppGpuLayers = "--gpu-layers";
 }

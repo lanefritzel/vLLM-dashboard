@@ -862,6 +862,10 @@ namespace Dashboard.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("jsonb");
 
+                    b.Property<string>("GpuLayers")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<float>("GpuMemoryUtilization")
                         .HasColumnType("real");
 

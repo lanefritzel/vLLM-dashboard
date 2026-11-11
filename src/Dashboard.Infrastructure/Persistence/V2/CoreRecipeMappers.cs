@@ -41,6 +41,7 @@ internal static class CoreRecipeMappers
         {
             ServedModelName = recipe.ServedModelName,
             MaxModelLen = recipe.MaxModelLen,
+            GpuLayers = LlamaCppGpuLayersExtensions.FromStorage(recipe.GpuLayers),
             ExtraArgs = ParseExtraArgs(recipe.ExtraArgs),
             ExtraEnv = ParseExtraEnv(recipe.ExtraEnv),
         },
