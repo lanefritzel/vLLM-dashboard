@@ -31,39 +31,8 @@ public static class CompatibilityPass
         var hardBlocks = new List<CompatibilityIssue>();
         var softWarnings = new List<CompatibilityIssue>();
 
-        // dtype rule (P09b v1, owner-confirmed 2026-11-01 -- the second qwen
-        // incident): bfloat16 is hard-blocked on the Intel stack, since its
-        // decode kernel only supports float16; unset/"auto" just warns there
-        // (it may silently resolve to bfloat16 at runtime); float16 passes;
-        // a non-Intel server gets no dtype issue at all. "Intel stack" =
-        // server.GpuName contains "intel" (case-insensitive) -- fragile by
-        // design, no vendor enum.
-        var isIntelStack = server.GpuName?.Contains("intel", StringComparison.OrdinalIgnoreCase) ?? false;
-        if (isIntelStack)
-        {
-            if (string.Equals(recipe.Dtype, "bfloat16", StringComparison.OrdinalIgnoreCase))
-            {
-                hardBlocks.Add(new CompatibilityIssue(
-                    "dtype_bfloat16_blocked_on_intel",
-                    "dtype=bfloat16 is blocked on the Intel stack -- its decode kernel only supports float16. Use dtype=float16."));
-            }
-            else if (string.IsNullOrWhiteSpace(recipe.Dtype) || string.Equals(recipe.Dtype, "auto", StringComparison.OrdinalIgnoreCase))
-            {
-                softWarnings.Add(new CompatibilityIssue(
-                    "dtype_auto_on_intel",
-                    "dtype is unset/auto on the Intel stack -- this may silently resolve to bfloat16 at runtime. Set dtype=float16 explicitly."));
-            }
-        }
-
         if (recipe.MaxModelLen <= 0)
             hardBlocks.Add(new CompatibilityIssue("max_model_len_not_positive", $"max_model_len ({recipe.MaxModelLen}) must be greater than 0."));
-
-        if (recipe.GpuMemoryUtilization <= 0 || recipe.GpuMemoryUtilization > 1)
-        {
-            hardBlocks.Add(new CompatibilityIssue(
-                "gpu_memory_utilization_out_of_range",
-                $"gpu_memory_utilization ({recipe.GpuMemoryUtilization}) must be greater than 0 and at most 1."));
-        }
 
         if (string.IsNullOrWhiteSpace(recipe.ServedModelName) || !ServedModelNamePattern.IsMatch(recipe.ServedModelName))
         {
@@ -72,13 +41,10 @@ public static class CompatibilityPass
                 $"served_model_name ({recipe.ServedModelName}) must be a valid identifier (letters, digits, '.', '_', '-', not starting with one of the symbols)."));
         }
 
-        var tensorParallelSize = ExtractTensorParallelSize(recipe);
-        if (tensorParallelSize > server.GpuCount)
-        {
-            hardBlocks.Add(new CompatibilityIssue(
-                "tensor_parallel_exceeds_gpu_count",
-                $"tensor-parallel-size ({tensorParallelSize}) exceeds this server's GPU count ({server.GpuCount})."));
-        }
+        // Engine-specific rules: a recipe is only checked against ITS engine's dial
+        // set (P1) -- a llama.cpp recipe has no dtype/GPU-memory/tensor-parallel rules.
+        if (recipe is VllmRecipe vllm)
+            CheckVllmDials(vllm, server, hardBlocks, softWarnings);
 
         return new CompatibilityResult { HardBlocks = hardBlocks, SoftWarnings = softWarnings };
     }
@@ -126,18 +92,61 @@ public static class CompatibilityPass
                 $"max_model_len ({recipe.MaxModelLen}) exceeds this model's own max_position_embeddings ({maxPositionEmbeddings})."));
         }
 
-        if (model.SizeBytes is { } sizeBytes && server.GpuMemGb is { } gpuMemGb && gpuMemGb > 0 && recipe.GpuMemoryUtilization > 0)
+        if (recipe is VllmRecipe vllm && model.SizeBytes is { } sizeBytes && server.GpuMemGb is { } gpuMemGb && gpuMemGb > 0 && vllm.GpuMemoryUtilization > 0)
         {
-            var fraction = sizeBytes / (gpuMemGb * 1e9 * recipe.GpuMemoryUtilization);
+            var fraction = sizeBytes / (gpuMemGb * 1e9 * vllm.GpuMemoryUtilization);
             if (fraction > 0.9)
             {
                 softWarnings.Add(new CompatibilityIssue(
                     "gpu_memory_utilization_too_low",
-                    $"gpu_memory_utilization ({recipe.GpuMemoryUtilization}) may be too low to fit this model's weights in this server's GPU memory."));
+                    $"gpu_memory_utilization ({vllm.GpuMemoryUtilization}) may be too low to fit this model's weights in this server's GPU memory."));
             }
         }
 
         return new CompatibilityResult { HardBlocks = hardBlocks, SoftWarnings = softWarnings };
+    }
+
+    private static void CheckVllmDials(
+        VllmRecipe recipe, RecipeServer server, List<CompatibilityIssue> hardBlocks, List<CompatibilityIssue> softWarnings)
+    {
+        // dtype rule (P09b v1, owner-confirmed 2026-11-01 -- the second qwen
+        // incident): bfloat16 is hard-blocked on the Intel stack, since its
+        // decode kernel only supports float16; unset/"auto" just warns there
+        // (it may silently resolve to bfloat16 at runtime); float16 passes;
+        // a non-Intel server gets no dtype issue at all. "Intel stack" =
+        // server.GpuName contains "intel" (case-insensitive) -- fragile by
+        // design, no vendor enum.
+        var isIntelStack = server.GpuName?.Contains("intel", StringComparison.OrdinalIgnoreCase) ?? false;
+        if (isIntelStack)
+        {
+            if (string.Equals(recipe.Dtype, "bfloat16", StringComparison.OrdinalIgnoreCase))
+            {
+                hardBlocks.Add(new CompatibilityIssue(
+                    "dtype_bfloat16_blocked_on_intel",
+                    "dtype=bfloat16 is blocked on the Intel stack -- its decode kernel only supports float16. Use dtype=float16."));
+            }
+            else if (string.IsNullOrWhiteSpace(recipe.Dtype) || string.Equals(recipe.Dtype, "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                softWarnings.Add(new CompatibilityIssue(
+                    "dtype_auto_on_intel",
+                    "dtype is unset/auto on the Intel stack -- this may silently resolve to bfloat16 at runtime. Set dtype=float16 explicitly."));
+            }
+        }
+
+        if (recipe.GpuMemoryUtilization <= 0 || recipe.GpuMemoryUtilization > 1)
+        {
+            hardBlocks.Add(new CompatibilityIssue(
+                "gpu_memory_utilization_out_of_range",
+                $"gpu_memory_utilization ({recipe.GpuMemoryUtilization}) must be greater than 0 and at most 1."));
+        }
+
+        var tensorParallelSize = ExtractTensorParallelSize(recipe);
+        if (tensorParallelSize > server.GpuCount)
+        {
+            hardBlocks.Add(new CompatibilityIssue(
+                "tensor_parallel_exceeds_gpu_count",
+                $"tensor-parallel-size ({tensorParallelSize}) exceeds this server's GPU count ({server.GpuCount})."));
+        }
     }
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');

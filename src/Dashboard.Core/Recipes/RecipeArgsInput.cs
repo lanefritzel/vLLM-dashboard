@@ -1,13 +1,30 @@
 namespace Dashboard.Core.Recipes;
 
-/// <summary>A model-agnostic settings bundle, in <see cref="ArgBuilder"/>'s own
-/// plain-input shape — deliberately not the EF entity (Dashboard.Infrastructure.
-/// Persistence.V2.Recipe), since this builder is pure code with no DB dependency
-/// (P09a). A caller maps from the persisted recipe once that wiring exists (P09b+).</summary>
-public sealed record Recipe
+/// <summary>The engine-independent part of a recipe: only the fields that mean the
+/// same thing on every engine (P1). Engine-specific dials live on the derived
+/// <see cref="VllmRecipe"/> / <see cref="LlamaCppRecipe"/>, so an engine's builder
+/// can't even see another engine's dials -- structural, not runtime-ignored.
+/// Deliberately not the EF entity (Dashboard.Infrastructure.Persistence.V2.Recipe):
+/// pure code with no DB dependency (P09a).</summary>
+public abstract record Recipe
 {
     public string ServedModelName { get; init; } = "main";
     public int MaxModelLen { get; init; } = 8192;
+
+    /// <summary>Key/value rows, no leading "--"; a blank value means a boolean flag.
+    /// Applied last, after every dial, and in encounter order: a key that
+    /// duplicates an earlier flag REPLACES its value in place rather than emitting
+    /// the flag twice (doc 11 Phase 9).</summary>
+    public IReadOnlyList<RecipeExtraArg> ExtraArgs { get; init; } = Array.Empty<RecipeExtraArg>();
+
+    /// <summary>Env overrides for the engine process. Later entries win on a duplicate
+    /// key. The compose-owned base env is merged in by the caller, not here.</summary>
+    public IReadOnlyList<RecipeEnvOverride> ExtraEnv { get; init; } = Array.Empty<RecipeEnvOverride>();
+}
+
+/// <summary>vLLM's dial set, on top of the shared <see cref="Recipe"/> fields.</summary>
+public sealed record VllmRecipe : Recipe
+{
     public double GpuMemoryUtilization { get; init; } = 0.90;
     public string KvCacheDtype { get; init; } = "auto";
     public string Dtype { get; init; } = "auto";
@@ -24,17 +41,12 @@ public sealed record Recipe
     public bool EnableAutoToolChoice { get; init; }
     public string? ToolCallParser { get; init; }
     public string? ReasoningParser { get; init; }
-
-    /// <summary>Key/value rows, no leading "--"; a blank value means a boolean flag.
-    /// Applied last, after every dial above, and in encounter order: a key that
-    /// duplicates an earlier flag REPLACES its value in place rather than emitting
-    /// the flag twice (doc 11 Phase 9).</summary>
-    public IReadOnlyList<RecipeExtraArg> ExtraArgs { get; init; } = Array.Empty<RecipeExtraArg>();
-
-    /// <summary>Env overrides for the vLLM process. Later entries win on a duplicate
-    /// key. The compose-owned base env is merged in by the caller, not here.</summary>
-    public IReadOnlyList<RecipeEnvOverride> ExtraEnv { get; init; } = Array.Empty<RecipeEnvOverride>();
 }
+
+/// <summary>llama.cpp's dial set. Empty for now: the spike found only the shared
+/// fields (served name -> --alias, max len -> --ctx-size, extra args/env) carry
+/// over, and llama.cpp-native dials get added here when a phase needs them.</summary>
+public sealed record LlamaCppRecipe : Recipe;
 
 public sealed record RecipeExtraArg(string Key, string? Value);
 

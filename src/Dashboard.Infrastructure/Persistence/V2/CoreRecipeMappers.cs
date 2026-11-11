@@ -12,7 +12,7 @@ internal static class CoreRecipeMappers
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public static Dashboard.Core.Recipes.Recipe ToCoreRecipe(Recipe recipe) => new()
+    public static VllmRecipe ToCoreRecipe(Recipe recipe) => new()
     {
         ServedModelName = recipe.ServedModelName,
         MaxModelLen = recipe.MaxModelLen,

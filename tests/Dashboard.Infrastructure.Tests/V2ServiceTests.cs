@@ -473,7 +473,7 @@ public class V2ServiceTests(PostgresFixture postgres)
 
         var recipe = await recipeService.CreateFromModelAsync(model.Id, "from-qwen");
 
-        Assert.Equal(new Dashboard.Core.Recipes.Recipe().MaxModelLen, recipe.MaxModelLen);
+        Assert.Equal(new Dashboard.Core.Recipes.VllmRecipe().MaxModelLen, recipe.MaxModelLen);
     }
 
     // --- P13's "New recipe" entry point: an unsaved draft + live validation ---
