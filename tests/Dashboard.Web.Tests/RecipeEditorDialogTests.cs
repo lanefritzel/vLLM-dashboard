@@ -49,6 +49,41 @@ public class RecipeEditorDialogTests : BunitContext
         Assert.Contains("Max model length", cut.Markup);
     }
 
+    /// <summary>P6: the GPU-layers dropdown is llama.cpp-only -- vLLM has its own analogous dial
+    /// (GpuMemoryUtilization) and no --gpu-layers concept at all.</summary>
+    [Fact]
+    public void Vllm_HasNoGpuLayersDropdown()
+    {
+        var cut = RenderEditor(SourceType.Vllm);
+        Assert.Empty(cut.FindAll("#rc-gpu-layers"));
+    }
+
+    [Fact]
+    public void LlamaCpp_ShowsTheGpuLayersDropdown_WithExactlyThreeOptions_NoFreeText()
+    {
+        var cut = RenderEditor(SourceType.LlamaCpp);
+        var select = cut.Find("#rc-gpu-layers");
+        Assert.Equal("select", select.TagName.ToLowerInvariant());
+        var options = select.QuerySelectorAll("option");
+        Assert.Equal(3, options.Length);
+        Assert.Equal(new[] { "auto", "all", "cpu" }, options.Select(o => o.GetAttribute("value")));
+    }
+
+    [Fact]
+    public void LlamaCpp_GpuLayers_PrefillsFromTheRecipe_AndRoundTripsThroughSave()
+    {
+        var recipe = new Recipe { Id = 4, ServerId = 1, Name = "r", ServedModelName = "main", MaxModelLen = 4096, GpuLayers = "all" };
+        var cut = RenderEditor(SourceType.LlamaCpp, recipe);
+
+        Assert.Equal("all", cut.Find("#rc-gpu-layers").GetAttribute("value"));
+
+        cut.Find("#rc-gpu-layers").Change("cpu");
+        cut.Find("form#recipe-form").Submit();
+
+        var saved = Assert.Single(_saved);
+        Assert.Equal("cpu", saved.GpuLayers);
+    }
+
     [Fact]
     public void LlamaCpp_HidesEveryVllmOnlyDial()
     {

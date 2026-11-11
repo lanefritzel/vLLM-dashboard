@@ -126,4 +126,33 @@ public class LlamaCppArgBuilderTests
         Assert.True(flags.ContainsKey("--metrics"));
         Assert.Null(flags["--metrics"]);
     }
+
+    /// <summary>P6: Auto is llama.cpp's own default (confirmed via a real CUDA build's
+    /// --help), so this omits the flag entirely rather than spelling out "auto".</summary>
+    [Fact]
+    public void Build_GpuLayersAuto_OmitsTheFlag()
+    {
+        var recipe = PlainRecipe() with { GpuLayers = LlamaCppGpuLayers.Auto };
+        var result = LlamaCppArgBuilder.Build(PlainModel(), recipe, PlainInstance(), PlainServer());
+
+        Assert.False(ToFlagDictionary(result.Argv).ContainsKey("--gpu-layers"));
+    }
+
+    [Fact]
+    public void Build_GpuLayersAll_EmitsGpuLayersAll()
+    {
+        var recipe = PlainRecipe() with { GpuLayers = LlamaCppGpuLayers.All };
+        var result = LlamaCppArgBuilder.Build(PlainModel(), recipe, PlainInstance(), PlainServer());
+
+        Assert.Equal("all", ToFlagDictionary(result.Argv)["--gpu-layers"]);
+    }
+
+    [Fact]
+    public void Build_GpuLayersCpu_EmitsGpuLayersZero()
+    {
+        var recipe = PlainRecipe() with { GpuLayers = LlamaCppGpuLayers.Cpu };
+        var result = LlamaCppArgBuilder.Build(PlainModel(), recipe, PlainInstance(), PlainServer());
+
+        Assert.Equal("0", ToFlagDictionary(result.Argv)["--gpu-layers"]);
+    }
 }

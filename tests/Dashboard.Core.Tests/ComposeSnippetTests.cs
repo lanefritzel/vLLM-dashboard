@@ -83,17 +83,53 @@ public class ComposeSnippetTests
         Assert.Contains("BASE_IMAGE: vllm/vllm-openai:<pin-a-tag>", text);
     }
 
+    /// <summary>Intel has no confirmed GPU-enabled llama.cpp image (no such host to test
+    /// against), so it still asks the user to fill one in -- unlike NVIDIA below (P6).</summary>
     [Fact]
-    public void LlamaCpp_WithAGpu_AddsPassthrough_AndAsksForAGpuBuildOfTheBaseImage()
+    public void LlamaCpp_Intel_AddsPassthrough_ButStillAsksForAGpuBuildOfTheBaseImage()
     {
         var intel = ComposeSnippet.Generate(Req(SourceType.LlamaCpp, GpuVendor.Intel));
         Assert.Contains("- /dev/dri", intel);
         Assert.Contains("# BASE_IMAGE:", intel);
         Assert.DoesNotContain("driver: nvidia", intel);
+    }
 
-        var nvidia = ComposeSnippet.Generate(Req(SourceType.LlamaCpp, GpuVendor.Nvidia));
-        Assert.Contains("driver: nvidia", nvidia);
-        Assert.Contains("# BASE_IMAGE:", nvidia);
+    /// <summary>P6: confirmed via a real docker pull + manifest inspect -- a real base image
+    /// and digest, not a placeholder, unlike the Intel case above.</summary>
+    [Fact]
+    public void LlamaCpp_Nvidia_UsesTheConfirmedCudaImage_NotAPlaceholder()
+    {
+        var text = ComposeSnippet.Generate(Req(SourceType.LlamaCpp, GpuVendor.Nvidia));
+
+        Assert.Equal("""
+              supervisor:
+                build:
+                  context: ./supervisor
+                  dockerfile: Dockerfile.llamacpp
+                  args:
+                    BASE_IMAGE: ghcr.io/ggml-org/llama.cpp@sha256:17934f68b6efc68671800735f25e209b489f47b610cfbb5c0a5c30965b54023c
+                restart: unless-stopped
+                network_mode: host
+                init: true
+                deploy:
+                  resources:
+                    reservations:
+                      devices:
+                        - driver: nvidia
+                          count: all
+                          capabilities: [gpu]
+                volumes:
+                  - supervisor-state:/state
+                  - /data/models:/models:ro
+                environment:
+                  ADMIN_PORT: "8000"
+
+            # Also add to your top-level `volumes:` section:
+            #   supervisor-state:
+
+            """.Replace("\r\n", "\n"), text);
+
+        Assert.DoesNotContain("# BASE_IMAGE:", text);
     }
 
     [Fact]

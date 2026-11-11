@@ -129,6 +129,22 @@
             </div>
         }
 
+        @if (Engine == SourceType.LlamaCpp)
+        {
+            <div class="col-md-12"><div class="card-title mb-0">Hardware</div></div>
+            <div class="col-md-4">
+                <UiField Label="GPU layers (--gpu-layers)" For="rc-gpu-layers"
+                         Hint="Auto lets llama.cpp decide (its own default) -- omits the flag entirely.">
+                    <UiSelect Id="rc-gpu-layers" Value="@Dashboard.Core.Recipes.LlamaCppGpuLayersExtensions.ToStorage(_gpuLayers)"
+                              ValueChanged="@(v => { _gpuLayers = Dashboard.Core.Recipes.LlamaCppGpuLayersExtensions.FromStorage(v); _ = RevalidateAsync(); })">
+                        <option value="auto">Auto</option>
+                        <option value="all">All (GPU)</option>
+                        <option value="cpu">CPU only</option>
+                    </UiSelect>
+                </UiField>
+            </div>
+        }
+
         <div class="col-md-12">
             <details>
                 <summary style="cursor:pointer" class="card-title d-inline">Advanced</summary>
@@ -205,6 +221,7 @@
     private bool _enableAutoToolChoice;
     private string? _toolCallParser;
     private string? _reasoningParser;
+    private Dashboard.Core.Recipes.LlamaCppGpuLayers _gpuLayers;
     private List<(string Key, string Value)> _extraArgs = new();
     private List<(string Key, string Value)> _extraEnv = new();
 
@@ -235,6 +252,7 @@
         _enableAutoToolChoice = Model.EnableAutoToolChoice;
         _toolCallParser = Model.ToolCallParser;
         _reasoningParser = Model.ReasoningParser;
+        _gpuLayers = Dashboard.Core.Recipes.LlamaCppGpuLayersExtensions.FromStorage(Model.GpuLayers);
         _extraArgs = ParseRows(Model.ExtraArgs);
         _extraEnv = ParseRows(Model.ExtraEnv);
 
@@ -280,6 +298,7 @@
         EnableAutoToolChoice = _enableAutoToolChoice,
         ToolCallParser = _toolCallParser,
         ReasoningParser = _reasoningParser,
+        GpuLayers = Dashboard.Core.Recipes.LlamaCppGpuLayersExtensions.ToStorage(_gpuLayers),
         ExtraArgs = SerializeRows(_extraArgs),
         ExtraEnv = SerializeRows(_extraEnv),
     };

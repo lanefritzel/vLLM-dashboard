@@ -43,10 +43,44 @@ public sealed record VllmRecipe : Recipe
     public string? ReasoningParser { get; init; }
 }
 
-/// <summary>llama.cpp's dial set. Empty for now: the spike found only the shared
-/// fields (served name -> --alias, max len -> --ctx-size, extra args/env) carry
-/// over, and llama.cpp-native dials get added here when a phase needs them.</summary>
-public sealed record LlamaCppRecipe : Recipe;
+/// <summary>llama.cpp's dial set. The spike found only the shared fields (served name
+/// -> --alias, max len -> --ctx-size, extra args/env) carry over directly; <see
+/// cref="GpuLayers"/> (P6) is llama.cpp's own, with no vLLM equivalent (vLLM's analogous
+/// "how much VRAM" concept is <see cref="VllmRecipe.GpuMemoryUtilization"/>).</summary>
+public sealed record LlamaCppRecipe : Recipe
+{
+    public LlamaCppGpuLayers GpuLayers { get; init; } = LlamaCppGpuLayers.Auto;
+}
+
+/// <summary>How many model layers llama-server offloads to the GPU, confirmed against
+/// a real CUDA build's own --help (P6): llama.cpp's --gpu-layers takes an exact number,
+/// "auto", or "all" -- deliberately a closed dropdown here, not a free number field
+/// (owner call: no free text where a fat-finger could land on a nonsense value).
+/// "auto" is the engine's own default, so <see cref="Auto"/> omits the flag entirely
+/// rather than spelling out the word.</summary>
+public enum LlamaCppGpuLayers
+{
+    Auto,
+    All,
+    Cpu,
+}
+
+public static class LlamaCppGpuLayersExtensions
+{
+    public static string ToStorage(this LlamaCppGpuLayers value) => value switch
+    {
+        LlamaCppGpuLayers.All => "all",
+        LlamaCppGpuLayers.Cpu => "cpu",
+        _ => "auto",
+    };
+
+    public static LlamaCppGpuLayers FromStorage(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "all" => LlamaCppGpuLayers.All,
+        "cpu" => LlamaCppGpuLayers.Cpu,
+        _ => LlamaCppGpuLayers.Auto,
+    };
+}
 
 public sealed record RecipeExtraArg(string Key, string? Value);
 
