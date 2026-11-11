@@ -29,13 +29,24 @@ public sealed record ComposeSnippetRequest
 ///
 /// What is verified: Intel + vLLM mirrors the repo's reference supervisor service
 /// (deploy/docker-compose.p16a-test.yml), and llama.cpp on CPU uses Dockerfile.llamacpp's own
-/// pinned base. What is NOT verified in this repo, so the snippet asks the user to fill it in:
-/// the NVIDIA vLLM base image, and any GPU-enabled llama.cpp base image. The NVIDIA device
+/// pinned base. llama.cpp + NVIDIA (P6) points at ghcr.io/ggml-org/llama.cpp:server-cuda,
+/// pinned by digest after a real `docker pull` + `docker manifest inspect` -- the image and
+/// digest are real, not guessed, but a live GPU deploy against it is P6's own pending
+/// Definition-of-Done item, not yet done as of this comment. Bump the digest deliberately,
+/// same spirit as Dockerfile.llamacpp's own CPU base digest comment. What is NOT verified in
+/// this repo, so the snippet asks the user to fill it in: the NVIDIA vLLM base image, and any
+/// Intel-GPU-enabled llama.cpp base image (no such host to test against). The NVIDIA device
 /// reservation is Docker Compose's documented format, not something run here.
 /// </summary>
 public static class ComposeSnippet
 {
     private const string IntelVllmBaseImage = "intel/llm-scaler-vllm:0.21.0-b3"; // supervisor/Dockerfile's own default
+
+    // Confirmed to exist via a real `docker pull` + `docker manifest inspect` (P6) -- not
+    // guessed. A live GPU deploy against it is still pending (P6's own DoD). Bump deliberately,
+    // same spirit as Dockerfile.llamacpp's own CPU base digest comment.
+    private const string LlamaCppNvidiaBaseImage =
+        "ghcr.io/ggml-org/llama.cpp@sha256:17934f68b6efc68671800735f25e209b489f47b610cfbb5c0a5c30965b54023c";
 
     /// <summary>User-facing label for a GPU choice, for the picker.</summary>
     public static string GpuLabel(GpuVendor gpu) => gpu switch
@@ -127,9 +138,15 @@ public static class ComposeSnippet
                 ? $"        BASE_IMAGE: {IntelVllmBaseImage}"
                 : "        BASE_IMAGE: vllm/vllm-openai:<pin-a-tag>");
         }
+        else if (r.Gpu == GpuVendor.Nvidia)
+        {
+            lines.Add("      args:");
+            lines.Add($"        BASE_IMAGE: {LlamaCppNvidiaBaseImage}");
+        }
         else if (r.Gpu != GpuVendor.None)
         {
-            // CPU needs no override (Dockerfile.llamacpp pins a CPU base); a GPU wants a GPU-enabled build.
+            // CPU needs no override (Dockerfile.llamacpp pins a CPU base). Intel has no
+            // confirmed GPU-enabled llama.cpp image yet (no such host to test against).
             lines.Add("      args:");
             lines.Add("        # BASE_IMAGE: <a GPU-enabled llama.cpp server image for your hardware>");
         }

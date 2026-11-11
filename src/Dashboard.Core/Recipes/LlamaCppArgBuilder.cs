@@ -21,6 +21,18 @@ public static class LlamaCppArgBuilder
         ArgBuilderCommon.AppendFlag(argv, EngineFlags.LlamaCppAlias, recipe.ServedModelName);
         ArgBuilderCommon.AppendFlag(argv, EngineFlags.LlamaCppCtxSize, recipe.MaxModelLen.ToString(CultureInfo.InvariantCulture));
 
+        // Auto is llama.cpp's own default (confirmed via a real CUDA build's --help) --
+        // omit the flag rather than spelling out "auto".
+        switch (recipe.GpuLayers)
+        {
+            case LlamaCppGpuLayers.All:
+                ArgBuilderCommon.AppendFlag(argv, EngineFlags.LlamaCppGpuLayers, "all");
+                break;
+            case LlamaCppGpuLayers.Cpu:
+                ArgBuilderCommon.AppendFlag(argv, EngineFlags.LlamaCppGpuLayers, "0");
+                break;
+        }
+
         // /metrics is only served with --metrics; the dashboard's scraper needs it.
         ArgBuilderCommon.AppendFlag(argv, "--metrics", null);
 
