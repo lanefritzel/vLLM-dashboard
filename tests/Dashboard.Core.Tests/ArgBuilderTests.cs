@@ -7,7 +7,7 @@ public class ArgBuilderTests
     private static RecipeModel PlainModel(string path = "/data/models/plain-model") => new() { Path = path };
     private static RecipeServer PlainServer(string modelsDir = "/data/models") => new() { ModelsDir = modelsDir };
     private static RecipeInstance PlainInstance(int port = 9999) => new() { Port = port };
-    private static Recipe PlainRecipe() => new() { ServedModelName = "main" };
+    private static VllmRecipe PlainRecipe() => new() { ServedModelName = "main" };
 
     /// <summary>Parses "--flag value" / bare "--flag" pairs out of an argv list
     /// (skipping the leading "vllm" "serve" "&lt;path&gt;"), for order-independent
@@ -161,7 +161,7 @@ public class ArgBuilderTests
         var model = new RecipeModel { Path = "/data/models/qwen3.8-int4" };
         var server = new RecipeServer { ModelsDir = "/data/models" };
         var instance = new RecipeInstance { Port = 9999 };
-        var recipe = new Recipe
+        var recipe = new VllmRecipe
         {
             ServedModelName = "qwen3.8-vllm",
             Dtype = "float16",
