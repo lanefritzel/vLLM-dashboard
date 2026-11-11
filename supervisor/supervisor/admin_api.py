@@ -98,6 +98,7 @@ def create_app(
             "current_deployment_id": deploy_runner.current_deployment_id,
             "failure_report": failure_report,
             "smoke_ok": deploy_runner.last_smoke_ok,
+            "engine": deploy_runner.engine_info,
         }
 
     @admin.post("/admin/deploy")
