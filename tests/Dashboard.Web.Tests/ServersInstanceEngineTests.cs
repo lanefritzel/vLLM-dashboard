@@ -70,7 +70,7 @@ public class ServersInstanceEngineTests : BunitContext
     public void AddingAnInstance_LetsTheOperatorPickLlamaCpp()
     {
         var cut = RenderPage();
-        cut.FindAll("button").First(b => b.TextContent.Contains("Add instance")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Add engine instance")).Click();
         cut.Find("#in-label").Input("new");
         cut.Find("#in-slug").Input("new");
         cut.Find("#in-engine").Change("llamacpp");
@@ -83,7 +83,7 @@ public class ServersInstanceEngineTests : BunitContext
     public void AddingAnInstance_DefaultsToVllm()
     {
         var cut = RenderPage();
-        cut.FindAll("button").First(b => b.TextContent.Contains("Add instance")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Add engine instance")).Click();
         cut.Find("#in-label").Input("new");
         cut.Find("#in-slug").Input("new");
         cut.Find("form#instance-form").Submit();
@@ -95,7 +95,7 @@ public class ServersInstanceEngineTests : BunitContext
     public void EngineDropdown_OffersExactlyTheEnginesCoreDefines_AndNothingTypeable()
     {
         var cut = RenderPage();
-        cut.FindAll("button").First(b => b.TextContent.Contains("Add instance")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Add engine instance")).Click();
 
         var select = cut.Find("select#in-engine");
         var offered = select.QuerySelectorAll("option").Select(o => (o.GetAttribute("value"), o.TextContent.Trim())).ToArray();
@@ -111,7 +111,7 @@ public class ServersInstanceEngineTests : BunitContext
     public void SnippetPanel_FollowsTheChosenEngineAndGpu()
     {
         var cut = RenderPage();
-        cut.FindAll("button").First(b => b.TextContent.Contains("Add instance")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Add engine instance")).Click();
 
         Assert.Contains("dockerfile: Dockerfile\n", Snippet(cut)); // vLLM is the default
         cut.Find("#in-engine").Change("llamacpp");
@@ -126,7 +126,7 @@ public class ServersInstanceEngineTests : BunitContext
     public void SnippetPanel_PreselectsTheGpuFromTheServersGpuName_ButItStaysADropdown()
     {
         var cut = RenderPage("NVIDIA RTX 4090", null);
-        cut.FindAll("button").First(b => b.TextContent.Contains("Add instance")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Add engine instance")).Click();
 
         Assert.Equal("nvidia", cut.Find("#in-snippet-gpu").GetAttribute("value"));
         Assert.Empty(cut.FindAll("input#in-snippet-gpu"));
@@ -137,14 +137,14 @@ public class ServersInstanceEngineTests : BunitContext
     public void SnippetPanel_UsesThePortFromTheSupervisorUrl()
     {
         var cut = RenderPage();
-        cut.FindAll("button").First(b => b.TextContent.Contains("Add instance")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Add engine instance")).Click();
         cut.Find("#in-admin-url").Input("http://127.0.0.1:18001");
         Assert.Contains("ADMIN_PORT: \"18001\"", Snippet(cut));
     }
 
     private static string TestConnection(IRenderedComponent<Servers> cut, string engineValue)
     {
-        cut.FindAll("button").First(b => b.TextContent.Contains("Add instance")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Add engine instance")).Click();
         cut.Find("#in-engine").Change(engineValue);
         cut.Find("#in-admin-url").Input("http://127.0.0.1:18001");
         cut.FindAll("button").First(b => b.TextContent.Contains("Test connection")).Click();
