@@ -55,13 +55,13 @@ public class ServersPageE2ETests : IAsyncDisposable
         await page.GotoAsync(_fixture.BaseUrl + "/servers", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("button:has-text('+ Add server')");
-        var serverDialog = page.Locator(".modal-dialog-custom");
+        var serverDialog = page.Locator("dialog[open]");
         await serverDialog.Locator("input").First.FillAsync("srv-" + Guid.NewGuid().ToString("n"));
         await serverDialog.Locator("button:has-text('Save')").ClickAsync();
         await serverDialog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden });
 
         await page.ClickAsync("button:has-text('+ Add instance')");
-        var instanceDialog = page.Locator(".modal-dialog-custom");
+        var instanceDialog = page.Locator("dialog[open]");
         await instanceDialog.Locator("label:has-text('Label') + input").FillAsync("primary");
         await instanceDialog.Locator("label:has-text('Proxy slug') + input").FillAsync("slug-" + Guid.NewGuid().ToString("n"));
         var adminUrlInput = instanceDialog.Locator("label:has-text('Supervisor URL') + input");
@@ -74,7 +74,8 @@ public class ServersPageE2ETests : IAsyncDisposable
         await adminUrlInput.PressAsync("Tab");
 
         await instanceDialog.Locator("button:has-text('Test connection')").ClickAsync();
-        await instanceDialog.Locator(".alert-success:has-text('Connected')").WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
+        // Servers.razor's Test connection result renders through the Callout component now.
+        await instanceDialog.Locator(".ui-callout-success:has-text('Connected')").WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
 
         await instanceDialog.Locator("button:has-text('Save')").ClickAsync();
         await instanceDialog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden });
@@ -107,7 +108,7 @@ public class ServersPageE2ETests : IAsyncDisposable
         var page = await _fixture.NewLoggedInPageAsync();
         await page.GotoAsync(_fixture.BaseUrl + "/servers", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
         await page.ClickAsync("button:has-text('Edit') >> nth=1"); // 0 = server's own Edit, 1 = instance's
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         var toggle = dialog.Locator("input[type=checkbox]");
         await toggle.WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
 
@@ -118,7 +119,7 @@ public class ServersPageE2ETests : IAsyncDisposable
 
         await page.ReloadAsync(new PageReloadOptions { WaitUntil = WaitUntilState.NetworkIdle });
         await page.ClickAsync("button:has-text('Edit') >> nth=1");
-        var toggleAfterReload = page.Locator(".modal-dialog-custom input[type=checkbox]");
+        var toggleAfterReload = page.Locator("dialog[open] input[type=checkbox]");
         await toggleAfterReload.WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
 
         // The dialog shows a hardcoded "on" default the instant it opens, then
@@ -153,7 +154,7 @@ public class ServersPageE2ETests : IAsyncDisposable
         var page = await _fixture.NewLoggedInPageAsync();
         await page.GotoAsync(_fixture.BaseUrl + "/servers", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
         await page.ClickAsync("button:has-text('Edit') >> nth=1");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         await dialog.Locator("text=Changing this changes every client's proxy URL.").WaitForAsync();
 
         await dialog.Locator("label:has-text('Proxy slug') + input").FillAsync("new-slug");
