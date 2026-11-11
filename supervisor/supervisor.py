@@ -25,6 +25,7 @@ import uvicorn
 
 from supervisor.admin_api import create_app
 from supervisor.deploy_runner import DeployRunner
+from supervisor.engines import engine_from_env
 from supervisor.downloads import DownloadManager, HfClient
 from supervisor.event_push import EventPusher
 from supervisor.gpu_backend import detect_backend
@@ -108,7 +109,9 @@ async def main_async() -> None:
     event_pusher = EventPusher(url=DASHBOARD_EVENT_URL)
     gpu_backend = detect_backend(process_manager)  # once, at start (doc 5) -- nvidia-smi, then Intel sysfs, else generic
     print(f"supervisor: GPU backend detected -- {gpu_backend.vendor}", flush=True)
-    deploy_runner = DeployRunner(process_manager, state_store, event_pusher, gpu_backend)
+    engine = engine_from_env(os.environ)  # ENGINE env var, default vllm (P2)
+    print(f"supervisor: engine -- {engine}", flush=True)
+    deploy_runner = DeployRunner(process_manager, state_store, event_pusher, gpu_backend, engine=engine)
     download_manager = DownloadManager(HfClient(token=HF_TOKEN), models_root=MODELS_ROOT)
 
     await run_boot_sequence(deploy_runner, process_manager, state_store)

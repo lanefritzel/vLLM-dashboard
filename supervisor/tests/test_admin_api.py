@@ -424,3 +424,32 @@ def test_gpu_recheck_re_detects_instead_of_re_querying_the_frozen_backend(tmp_pa
 
     # The swap persists on the runner, not just the recheck response itself.
     assert client.get("/admin/gpu", headers=auth_headers()).json()["vendor"] == "fake"
+
+
+def test_status_reports_the_engine_for_a_vllm_supervisor(tmp_path):
+    client = new_client(tmp_path)
+    assert client.get("/admin/status", headers=auth_headers()).json()["engine"] == {"name": "vllm", "version": None}
+
+
+def test_status_reports_the_engine_for_a_llamacpp_supervisor(tmp_path):
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path), engine="llamacpp")
+    client = TestClient(create_app(pm, runner, StateStore(tmp_path / "state.json")))
+    assert client.get("/admin/status", headers=auth_headers()).json()["engine"] == {"name": "llamacpp", "version": None}
+
+
+def test_llamacpp_status_reports_the_childs_build_as_version(tmp_path):
+    import asyncio, socket
+    fake = str(Path(__file__).parent.parent.parent / "tests" / "fake-llamacpp" / "fake_llamacpp.py")
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path), engine="llamacpp")
+    client = TestClient(create_app(pm, runner, StateStore(tmp_path / "state.json")))
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    try:
+        argv = [sys.executable, fake, "--port", str(port), "--alias", "main"]
+        assert asyncio.run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=10, smoke={"skip": True}))
+        assert client.get("/admin/status", headers=auth_headers()).json()["engine"] == {"name": "llamacpp", "version": "bFAKE-0000"}
+    finally:
+        pm.stop()
