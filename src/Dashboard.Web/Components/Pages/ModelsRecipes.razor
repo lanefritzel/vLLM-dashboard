@@ -39,7 +39,7 @@ else
             @if (_instances.Count > 1)
             {
                 <div class="col-md-4">
-                    <UiField Label="Instance" For="mr-instance">
+                    <UiField Label="Engine Instance" For="mr-instance">
                         <UiSelect Id="mr-instance" Value="@_selectedInstanceId.ToString()" ValueChanged="OnInstanceValueChangedAsync">
                             @foreach (var inst in _instances)
                             {

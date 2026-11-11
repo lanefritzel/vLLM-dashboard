@@ -33,7 +33,7 @@
             <div class="card-title mb-2">Get started</div>
             <ol class="onboarding-checklist mb-0">
                 <li class="@(_onboarding.HasServerAndInstance ? "text-muted" : "")">
-                    @(_onboarding.HasServerAndInstance ? "✓" : "①") Register a server and instance
+                    @(_onboarding.HasServerAndInstance ? "✓" : "①") Register a server and engine instance
                     @if (!_onboarding.HasServerAndInstance)
                     {
                         <a href="servers">— go to Servers</a>
