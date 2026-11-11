@@ -46,6 +46,8 @@ public sealed class InstanceService : IInstanceService
     {
         if (string.IsNullOrWhiteSpace(instance.Label))
             throw new ArgumentException("An instance must have a label.");
+        if (!Dashboard.Core.Models.EngineCapabilities.IsKnownEngine(instance.Engine))
+            throw new ArgumentException($"Unknown engine '{instance.Engine}' -- expected 'vllm' or 'llamacpp'.");
         if (string.IsNullOrWhiteSpace(instance.ProxySlug) || !SlugPattern.IsMatch(instance.ProxySlug))
         {
             throw new ArgumentException(

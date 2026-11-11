@@ -21,6 +21,9 @@ public static class LlamaCppArgBuilder
         ArgBuilderCommon.AppendFlag(argv, "--alias", recipe.ServedModelName);
         ArgBuilderCommon.AppendFlag(argv, "--ctx-size", recipe.MaxModelLen.ToString(CultureInfo.InvariantCulture));
 
+        // /metrics is only served with --metrics; the dashboard's scraper needs it.
+        ArgBuilderCommon.AppendFlag(argv, "--metrics", null);
+
         // extra_args: may override anything above, same semantics as ArgBuilder.
         foreach (var extra in recipe.ExtraArgs)
             ArgBuilderCommon.AppendFlag(argv, "--" + extra.Key, string.IsNullOrEmpty(extra.Value) ? null : extra.Value);

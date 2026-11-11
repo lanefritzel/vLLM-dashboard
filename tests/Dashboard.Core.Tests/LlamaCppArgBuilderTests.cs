@@ -114,4 +114,16 @@ public class LlamaCppArgBuilderTests
 
         Assert.Equal(first.Argv, second.Argv);
     }
+
+    /// <summary>llama-server only serves /metrics when started with --metrics (confirmed
+    /// against a real server); without it the dashboard's scraper would see 404 forever.</summary>
+    [Fact]
+    public void Build_AlwaysEnablesTheMetricsEndpoint()
+    {
+        var result = LlamaCppArgBuilder.Build(PlainModel(), PlainRecipe(), PlainInstance(), PlainServer());
+
+        var flags = ToFlagDictionary(result.Argv);
+        Assert.True(flags.ContainsKey("--metrics"));
+        Assert.Null(flags["--metrics"]);
+    }
 }
