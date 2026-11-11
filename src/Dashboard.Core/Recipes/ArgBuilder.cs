@@ -77,7 +77,7 @@ public static class ArgBuilder
     /// — replaces its value in place (or removes a stale value if it's now a bare
     /// toggle), so a later caller (extra_args overriding a dial) never produces the
     /// same flag twice.</summary>
-    private static void AppendFlag(List<string> argv, string flag, string? value)
+    internal static void AppendFlag(List<string> argv, string flag, string? value)
     {
         var existingIndex = argv.IndexOf(flag);
         if (existingIndex >= 0)
@@ -101,7 +101,7 @@ public static class ArgBuilder
     /// Leaves the path untouched if it doesn't actually start with that prefix --
     /// a mismatch here is a data problem for the compatibility pass to flag
     /// (and, pre-conversion, for P01b's report), not something to silently guess at.</summary>
-    private static string ContainerModelPath(string hostPath, string modelsDir)
+    internal static string ContainerModelPath(string hostPath, string modelsDir)
     {
         var root = modelsDir.TrimEnd('/');
         return hostPath.StartsWith(root, StringComparison.Ordinal)
