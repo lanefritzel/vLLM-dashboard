@@ -30,8 +30,8 @@ public static class ArgBuilder
             ArgBuilderCommon.AppendFlag(argv, "--trust-remote-code", null);
 
         // 2 - recipe dials
-        ArgBuilderCommon.AppendFlag(argv, "--served-model-name", recipe.ServedModelName);
-        ArgBuilderCommon.AppendFlag(argv, "--max-model-len", recipe.MaxModelLen.ToString(CultureInfo.InvariantCulture));
+        ArgBuilderCommon.AppendFlag(argv, EngineFlags.VllmServedModelName, recipe.ServedModelName);
+        ArgBuilderCommon.AppendFlag(argv, EngineFlags.VllmMaxModelLen, recipe.MaxModelLen.ToString(CultureInfo.InvariantCulture));
         // "0.####": a plain ToString() on a value that started life as a float
         // (e.g. Postgres "real", widened to this field's double) can print up to
         // 17 garbage digits (0.8f -> "0.800000011920929") -- rounds that away

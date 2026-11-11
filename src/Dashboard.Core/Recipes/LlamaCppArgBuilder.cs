@@ -18,8 +18,8 @@ public static class LlamaCppArgBuilder
             "--model", ArgBuilderCommon.ContainerModelPath(model.Path, server.ModelsDir),
         };
 
-        ArgBuilderCommon.AppendFlag(argv, "--alias", recipe.ServedModelName);
-        ArgBuilderCommon.AppendFlag(argv, "--ctx-size", recipe.MaxModelLen.ToString(CultureInfo.InvariantCulture));
+        ArgBuilderCommon.AppendFlag(argv, EngineFlags.LlamaCppAlias, recipe.ServedModelName);
+        ArgBuilderCommon.AppendFlag(argv, EngineFlags.LlamaCppCtxSize, recipe.MaxModelLen.ToString(CultureInfo.InvariantCulture));
 
         // /metrics is only served with --metrics; the dashboard's scraper needs it.
         ArgBuilderCommon.AppendFlag(argv, "--metrics", null);

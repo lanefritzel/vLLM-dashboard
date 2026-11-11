@@ -1,3 +1,5 @@
+using Dashboard.Core.Recipes;
+
 namespace Dashboard.Core.Models;
 
 /// <summary>What each inference engine can report or support, so the UI can say "not available"
@@ -9,6 +11,19 @@ public static class EngineCapabilities
     public static bool ReportsKvCacheUsage(SourceType engine) => engine == SourceType.Vllm;
     public static bool HasNeuronMap(SourceType engine) => engine == SourceType.Vllm;
     public static bool HasWarmupPhase(SourceType engine) => engine == SourceType.Vllm;
+
+    /// <summary>Whether a recipe has engine-specific tuning dials beyond the shared fields (served
+    /// name, context length, extra args/env). Mirrors <see cref="VllmRecipe"/> having them and
+    /// <see cref="LlamaCppRecipe"/> not.</summary>
+    public static bool HasTuningDials(SourceType engine) => engine == SourceType.Vllm;
+
+    /// <summary>The flag this engine's argv uses for a recipe's served model name.</summary>
+    public static string ServedNameFlag(SourceType engine) =>
+        engine == SourceType.LlamaCpp ? EngineFlags.LlamaCppAlias : EngineFlags.VllmServedModelName;
+
+    /// <summary>The flag this engine's argv uses for a recipe's context length.</summary>
+    public static string ContextLengthFlag(SourceType engine) =>
+        engine == SourceType.LlamaCpp ? EngineFlags.LlamaCppCtxSize : EngineFlags.VllmMaxModelLen;
 
     /// <summary>The ONE list of engines a user can choose for an instance. The picker, the label
     /// lookup and save-time validation are all derived from it, so adding an engine means adding a
