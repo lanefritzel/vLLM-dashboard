@@ -89,4 +89,59 @@ public class HelpPageTests : BunitContext
         Assert.Contains("Enforce eager", text);
         Assert.Contains("Loading weights takes minutes", text);
     }
+
+    // ---- P5: engine comparison, with every claim marked as verified or not ----
+
+    private static IEnumerable<(string Topic, string Status, string Text)> EngineRows(IRenderedComponent<Help> cut) =>
+        cut.FindAll("#choosing-engine tbody tr").Select(tr =>
+        {
+            var cells = tr.QuerySelectorAll("td, th").Select(c => Flat(c.TextContent).Trim()).ToArray();
+            return (cells[0], cells[^1], string.Join(" ", cells));
+        });
+
+    [Fact]
+    public void ChoosingAnEngine_IsInTheContents_AndEveryRowStatesWhetherItWasVerified()
+    {
+        var cut = RenderHelp();
+        Assert.NotEmpty(cut.FindAll("a[href='#choosing-engine']"));
+
+        var rows = EngineRows(cut).ToList();
+        Assert.True(rows.Count >= 8);
+        Assert.All(rows, r => Assert.True(
+            r.Status.StartsWith("Verified") || r.Status.StartsWith("Unverified"), $"'{r.Topic}' has status '{r.Status}'"));
+    }
+
+    [Fact]
+    public void ChoosingAnEngine_SpikeConfirmedFacts_AreMarkedVerified()
+    {
+        var rows = EngineRows(RenderHelp()).ToDictionary(r => r.Topic, r => r);
+        foreach (var topic in new[] { "GGUF models", "KV-cache and latency metrics", "Start-up progress", "Neuron map" })
+            Assert.StartsWith("Verified", rows[topic].Status);
+        Assert.Contains("no KV-cache", rows["KV-cache and latency metrics"].Text);
+        Assert.Contains("three", rows["Start-up progress"].Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ChoosingAnEngine_ClaimsTheSpikeNeverChecked_StayMarkedUnverified()
+    {
+        var rows = EngineRows(RenderHelp()).ToDictionary(r => r.Topic, r => r);
+        foreach (var topic in new[] { "Many simultaneous users", "Models larger than VRAM", "GPU memory", "Hardware support" })
+            Assert.StartsWith("Unverified", rows[topic].Status);
+    }
+
+    [Fact]
+    public void ChoosingAnEngine_HasARuleOfThumb()
+    {
+        var text = Flat(RenderHelp().Find("#choosing-engine").TextContent);
+        Assert.Contains("many simultaneous users", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("llama.cpp", text);
+    }
+
+    [Fact]
+    public void VllmOnlyGuidance_SaysItIsVllmOnly()
+    {
+        var cut = RenderHelp();
+        Assert.Contains("vLLM only", cut.Find("#eager-vs-graphs").TextContent);
+        Assert.Contains("llama.cpp", cut.Find("#troubleshooting").TextContent);
+    }
 }

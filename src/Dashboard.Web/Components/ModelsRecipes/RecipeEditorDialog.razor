@@ -1,3 +1,4 @@
+@using Dashboard.Core.Models
 @using Dashboard.Infrastructure.Persistence.V2
 @inject IRecipeService Recipes
 
@@ -46,84 +47,87 @@
         </div>
         <div class="col-md-6">
             <UiField Label="Served model name" For="rc-served-name"
-                     Hint="Pre-filled from the instance's currently-active served name (or &quot;main&quot; when nothing is active). A different value here changes what API clients request this model by once swapped in — you'll be asked to confirm that at swap time.">
+                     Hint="@ServedNameHint">
                 <UiInput Id="rc-served-name" Value="@_servedModelName" ValueChanged="@(v => { _servedModelName = v; _ = RevalidateAsync(); })" />
             </UiField>
         </div>
 
-        <div class="col-md-12"><div class="card-title mb-0">Sizing &amp; memory</div></div>
+        <div class="col-md-12"><div class="card-title mb-0">@(EngineCapabilities.HasTuningDials(Engine) ? "Sizing & memory" : "Sizing")</div></div>
         <div class="col-md-4">
-            <UiField Label="Max model length" For="rc-max-len">
+            <UiField Label="@MaxLenLabel" For="rc-max-len">
                 <UiInput Id="rc-max-len" Type="number" Value="@_maxModelLen.ToString()" ValueChanged="@(v => { _maxModelLen = int.TryParse(v, out var n) ? n : _maxModelLen; _ = RevalidateAsync(); })" />
             </UiField>
         </div>
-        <div class="col-md-4">
-            <UiField Label="GPU memory utilization" For="rc-gpu-mem">
-                <UiInput Id="rc-gpu-mem" Type="number" step="0.01" min="0" max="1" Value="@_gpuMemoryUtilization.ToString()" ValueChanged="@(v => { _gpuMemoryUtilization = float.TryParse(v, out var n) ? n : _gpuMemoryUtilization; _ = RevalidateAsync(); })" />
-            </UiField>
-        </div>
-        <div class="col-md-4">
-            <UiField Label="KV cache dtype" For="rc-kv-dtype">
-                <UiSelect Id="rc-kv-dtype" Value="@_kvCacheDtype" ValueChanged="@(v => { _kvCacheDtype = v; _ = RevalidateAsync(); })">
-                    <option value="auto">auto</option>
-                    <option value="fp8_e4m3">fp8_e4m3</option>
-                    <option value="float16">float16</option>
-                    <option value="bfloat16">bfloat16</option>
-                </UiSelect>
-            </UiField>
-        </div>
-        <div class="col-md-4">
-            <UiField Label="Data type (--dtype)" For="rc-dtype" Hint="On the Intel stack, bfloat16 is blocked and auto warns — the reason shows above if so.">
-                <UiSelect Id="rc-dtype" Value="@_dtype" ValueChanged="@(v => { _dtype = v; _ = RevalidateAsync(); })">
-                    <option value="auto">auto</option>
-                    <option value="float16">float16</option>
-                    <option value="bfloat16">bfloat16</option>
-                </UiSelect>
-            </UiField>
-        </div>
+        @if (EngineCapabilities.HasTuningDials(Engine))
+        {
+            <div class="col-md-4">
+                <UiField Label="GPU memory utilization" For="rc-gpu-mem">
+                    <UiInput Id="rc-gpu-mem" Type="number" step="0.01" min="0" max="1" Value="@_gpuMemoryUtilization.ToString()" ValueChanged="@(v => { _gpuMemoryUtilization = float.TryParse(v, out var n) ? n : _gpuMemoryUtilization; _ = RevalidateAsync(); })" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="KV cache dtype" For="rc-kv-dtype">
+                    <UiSelect Id="rc-kv-dtype" Value="@_kvCacheDtype" ValueChanged="@(v => { _kvCacheDtype = v; _ = RevalidateAsync(); })">
+                        <option value="auto">auto</option>
+                        <option value="fp8_e4m3">fp8_e4m3</option>
+                        <option value="float16">float16</option>
+                        <option value="bfloat16">bfloat16</option>
+                    </UiSelect>
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="Data type (--dtype)" For="rc-dtype" Hint="On the Intel stack, bfloat16 is blocked and auto warns — the reason shows above if so.">
+                    <UiSelect Id="rc-dtype" Value="@_dtype" ValueChanged="@(v => { _dtype = v; _ = RevalidateAsync(); })">
+                        <option value="auto">auto</option>
+                        <option value="float16">float16</option>
+                        <option value="bfloat16">bfloat16</option>
+                    </UiSelect>
+                </UiField>
+            </div>
 
-        <div class="col-md-12"><div class="card-title mb-0">Performance</div></div>
-        <div class="col-md-3">
-            <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2);">
-                <input type="checkbox" @bind="_enforceEager" /> Enforce eager
-            </label>
-        </div>
-        <div class="col-md-3">
-            <UiField Label="Max batched tokens" For="rc-max-batched">
-                <UiInput Id="rc-max-batched" Type="number" Value="@_maxNumBatchedTokens.ToString()" ValueChanged="@(v => { _maxNumBatchedTokens = int.TryParse(v, out var n) ? n : _maxNumBatchedTokens; _ = RevalidateAsync(); })" />
-            </UiField>
-        </div>
-        <div class="col-md-3">
-            <UiField Label="Block size" For="rc-block-size">
-                <UiInput Id="rc-block-size" Type="number" Value="@_blockSize.ToString()" ValueChanged="@(v => { _blockSize = int.TryParse(v, out var n) ? n : _blockSize; _ = RevalidateAsync(); })" />
-            </UiField>
-        </div>
-        <div class="col-md-3">
-            <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2); margin-bottom: 6px;">
-                <input type="checkbox" @bind="_speculativeDecoding" /> Speculative decoding
-            </label>
-            @if (_speculativeDecoding)
-            {
-                <UiInput Id="rc-speculative-tokens" Type="number" Value="@_speculativeTokens?.ToString()" ValueChanged="@(v => _speculativeTokens = int.TryParse(v, out var n) ? n : null)" Placeholder="token count" />
-            }
-        </div>
+            <div class="col-md-12"><div class="card-title mb-0">Performance</div></div>
+            <div class="col-md-3">
+                <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                    <input type="checkbox" @bind="_enforceEager" /> Enforce eager
+                </label>
+            </div>
+            <div class="col-md-3">
+                <UiField Label="Max batched tokens" For="rc-max-batched">
+                    <UiInput Id="rc-max-batched" Type="number" Value="@_maxNumBatchedTokens.ToString()" ValueChanged="@(v => { _maxNumBatchedTokens = int.TryParse(v, out var n) ? n : _maxNumBatchedTokens; _ = RevalidateAsync(); })" />
+                </UiField>
+            </div>
+            <div class="col-md-3">
+                <UiField Label="Block size" For="rc-block-size">
+                    <UiInput Id="rc-block-size" Type="number" Value="@_blockSize.ToString()" ValueChanged="@(v => { _blockSize = int.TryParse(v, out var n) ? n : _blockSize; _ = RevalidateAsync(); })" />
+                </UiField>
+            </div>
+            <div class="col-md-3">
+                <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2); margin-bottom: 6px;">
+                    <input type="checkbox" @bind="_speculativeDecoding" /> Speculative decoding
+                </label>
+                @if (_speculativeDecoding)
+                {
+                    <UiInput Id="rc-speculative-tokens" Type="number" Value="@_speculativeTokens?.ToString()" ValueChanged="@(v => _speculativeTokens = int.TryParse(v, out var n) ? n : null)" Placeholder="token count" />
+                }
+            </div>
 
-        <div class="col-md-12"><div class="card-title mb-0">Tools &amp; reasoning</div></div>
-        <div class="col-md-3">
-            <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2);">
-                <input type="checkbox" @bind="_enableAutoToolChoice" /> Auto tool choice
-            </label>
-        </div>
-        <div class="col-md-4">
-            <UiField Label="Tool call parser" For="rc-tool-parser">
-                <UiInput Id="rc-tool-parser" Value="@(_toolCallParser ?? "")" ValueChanged="@(v => _toolCallParser = v)" />
-            </UiField>
-        </div>
-        <div class="col-md-4">
-            <UiField Label="Reasoning parser" For="rc-reasoning-parser">
-                <UiInput Id="rc-reasoning-parser" Value="@(_reasoningParser ?? "")" ValueChanged="@(v => _reasoningParser = v)" />
-            </UiField>
-        </div>
+            <div class="col-md-12"><div class="card-title mb-0">Tools &amp; reasoning</div></div>
+            <div class="col-md-3">
+                <label class="ui-label" style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                    <input type="checkbox" @bind="_enableAutoToolChoice" /> Auto tool choice
+                </label>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="Tool call parser" For="rc-tool-parser">
+                    <UiInput Id="rc-tool-parser" Value="@(_toolCallParser ?? "")" ValueChanged="@(v => _toolCallParser = v)" />
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="Reasoning parser" For="rc-reasoning-parser">
+                    <UiInput Id="rc-reasoning-parser" Value="@(_reasoningParser ?? "")" ValueChanged="@(v => _reasoningParser = v)" />
+                </UiField>
+            </div>
+        }
 
         <div class="col-md-12">
             <details>
@@ -166,6 +170,18 @@
 @code {
     [Parameter, EditorRequired] public Recipe Model { get; set; } = null!;
     [Parameter] public bool IsNew { get; set; }
+
+    /// <summary>The engine this recipe is being edited for (the selected instance's). One form for every
+    /// engine: sections for dials the engine doesn't have are hidden, and validation uses its rules.</summary>
+    [Parameter] public SourceType Engine { get; set; } = SourceType.Vllm;
+
+    private string MaxLenLabel => EngineCapabilities.HasTuningDials(Engine)
+        ? "Max model length"
+        : $"Context size ({EngineCapabilities.ContextLengthFlag(Engine)})";
+
+    private string ServedNameHint =>
+        "Pre-filled from the instance's currently-active served name (or \"main\" when nothing is active). A different value here changes what API clients request this model by once swapped in — you'll be asked to confirm that at swap time."
+        + (EngineCapabilities.HasTuningDials(Engine) ? "" : $" Passed to {EngineCapabilities.DisplayName(Engine)} as {EngineCapabilities.ServedNameFlag(Engine)}.");
 
     /// <summary>The model picked for validation context (model-dependent rules) --
     /// null skips those, same as a recipe being model-agnostic at save time.</summary>
@@ -272,7 +288,7 @@
     {
         try
         {
-            var result = await Recipes.ValidateDraftAsync(BuildDraft(), ModelIdForValidation);
+            var result = await Recipes.ValidateDraftAsync(BuildDraft(), ModelIdForValidation, Engine);
             _hardBlocks = result.HardBlocks.Select(i => i.Message).ToList();
             _softWarnings = result.SoftWarnings.Select(i => i.Message).ToList();
         }

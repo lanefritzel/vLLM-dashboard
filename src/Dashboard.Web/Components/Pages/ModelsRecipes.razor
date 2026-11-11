@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @attribute [Authorize]
 @using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
 @using Dashboard.Core.Supervisor
 @using Dashboard.Infrastructure.Persistence.V2
 @using Dashboard.Web.Components.ModelsRecipes
@@ -157,6 +158,7 @@ else
 @if (_editingRecipe is not null)
 {
     <RecipeEditorDialog Model="@_editingRecipe" IsNew="@_editingIsNew" ModelIdForValidation="@_servingModelId"
+                         Engine="@(_selectedInstance?.EngineType ?? SourceType.Vllm)"
                          OnCancelled="@(() => _editingRecipe = null)"
                          OnSaved="@OnRecipeSavedAsync" />
 }

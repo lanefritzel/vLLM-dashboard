@@ -75,4 +75,28 @@ public class EngineCapabilitiesTests
         foreach (var type in Enum.GetValues<SourceType>().Where(t => EngineCapabilities.Options.All(o => o.Type != t)))
             Assert.False(EngineCapabilities.IsKnownEngine(type.ToStorage()));
     }
+
+    // ---- recipe-editor facts, derived from the same flag constants the arg builders emit ----
+
+    [Theory]
+    [InlineData(SourceType.Vllm, true)]
+    [InlineData(SourceType.LlamaCpp, false)]
+    public void HasTuningDials(SourceType engine, bool expected) =>
+        Assert.Equal(expected, EngineCapabilities.HasTuningDials(engine));
+
+    [Fact]
+    public void FlagLabels_AreExactlyTheFlagsEachArgBuilderEmits()
+    {
+        var model = new RecipeModel { Path = "/data/models/m" };
+        var server = new RecipeServer { ModelsDir = "/data/models" };
+        var instance = new RecipeInstance();
+
+        var vllm = ArgBuilder.Build(model, new VllmRecipe { MaxModelLen = 111, ServedModelName = "x" }, instance, server).Argv.ToList();
+        Assert.Equal("111", vllm[vllm.IndexOf(EngineCapabilities.ContextLengthFlag(SourceType.Vllm)) + 1]);
+        Assert.Equal("x", vllm[vllm.IndexOf(EngineCapabilities.ServedNameFlag(SourceType.Vllm)) + 1]);
+
+        var llama = LlamaCppArgBuilder.Build(model, new LlamaCppRecipe { MaxModelLen = 222, ServedModelName = "y" }, instance, server).Argv.ToList();
+        Assert.Equal("222", llama[llama.IndexOf(EngineCapabilities.ContextLengthFlag(SourceType.LlamaCpp)) + 1]);
+        Assert.Equal("y", llama[llama.IndexOf(EngineCapabilities.ServedNameFlag(SourceType.LlamaCpp)) + 1]);
+    }
 }

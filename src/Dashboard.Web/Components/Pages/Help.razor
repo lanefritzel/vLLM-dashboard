@@ -10,6 +10,7 @@
     <li><a href="#how-it-works">How it works</a></li>
     <li><a href="#walkthrough">Walkthrough example</a></li>
     <li><a href="#choosing-settings">Choosing recipe settings</a></li>
+    <li><a href="#choosing-engine">Choosing an engine (vLLM or llama.cpp)</a></li>
     <li><a href="#eager-vs-graphs">Eager mode vs CUDA graphs (and the neuron map)</a></li>
     <li><a href="#troubleshooting">Troubleshooting</a></li>
 </ul>
@@ -238,8 +239,92 @@
     </UiPanel>
 </div>
 
+<div style="margin-bottom: var(--ui-space-4);" id="choosing-engine">
+    <UiPanel Title="Choosing an engine (vLLM or llama.cpp)">
+        <p>
+            Each instance runs one engine, chosen on the <a href="servers">Servers</a> page. The last
+            column says whether a row was checked against a real run or is general knowledge that nobody
+            here has confirmed yet — treat <strong>Unverified</strong> rows as a starting point, not a fact.
+        </p>
+        <div class="ui-table-wrap" style="margin-bottom: var(--ui-space-3);">
+            <table class="ui-table">
+                <thead>
+                    <tr><th scope="col">Topic</th><th scope="col">vLLM</th><th scope="col">llama.cpp</th><th scope="col">Status</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>GGUF models</td>
+                        <td>Limited. A multimodal Gemma 4 GGUF did not load in vLLM 0.33.</td>
+                        <td>Native. A GGUF was served directly (Qwen2.5-0.5B, Q4_K_M).</td>
+                        <td>Verified for llama.cpp; the vLLM result is from an earlier attempt</td>
+                    </tr>
+                    <tr>
+                        <td>Start-up time</td>
+                        <td>Minutes on a slow CPU: imports, compile, warm-up.</td>
+                        <td>Fast: a small model on CPU was listening about a second after launch. Large models were not timed.</td>
+                        <td>Verified for a small model on CPU only</td>
+                    </tr>
+                    <tr>
+                        <td>KV-cache and latency metrics</td>
+                        <td>KV-cache usage, time to first token, inter-token and end-to-end latency, prefix-cache hits.</td>
+                        <td>Its metrics have no KV-cache usage and no latency histograms, so the Overview shows KV cache as n/a.</td>
+                        <td>Verified against a real server's metrics</td>
+                    </tr>
+                    <tr>
+                        <td>Start-up progress</td>
+                        <td>Weight loading and CUDA-graph capture percentages, in four phases.</td>
+                        <td>Three flat stages (starting, loading, ready) and no percentages, so the swap steps have no Warm up engine row.</td>
+                        <td>Verified against a real start-up log</td>
+                    </tr>
+                    <tr>
+                        <td>Neuron map</td>
+                        <td>Available (needs Enforce eager).</td>
+                        <td>Not available — the plugin hooks vLLM.</td>
+                        <td>Verified (by design)</td>
+                    </tr>
+                    <tr>
+                        <td>Many simultaneous users</td>
+                        <td>Strong: continuous batching, efficient KV cache.</td>
+                        <td>A fixed number of parallel slots that share the context (4 in the test run).</td>
+                        <td>Unverified — the slot count was seen, scaling was not measured</td>
+                    </tr>
+                    <tr>
+                        <td>Models larger than VRAM</td>
+                        <td>Mostly no.</td>
+                        <td>Yes: a GPU and RAM split, slower.</td>
+                        <td>Unverified — not tried</td>
+                    </tr>
+                    <tr>
+                        <td>GPU memory</td>
+                        <td>Reserves a large fixed fraction up front.</td>
+                        <td>Uses what it needs.</td>
+                        <td>Unverified — the test run was CPU only</td>
+                    </tr>
+                    <tr>
+                        <td>Hardware support</td>
+                        <td>Needs a supported GPU stack.</td>
+                        <td>CPU, Vulkan, Intel, NVIDIA and more.</td>
+                        <td>Unverified — only CPU was run</td>
+                    </tr>
+                    <tr>
+                        <td>Features</td>
+                        <td>Tool and reasoning parsers, speculative decoding, prefix caching, broad multimodal.</td>
+                        <td>A different set, still growing.</td>
+                        <td>Unverified — not compared</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="mb-0">
+            <strong>Rule of thumb:</strong> many simultaneous users on a model that fits — use vLLM. One or
+            two users, a big GGUF, or a model bigger than VRAM — use llama.cpp.
+        </p>
+    </UiPanel>
+</div>
+
 <div style="margin-bottom: var(--ui-space-4);" id="eager-vs-graphs">
     <UiPanel Title="Eager mode vs CUDA graphs (and the neuron map)">
+        <p class="text-muted">vLLM only — llama.cpp has no CUDA-graph or eager setting and no neuron map.</p>
         <ul class="mb-0">
             <li>
                 <strong>Enforce eager on</strong> runs the model one operation at a time from Python. It
@@ -296,7 +381,8 @@
                 your disk (about 55&nbsp;MB/s from a busy spinning disk: a 7.7&nbsp;GB model took 2.5 minutes
                 where a cached load took 3 seconds). Loading it again soon after is much faster. The swap
                 steps show real progress: <em>Start new process</em> (vLLM importing, about a minute on a
-                slow CPU), <em>Load weights</em>, <em>Warm up engine</em>, then <em>Health check</em>.
+                slow CPU), <em>Load weights</em>, <em>Warm up engine</em>, then <em>Health check</em>. A llama.cpp
+                instance has no <em>Warm up engine</em> step and shows no percentages while loading.
             </li>
             <li>
                 <strong>A swap seems stuck</strong> — the first load of an uncached Hugging Face model
