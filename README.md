@@ -14,11 +14,10 @@ tools (OpenWebUI, LibreChat, opencode, any OpenAI SDK client) talk to
 directly, while the dashboard handles swapping the actual model process to
 whatever was requested.
 
-> **GPU support:** live-tested end-to-end against an **Intel GPU** host
-> (`intel/llm-scaler-vllm`, raw `/dev/dri` passthrough). VRAM reporting also
-> has an NVIDIA path (`nvidia-smi`), but it hasn't been exercised against real
-> NVIDIA hardware yet — treat it as untested, not verified. Everything else
-> (process lifecycle, health checks, the proxy) is vendor-agnostic.
+> **GPU support:** live-tested end-to-end on both **Intel** (`intel/llm-scaler-vllm`,
+> raw `/dev/dri`) and **NVIDIA** (RTX 3060, Container Toolkit, GPU reservation)
+> hosts, vLLM and llama.cpp both. Process lifecycle, health checks, and the
+> proxy are vendor-agnostic.
 
 ## Architecture
 
@@ -39,26 +38,21 @@ This image is **one piece of a small stack**, not a single-container app:
   models, recipes, metrics history), and the proxy. This is the only piece
   published to Docker Hub.
 - **Supervisor** — a small Python sidecar that runs *alongside* the inference
-  engine on each GPU machine and actually starts/stops/health-checks its
-  process on the dashboard's behalf. Each instance picks its engine (vLLM or
-  llama.cpp) per recipe. It's built, not pulled — the Compose stack below
-  builds it straight from this repo's `supervisor/` directory on your own
-  machine, layered onto whatever base image matches your hardware and engine
-  (e.g. `intel/llm-scaler-vllm` or `vllm/vllm-openai` for vLLM via
-  `supervisor/Dockerfile`; the official `ghcr.io/ggml-org/llama.cpp` server
-  image for llama.cpp via `supervisor/Dockerfile.llamacpp`). `docker compose
-  up -d --build` handles the clone and build for you; no separate image, no
-  manual git clone. Its admin API binds to loopback only, so the dashboard
-  reaches it over `127.0.0.1` on a shared network namespace (`network_mode:
-  host` is the simplest way to get there) rather than any token or
-  network-exposed auth.
-- **Visualizer plugin** (inside the vLLM supervisor image only) — a vLLM
-  plugin that vLLM loads by itself. It serves a small activity summary on
-  loopback port `9998`; the dashboard connects to it only while someone has
-  the Neuron map open. Nothing to deploy separately. **vLLM only** — llama.cpp
-  has no equivalent runtime plugin mechanism (see
-  [Engine differences](#engine-differences) below), so instances on that
-  engine don't show a Neuron map.
+  engine on each GPU machine, starting/stopping/health-checking its process on
+  the dashboard's behalf. Each instance picks its engine (vLLM or llama.cpp)
+  per recipe. It's built, not pulled: the Compose stack below builds it from
+  this repo's `supervisor/` directory, layered onto whatever base image
+  matches your hardware and engine (`supervisor/Dockerfile` for vLLM,
+  `supervisor/Dockerfile.llamacpp` for llama.cpp). `docker compose up -d
+  --build` handles the clone and build; no separate image needed. Its admin
+  API binds to loopback only, so the dashboard reaches it over `127.0.0.1` on
+  a shared network namespace (`network_mode: host`) rather than any
+  token/network-exposed auth.
+- **Visualizer plugin** (vLLM supervisor image only) — a vLLM plugin that
+  loads itself, serving a small activity summary on loopback port `9998`; the
+  dashboard connects only while the Neuron map is open. Nothing to deploy
+  separately. **vLLM only** — llama.cpp has no equivalent plugin mechanism
+  (see [Engine differences](#engine-differences)), so it shows no Neuron map.
 - **Postgres** — metrics history, server/model/recipe config, accounts.
 
 If you just want live metrics/history for a vLLM, llama.cpp, or Ollama server
@@ -77,13 +71,12 @@ history, but a few things only work on one of them:
 | Neuron map (live per-layer activation view) | yes | no — llama.cpp has no runtime plugin hook equivalent to vLLM's; it would require a patched/forked `llama-server` build (researched, not pursued — see the project's internal notes) |
 | GPU offload control | `--gpu-memory-utilization` and friends | `--gpu-layers` (**All** / **CPU only** / a specific layer count via Extra args) |
 
-llama.cpp's live metrics deliberately do **not** come from its `/metrics`
-endpoint's token counters: `llama-server` is effectively single-threaded
-while streaming a completion, so a scrape made mid-generation can queue
-behind it and read back an inflated tok/s on the next successful scrape.
-Instead, the proxy asks for `timings_per_token` on every llama.cpp request and
-reads throughput/KV% directly out of each streamed chunk's own numbers — the
-engine's own live truth, not a sampled approximation.
+llama.cpp's live metrics deliberately skip its `/metrics` token counters:
+`llama-server` is effectively single-threaded while streaming, so a scrape
+mid-generation can queue behind it and read back an inflated tok/s next time.
+Instead, the proxy sets `timings_per_token` on every request and reads
+throughput/KV% straight from each streamed chunk — the engine's own live
+numbers, not a sampled approximation.
 
 ## Features
 
@@ -105,13 +98,12 @@ engine's own live truth, not a sampled approximation.
   healthy state (never a run that crashed or failed).
 - **Live traffic view** — watch requests, reasoning, and streamed responses
   go through the proxy in real time.
-- **Neuron map** — a section on Overview that shows, live, which parts of the
-  model respond most to each word, fed by a small vLLM plugin that ships inside
-  the supervisor image. It is hidden by default and the plugin is dormant until
-  you open it. You can switch the plugin on or off without a restart (both
-  directions wait for a request boundary, so an answer is never cut mid-stream),
-  pick from 16 color palettes, and choose a gap between cells. On an Intel Arc
-  GPU it made no measurable difference to generation speed — see
+- **Neuron map** — an Overview section showing, live, which parts of the
+  model respond most to each word, fed by a small vLLM plugin inside the
+  supervisor image. Hidden by default, dormant until opened; switch it on/off
+  without a restart (waits for a request boundary, so an answer is never cut
+  mid-stream), pick from 16 palettes, choose a cell gap. No measurable speed
+  impact on an Intel Arc GPU — see
   [`supervisor/vllm-visualizer`](supervisor/vllm-visualizer/README.md).
 - **Live container logs** — stream a backend container's stdout/stderr in the
   UI.
@@ -164,9 +156,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    # The dashboard runs with network_mode: host (below), so it reaches Postgres
-    # through the host, not the Compose network -- `expose` alone is not enough.
-    # Bound to loopback so Postgres isn't opened to your LAN.
+    # Dashboard uses network_mode: host below, so it reaches Postgres via the
+    # host, not the Compose network. Bound to loopback, not your LAN.
     ports:
       - "127.0.0.1:5432:5432"
 
@@ -178,22 +169,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # network_mode: host -- the supervisor's admin API binds to loopback
-    # only (see below), so the dashboard needs to share its network
-    # namespace to reach it. Drop this (and use `ports:` below instead) if
-    # you're only running monitoring-only sources with no supervisor.
+    # Needed to reach the supervisor's loopback-only admin API (see below).
+    # Drop this and use `ports:` below instead for monitoring-only sources.
     network_mode: host
     environment:
       ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=dashboard;Username=dashboard;Password=dashboard"
       Kestrel__Endpoints__Http__Url: "http://+:8080"
       DATAPROTECTION_KEYS_DIR: /data/dataprotection
-      # Must match the supervisor's own MODELS_ROOT mount (same host path on
-      # both sides) for the Servers/Add-model folder picker to browse real
-      # paths. Omit this var and the matching volume line below to fall back
-      # to a plain text field.
+      # Must match the supervisor's model mount (same host path both sides)
+      # for the folder picker to browse real paths; omit to fall back to text.
       MODELS_BROWSE_ROOT: /models
-      # Neuron map: only needed if the plugin is set up with a token or is
-      # reached over the LAN rather than loopback (see "Neuron map plugin" below).
+      # Only needed if the plugin uses a token or is reached over the LAN
+      # (see "Neuron map plugin" below).
       # Visualizer__Token: "<same value as the supervisor's VIS_TOKEN>"
     # ports:
     #   - "8080:8080"   # only needed if NOT using network_mode: host above
@@ -203,9 +190,8 @@ services:
 
   supervisor:
     build:
-      # Builds straight from this public repo's supervisor/ subdirectory --
-      # no local clone needed. Swap #main for a tagged release if you want a
-      # pinned version instead of tracking the branch.
+      # Builds from this repo's supervisor/ subdirectory, no local clone needed.
+      # Swap #main for a tagged release to pin a version instead of the branch.
       context: https://github.com/lanefritzel/vLLM-dashboard.git#main:supervisor
       # dockerfile: Dockerfile.llamacpp   # llama.cpp instead of vLLM -- see "llama.cpp hosts" below
       args:
@@ -214,11 +200,10 @@ services:
     restart: unless-stopped
     network_mode: host
     devices:
-      - /dev/dri          # Intel/AMD GPU passthrough. NVIDIA host: remove this
-                           # and use the GPU reservation shown below instead.
+      - /dev/dri          # Intel/AMD passthrough; NVIDIA: use the reservation below instead.
     volumes:
-      # Read-write: the dashboard's "Download model" runs here and writes into it.
-      # Same host path as the dashboard's (read-only) mount above.
+      # Read-write (Download model writes here); same host path as the
+      # dashboard's read-only mount above.
       - /path/to/your/hf-models:/models
       - supervisor-state:/state
     ipc: host
@@ -226,11 +211,10 @@ services:
     environment:
       ADMIN_PORT: "18001"
       DASHBOARD_EVENT_URL: "http://127.0.0.1:8080/internal/supervisor-events"
-      # Neuron map plugin: loaded by vLLM, on by default, idle until the Overview
-      # section is open. No change needed for this host-network stack.
-      # VIS_ENABLED: "0"              # uncomment to turn it off for this server
-      # If the dashboard reaches this host over the LAN instead of loopback:
-      # VIS_BIND: "0.0.0.0"
+      # Neuron map plugin: on by default, idle until Overview is open; no
+      # change needed here.
+      # VIS_ENABLED: "0"              # uncomment to disable for this server
+      # VIS_BIND: "0.0.0.0"           # if reached over the LAN, not loopback
       # VIS_TOKEN: "<shared-secret>"  # and set Visualizer__Token on the dashboard
 
 volumes:
@@ -241,11 +225,10 @@ volumes:
 
 ### NVIDIA hosts
 
-Three changes to the `supervisor` service (needs the NVIDIA Container Toolkit
-on the host) — this is a diff against the full `supervisor` service in the
-main example above, not a standalone block: keep everything else from that
-block (`restart`, `network_mode`, `ipc`, `privileged`, `volumes`,
-`environment`) and only change what's shown here:
+Three changes to the `supervisor` service (needs the NVIDIA Container
+Toolkit) — a diff against the main example's full service, not a standalone
+block: keep `restart`, `network_mode`, `ipc`, `privileged`, `volumes`, and
+`environment` from there; only this changes:
 
 ```yaml
   supervisor:
@@ -280,13 +263,11 @@ service entirely and the `network_mode: host` lines above — a plain
 ### llama.cpp hosts
 
 A server can run llama.cpp instead of vLLM — the dashboard talks to both the
-same way, through its own supervisor. **llama.cpp's supervisor needs less than
-vLLM's**: no `ipc: host` or `privileged: true` (those are a vLLM/CUDA IPC
-requirement, not something llama.cpp needs) — live-verified end to end
-(swap, recipe, live metrics) on an NVIDIA RTX 3060. This is the complete
-`supervisor` service for llama.cpp on NVIDIA — unlike the NVIDIA hosts diff
-above, this one **replaces** the whole service, since so much changes between
-the two engines:
+same way, through its own supervisor. **llama.cpp's supervisor needs less**:
+no `ipc: host` or `privileged: true` (a vLLM/CUDA IPC requirement, not a
+llama.cpp one) — live-verified end to end (swap, recipe, live metrics) on an
+NVIDIA RTX 3060. Unlike the NVIDIA diff above, this **replaces** the whole
+`supervisor` service, since so much changes between engines:
 
 ```yaml
   supervisor:
@@ -356,13 +337,11 @@ configuration on the standard host-network stack. These variables go on the
 | `VIS_IDLE_GAP` | `0.6` | Seconds with no model step that count as "no request in flight" (used by a graceful off). |
 | `VIS_PREFILL_MIN` | `32` | A step with at least this many tokens counts as a new prompt arriving (used by a graceful on). |
 
-**The neuron map needs "Enforce eager" on.** The plugin reads each layer through
-Python forward hooks. With eager mode off, vLLM compiles the model and captures
-CUDA graphs, and hooks do not run inside a captured graph, so the map stays
-blank (the model still answers normally). For a recipe that runs with CUDA graphs,
-add the environment variable `VIS_ENABLED=0` to the recipe so the plugin stays out
-of the way, and keep a separate eager recipe for the same model for when you want
-to watch the map. See [Eager mode vs CUDA graphs](#eager-mode-vs-cuda-graphs).
+**The neuron map needs "Enforce eager" on.** The plugin reads layers via Python
+forward hooks, which don't run inside a captured CUDA graph, so eager-off
+recipes show a blank map (the model still answers normally). Set
+`VIS_ENABLED=0` on CUDA-graph recipes and keep a separate eager recipe for
+watching the map. See [Eager mode vs CUDA graphs](#eager-mode-vs-cuda-graphs).
 
 Less common tuning (`VIS_BUCKET`, `VIS_ARM_TTL`, `VIS_MAX_STREAMS`,
 `VIS_MAX_ERRORS`) is documented in the plugin's own README. The plugin only
@@ -390,14 +369,12 @@ endpoint at:
 http://<host>:8080/proxy/<slug>/v1
 ```
 
-Point any OpenAI-compatible client (LibreChat, OpenWebUI, opencode, a raw
-SDK) at that URL instead of the backend directly. If the client requests a
-different model than what's currently running, the dashboard swaps it via
-that instance's supervisor first, then forwards the request — the client
-never needs to know a swap happened. `/v1/models` on that same endpoint
-returns every model registered for the instance, not just whatever's
-currently loaded, so a client with model auto-discovery (e.g. LibreChat's
-`fetch: true`) picks up the full catalog automatically.
+Point any OpenAI-compatible client (LibreChat, OpenWebUI, opencode, a raw SDK)
+at that URL instead of the backend directly. A request for a different model
+than what's running triggers a swap first, then forwards — the client never
+knows. `/v1/models` on the same endpoint returns the full registered catalog,
+not just what's loaded, so auto-discovery (e.g. LibreChat's `fetch: true`)
+picks it up automatically.
 
 ## Getting started: the three steps
 
@@ -456,13 +433,11 @@ utilization, dtype, or block size, since those are vLLM-specific:
 
 ### Known recipes
 
-Settings that were actually loaded and served, as a starting point. They were
-tested on one box (**NVIDIA RTX 3060 12 GB, Intel i7-4790, vLLM 0.33.0**), so
-treat them as a starting point for your own hardware, not a guarantee. Fields not
-listed are left at their defaults (KV cache dtype `auto`, dtype `auto`, speculative
-decoding off). These are examples from one machine; the dashboard's **Help** page has a
-hardware-neutral guide to working out your own settings (memory budget, KV cache size,
-max model length, and how to read vLLM's start-up log).
+Settings actually loaded and served on one box (**NVIDIA RTX 3060 12 GB,
+Intel i7-4790, vLLM 0.33.0**) — a starting point, not a guarantee, for your
+own hardware. Unlisted fields are left at defaults (KV cache dtype `auto`,
+dtype `auto`, speculative decoding off). The dashboard's **Help** page has a
+hardware-neutral guide for working out your own settings.
 
 | Model | Max len | GPU mem | Enforce eager | Batched tokens | Block | Extra |
 |---|---|---|---|---|---|---|
@@ -497,9 +472,8 @@ Things that bit during testing:
 
 ### Why a model load can take minutes
 
-vLLM reads the whole model from disk, so the first load of a model that is not in
-the operating system's file cache is limited by your disk. From a busy spinning
-disk (about 55 MB/s) a 7.7 GB model took 2.5 minutes to read; the same file read
-from cache took 3 seconds. The swap dialog shows where the time goes: *Start new
-process* (vLLM importing, about a minute on a slow CPU), *Load weights*, *Warm up
-engine*, then *Health check*.
+vLLM reads the whole model from disk, so an uncached first load is limited by
+disk speed. From a busy spinning disk (~55 MB/s) a 7.7 GB model took 2.5
+minutes; cached, 3 seconds. The swap dialog shows where time goes: *Start new
+process* (vLLM importing, ~a minute on a slow CPU), *Load weights*, *Warm up
+engine*, *Health check*.
