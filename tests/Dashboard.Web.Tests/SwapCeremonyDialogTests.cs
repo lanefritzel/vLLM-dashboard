@@ -9,6 +9,8 @@ namespace Dashboard.Web.Tests;
 
 public class SwapCeremonyDialogTests : BunitContext
 {
+    private string _engine = "vllm";
+
     private static Model M(int id, string name) => new() { Id = id, ServerId = 1, Name = name, Path = "/models/" + name };
     private static Recipe R(int id, string name) => new() { Id = id, ServerId = 1, Name = name, ServedModelName = "main" };
 
@@ -47,7 +49,7 @@ public class SwapCeremonyDialogTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
 
         return Render<SwapCeremonyDialog>(p => p
-            .Add(c => c.Instance, new Instance { Id = 1, ServerId = 1, Label = "i", ProxySlug = "i", AdminUrl = "http://sup.invalid" })
+            .Add(c => c.Instance, new Instance { Id = 1, ServerId = 1, Label = "i", ProxySlug = "i", AdminUrl = "http://sup.invalid", Engine = _engine })
             .Add(c => c.Models_, new List<Model>())
             .Add(c => c.Recipes_, new List<Recipe>())
             .Add(c => c.ResumeDeploymentId, 5));
@@ -73,7 +75,7 @@ public class SwapCeremonyDialogTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
 
         return Render<SwapCeremonyDialog>(p => p
-            .Add(c => c.Instance, new Instance { Id = 1, ServerId = 1, Label = "i", ProxySlug = "i", AdminUrl = "http://sup.invalid" })
+            .Add(c => c.Instance, new Instance { Id = 1, ServerId = 1, Label = "i", ProxySlug = "i", AdminUrl = "http://sup.invalid", Engine = _engine })
             .Add(c => c.Models_, new List<Model>())
             .Add(c => c.Recipes_, new List<Recipe>())
             .Add(c => c.ResumeDeploymentId, 5));
@@ -206,5 +208,54 @@ public class SwapCeremonyDialogTests : BunitContext
         var options = cut.FindAll("option").Select(o => o.TextContent).ToList();
         Assert.Contains("old", options);
         Assert.Contains("r1", options);
+    }
+
+    // ---- llama.cpp: three flat stages, no warm-up phase (Findings 4) ----
+
+    [Fact]
+    public void LlamaCpp_Steps_HaveNoWarmupRow_AndLoadingIsLabelledAsTheModel()
+    {
+        _engine = "llamacpp";
+        var cut = RenderProgressWithEvents("stopping");
+        var labels = cut.FindAll("ol.ceremony-steps li").Select(li => li.TextContent.Trim()).ToArray();
+        Assert.Equal(6, labels.Length);
+        Assert.DoesNotContain(labels, l => l.Contains("Warm up"));
+        Assert.Contains(labels, l => l.Contains("Load model"));
+    }
+
+    [Fact]
+    public void LlamaCpp_Steps_NothingIsFalselyTickedForAPhaseThatNeverRan()
+    {
+        _engine = "llamacpp";
+        var cut = RenderProgressWithEvents("stopping", "releasing_gpu", "starting", "loading", "waiting_health");
+        Assert.Equal(["step-done", "step-done", "step-done", "step-done", "step-current", "step-pending"], StepClasses(cut));
+    }
+
+    [Fact]
+    public void LlamaCpp_Steps_AReadyDeployCompletesEveryRowItHas()
+    {
+        _engine = "llamacpp";
+        var cut = RenderProgressWithEvents("stopping", "releasing_gpu", "starting", "loading", "waiting_health", "ready");
+        var classes = StepClasses(cut);
+        Assert.DoesNotContain("step-failed", classes);
+        Assert.Equal(["step-done", "step-done", "step-done", "step-done", "step-done", "step-pending"], classes);
+    }
+
+    [Fact]
+    public void LlamaCpp_LoadingStep_ShowsItsNote_AndNeverAPercentage()
+    {
+        _engine = "llamacpp";
+        var cut = RenderProgressWithEvents(("starting", null), ("loading", """{"note":"allocating kv cache slots"}"""));
+        var loading = StepTexts(cut).Single(t => t.Contains("Load model"));
+        Assert.Contains("allocating kv cache slots", loading);
+        Assert.DoesNotContain("%", loading);
+    }
+
+    [Fact]
+    public void LlamaCpp_AFailedLoad_MarksTheLoadRowFailed()
+    {
+        _engine = "llamacpp";
+        var cut = RenderProgressWithEvents("stopping", "releasing_gpu", "starting", "loading", "failed");
+        Assert.Equal(["step-done", "step-done", "step-done", "step-failed", "step-pending", "step-pending"], StepClasses(cut));
     }
 }

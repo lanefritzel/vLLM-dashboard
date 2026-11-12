@@ -1,0 +1,35 @@
+# llama.cpp flavour of the supervisor image (P2): the same supervisor code as ./Dockerfile,
+# layered on llama.cpp's own server image instead of a vendor vLLM one. The compose file
+# still owns image/devices/memory/port; this only bakes the supervisor on.
+#
+# Base is pinned by digest, not the floating :server tag (build b12242-3b4d6ab3f when
+# pinned) -- bump it deliberately and re-run the P2 hand test.
+ARG BASE_IMAGE=ghcr.io/ggml-org/llama.cpp@sha256:4d2de15a0ffbce704777c64026b40512a71e0bbc0b303a5fe5ea9bf71760dff9
+FROM ${BASE_IMAGE}
+
+# Unlike the vLLM base images, this one ships python3 but no pip, fastapi or uvicorn. Ubuntu's
+# python is "externally managed" (PEP 668), so install into a venv rather than system-wide.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/venv
+
+COPY requirements.txt /app/requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt
+
+COPY entrypoint.sh /entrypoint.sh
+COPY supervisor.py /app/supervisor.py
+COPY supervisor/   /app/supervisor/
+RUN chmod +x /entrypoint.sh
+
+# /app holds llama-server and its shared libs, and the argv the dashboard builds starts with the
+# bare name "llama-server" (LlamaCppArgBuilder), so /app must be on PATH. The venv comes first so
+# entrypoint.sh's `python3` is the one with fastapi/uvicorn.
+ENV PATH=/opt/venv/bin:/app:${PATH}
+
+# Tells supervisor.py which startup tracker / served-name flag / status block to use.
+ENV ENGINE=llamacpp
+
+# No vLLM visualizer plugin here -- it hooks vLLM's plugin entry point and means nothing to llama.cpp.
+# Overrides the base image's ENTRYPOINT (/app/llama-server): the supervisor spawns llama-server itself.
+ENTRYPOINT ["/entrypoint.sh"]

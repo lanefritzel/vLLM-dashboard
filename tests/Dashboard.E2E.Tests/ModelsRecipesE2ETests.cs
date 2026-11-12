@@ -50,17 +50,17 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("button:has-text('+ Add model')");
-        await page.Locator(".modal-dialog-custom select.form-select").SelectOptionAsync("local");
-        await page.FillAsync(".modal-dialog-custom input.form-control >> nth=0", "my-local-model");
+        await page.Locator("dialog[open] select.form-select").SelectOptionAsync("local");
+        await page.FillAsync("dialog[open] input.form-control >> nth=0", "my-local-model");
         var localPathInput = page.Locator("input[placeholder='/models/hf-cache/my-model']");
         await localPathInput.FillAsync("/models/hf-cache/my-local-model");
         await localPathInput.PressAsync("Tab"); // plain @bind (no :event=oninput) only commits on blur/change
-        await page.ClickAsync(".modal-dialog-custom button:has-text('Save')");
+        await page.ClickAsync("dialog[open] button:has-text('Save')");
 
         await page.Locator("table:has(th:has-text('Source')) >> text=my-local-model").WaitForAsync();
 
         await page.ClickAsync("tr:has-text('my-local-model') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         await dialog.Locator("text=New recipe").WaitForAsync();
 
         var maxLenInput = dialog.Locator("label:has-text('Max model length') + input");
@@ -128,7 +128,7 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("tr:has-text('seed-model') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         var servedNameInput = dialog.Locator("label:has-text('Served model name') + input");
         Assert.Equal("main", await servedNameInput.InputValueAsync());
     }
@@ -160,7 +160,7 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("tr:has-text('other-model') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         var servedNameInput = dialog.Locator("label:has-text('Served model name') + input");
         Assert.Equal("custom-active-name", await servedNameInput.InputValueAsync());
     }
@@ -181,9 +181,9 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("tr:has-text('blank-path-model') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
 
-        await dialog.Locator(".alert-danger:has-text('This model has no path configured.')").WaitForAsync();
+        await dialog.Locator(".ui-callout-danger:has-text('This model has no path configured.')").WaitForAsync();
         Assert.True(await dialog.Locator("button:has-text('Save')").IsDisabledAsync());
     }
 
@@ -203,10 +203,10 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("tr:has-text('seed-model-auto') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
 
         // dtype defaults to "auto" -- the warning should appear without any interaction.
-        await dialog.Locator(".alert-warning:has-text('unset/auto on the Intel stack')").WaitForAsync();
+        await dialog.Locator(".ui-callout-warn:has-text('unset/auto on the Intel stack')").WaitForAsync();
         Assert.False(await dialog.Locator("button:has-text('Save')").IsDisabledAsync());
     }
 
@@ -224,12 +224,12 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("tr:has-text('seed-model-2') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         var servedNameInput = dialog.Locator("label:has-text('Served model name') + input");
         await servedNameInput.FillAsync("not a valid name!");
         await servedNameInput.PressAsync("Tab");
 
-        await dialog.Locator(".alert-danger:has-text('must be a valid identifier')").WaitForAsync();
+        await dialog.Locator(".ui-callout-danger:has-text('must be a valid identifier')").WaitForAsync();
         Assert.True(await dialog.Locator("button:has-text('Save')").IsDisabledAsync());
     }
 
@@ -247,12 +247,12 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("tr:has-text('seed-model-3') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         var gpuInput = dialog.Locator("label:has-text('GPU memory utilization') + input");
         await gpuInput.FillAsync("1.5");
         await gpuInput.PressAsync("Tab");
 
-        await dialog.Locator(".alert-danger:has-text('must be greater than 0 and at most 1')").WaitForAsync();
+        await dialog.Locator(".ui-callout-danger:has-text('must be greater than 0 and at most 1')").WaitForAsync();
         Assert.True(await dialog.Locator("button:has-text('Save')").IsDisabledAsync());
     }
 
@@ -272,16 +272,16 @@ public class ModelsRecipesE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("tr:has-text('seed-model-4') button:has-text('New recipe')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         var dtypeSelect = dialog.Locator("label:has-text('Data type (--dtype)') + select");
 
         await dtypeSelect.SelectOptionAsync("bfloat16");
-        await dialog.Locator(".alert-danger:has-text('blocked on the Intel stack')").WaitForAsync();
+        await dialog.Locator(".ui-callout-danger:has-text('blocked on the Intel stack')").WaitForAsync();
         Assert.True(await dialog.Locator("button:has-text('Save')").IsDisabledAsync());
 
         await dtypeSelect.SelectOptionAsync("float16");
         await WaitUntilAsync(async () => !await dialog.Locator("button:has-text('Save')").IsDisabledAsync(), TimeSpan.FromSeconds(5));
-        Assert.False(await dialog.Locator(".alert-danger").IsVisibleAsync());
+        Assert.False(await dialog.Locator(".ui-callout-danger").IsVisibleAsync());
 
         await dialog.Locator("button:has-text('Save')").ClickAsync();
         await dialog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden });

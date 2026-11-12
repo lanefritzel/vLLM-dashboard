@@ -33,7 +33,7 @@
             <div class="card-title mb-2">Get started</div>
             <ol class="onboarding-checklist mb-0">
                 <li class="@(_onboarding.HasServerAndInstance ? "text-muted" : "")">
-                    @(_onboarding.HasServerAndInstance ? "✓" : "①") Register a server and instance
+                    @(_onboarding.HasServerAndInstance ? "✓" : "①") Register a server and engine instance
                     @if (!_onboarding.HasServerAndInstance)
                     {
                         <a href="servers">— go to Servers</a>
@@ -173,9 +173,16 @@ else
             <StatCard Label="Peak (30d)" Value="@Fmt(_genStats?.Peak)" Unit="tok/s" Info="Peak generation throughput, last 30 days" />
             <StatCard Label="Avg (30d)" Value="@Fmt(_genStats?.Avg)" Unit="tok/s" Info="Average generation throughput while actively generating, last 30 days" />
             <StatCard Label="Low (30d)" Value="@Fmt(_genStats?.Low)" Unit="tok/s" Info="Lowest generation throughput while actively generating, last 30 days" />
-            <StatCard Label="KV cache" Value="@Fmt(_latestSample?.KvPct)" Unit="%">
-                <Sparkline><div class="chart-wrap" style="height:100%;margin-bottom:0;"><canvas id="ov2-kv-spark"></canvas></div></Sparkline>
-            </StatCard>
+            @if (ShowKvCache)
+            {
+                <StatCard Label="KV cache" Value="@Fmt(_latestSample?.KvPct)" Unit="%">
+                    <Sparkline><div class="chart-wrap" style="height:100%;margin-bottom:0;"><canvas id="ov2-kv-spark"></canvas></div></Sparkline>
+                </StatCard>
+            }
+            else
+            {
+                <StatCard Label="KV cache" Value="n/a" Info="This engine doesn't report KV cache usage." />
+            }
         </div>
         <div class="ui-toolbar" style="margin-bottom: 0;">
             <UiButton Variant="link" Size="sm" OnClick="ToggleExpandChartAsync">@(_expandChart ? "Hide full chart" : "Show full chart")</UiButton>
@@ -187,15 +194,21 @@ else
                 <ChartCard Title="Throughput (tok/s)">
                     <div class="chart-wrap"><canvas id="ov2-throughput"></canvas></div>
                 </ChartCard>
-                <ChartCard Title="KV cache usage (%)">
-                    <div class="chart-wrap"><canvas id="ov2-kv"></canvas></div>
-                </ChartCard>
+                @if (ShowKvCache)
+                {
+                    <ChartCard Title="KV cache usage (%)">
+                        <div class="chart-wrap"><canvas id="ov2-kv"></canvas></div>
+                    </ChartCard>
+                }
             </div>
         }
     }
 
     <div style="height: var(--ui-space-4);"></div>
-    <NeuronMap Instance="@_instance" />
+    @if (EngineCapabilities.HasNeuronMap(_instance.EngineType))
+    {
+        <NeuronMap Instance="@_instance" />
+    }
 
     @if (_recentDeployments.Count > 0)
     {
@@ -242,6 +255,10 @@ else
 
     private List<Server> _servers = new();
     private Instance? _instance;
+
+    /// <summary>False for an engine with no KV-cache metric (llama.cpp) -- its card, charts and
+    /// canvases are skipped rather than shown as a misleading blank (P3).</summary>
+    private bool ShowKvCache => _instance is null || EngineCapabilities.ReportsKvCacheUsage(_instance.EngineType);
     private List<Model> _models = new();
     private List<Recipe> _recipes = new();
     private Deployment? _activeDeployment;
@@ -713,7 +730,9 @@ else
             var throughputSparkOk = await JS.InvokeAsync<bool>("chart_create", "ov2-throughput-spark",
                 new List<Dictionary<string, string>> { new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)" } },
                 new { sparkline = true });
-            var kvSparkOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv-spark",
+            // No KV canvas exists for an engine that doesn't report it -- chart_create would return
+            // false and _chartKey would never be set, re-creating every chart on every render.
+            var kvSparkOk = !ShowKvCache || await JS.InvokeAsync<bool>("chart_create", "ov2-kv-spark",
                 new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "var(--ui-chart-6)" } },
                 new { yMin = 0.0, yMax = 100.0, sparkline = true });
 
@@ -729,7 +748,7 @@ else
                     new() { ["key"] = "gen", ["label"] = "generation", ["color"] = "var(--ui-chart-2)", ["fill"] = true },
                     new() { ["key"] = "prompt", ["label"] = "prompt", ["color"] = "var(--ui-chart-1)" },
                 }, new { });
-            var kvOk = await JS.InvokeAsync<bool>("chart_create", "ov2-kv",
+            var kvOk = !ShowKvCache || await JS.InvokeAsync<bool>("chart_create", "ov2-kv",
                 new List<Dictionary<string, string>> { new() { ["key"] = "kv", ["label"] = "kv cache %", ["color"] = "var(--ui-chart-6)" } },
                 new { yMin = 0.0, yMax = 100.0 });
 

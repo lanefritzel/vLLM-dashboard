@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Dashboard.Core.Abstractions;
+using Dashboard.Core.Models;
 using Dashboard.Infrastructure.Persistence.V2;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
@@ -30,6 +32,7 @@ public sealed class ModelProxyService : IModelProxyService
     private readonly IHttpClientFactory _httpFactory;
     private readonly IHubContext<TrafficHub> _traffic;
     private readonly IInFlightTrafficTracker _inFlight;
+    private readonly ILlamaCppLiveMetricsPublisher _llamaCppMetrics;
     private readonly ILogger<ModelProxyService> _logger;
 
     // Cap on what the live traffic view broadcasts — the real response to the client is
@@ -58,6 +61,7 @@ public sealed class ModelProxyService : IModelProxyService
         IHttpClientFactory httpFactory,
         IHubContext<TrafficHub> traffic,
         IInFlightTrafficTracker inFlight,
+        ILlamaCppLiveMetricsPublisher llamaCppMetrics,
         ILogger<ModelProxyService> logger)
     {
         _instances = instances;
@@ -67,6 +71,7 @@ public sealed class ModelProxyService : IModelProxyService
         _httpFactory = httpFactory;
         _traffic = traffic;
         _inFlight = inFlight;
+        _llamaCppMetrics = llamaCppMetrics;
         _logger = logger;
     }
 
@@ -122,6 +127,24 @@ public sealed class ModelProxyService : IModelProxyService
     }
 
     private readonly record struct ProxyError(int StatusCode, string Message);
+
+    /// <summary>Carries what <see cref="StreamWithTeeAsync"/> needs to publish live llama.cpp
+    /// metrics per chunk, without widening that method's own parameter list for the one
+    /// engine that needs it -- null for every non-llama.cpp request, the common case.</summary>
+    private readonly record struct LlamaCppMetricsContext(string SourceId, string Label, int CtxSize);
+
+    /// <summary>The active recipe's context size (<c>--ctx-size</c>), looked up once per
+    /// request -- never per chunk -- for <see cref="LlamaCppChunkTimings.ToKvCachePercent"/>.
+    /// 0 (meaning "unknown, report 0%" per that method's own contract) when there's no
+    /// active deployment/recipe to ask, which only reads as "KV cache not yet available for
+    /// this instance", not a crash.</summary>
+    private async Task<int> GetActiveContextSizeAsync(Instance instance, CancellationToken ct)
+    {
+        var active = await _deployments.GetActiveAsync(instance.Id, ct);
+        if (active is null) return 0;
+        var recipe = await _recipes.GetAsync(active.RecipeId, ct);
+        return recipe?.MaxModelLen ?? 0;
+    }
 
     /// <summary>Decides whether a request's <c>"model"</c> can be forwarded; never swaps,
     /// never calls the supervisor or Docker. Returns the (possibly rewritten) body to
@@ -180,6 +203,31 @@ public sealed class ModelProxyService : IModelProxyService
             if (System.Text.Json.Nodes.JsonNode.Parse(json) is not System.Text.Json.Nodes.JsonObject obj)
                 return null;
             obj["model"] = servedName;
+            return obj.ToJsonString();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Returns the JSON body with <c>"timings_per_token"</c> set to <c>true</c>,
+    /// unless the caller already set it explicitly (never override an explicit choice).
+    /// This is what makes llama-server embed a live <c>timings</c> object in EVERY
+    /// streamed chunk instead of only the final one (confirmed against a real server --
+    /// see <see cref="LlamaCppTimingsParser"/>, which reads the object this unlocks).
+    /// vLLM has no such field; this is only ever called for a llama.cpp-targeted request.
+    /// Null when the body isn't a JSON object (the caller then forwards it unchanged),
+    /// same contract as <see cref="RewriteModelField"/>.</summary>
+    internal static string? InjectTimingsPerToken(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(json) is not System.Text.Json.Nodes.JsonObject obj)
+                return null;
+            obj.TryAdd("timings_per_token", true);
             return obj.ToJsonString();
         }
         catch (JsonException)
@@ -281,6 +329,35 @@ public sealed class ModelProxyService : IModelProxyService
         var sw = Stopwatch.StartNew();
         BroadcastStarted(sourceId, requestId, context.Request.Method, path, requestedModelName, bufferedBody);
 
+        // P7: llama.cpp has no live throughput/KV-cache gauge on /metrics, but embeds a
+        // live "timings" object in every streamed chunk once asked for via this flag
+        // (confirmed against the real engine -- see InjectTimingsPerToken). vLLM has no
+        // such field and is never asked for it. The active recipe's context size is
+        // looked up once here, not per chunk, for the same reason CheckModelActiveAsync
+        // looks up the active recipe once per request rather than per token.
+        LlamaCppMetricsContext? llamaMetrics = null;
+        if (instance.EngineType == SourceType.LlamaCpp)
+        {
+            var withTimings = InjectTimingsPerToken(bufferedBody);
+            if (withTimings is not null)
+                bufferedBody = withTimings;
+            var ctxSize = await GetActiveContextSizeAsync(instance, ct);
+            llamaMetrics = new LlamaCppMetricsContext(InstanceSourceId.For(instance.Id), instance.Label, ctxSize);
+
+            // Bracket the request with a start marker, same reasoning as the end-of-
+            // stream one in StreamWithTeeAsync: 0 tok/s is true the instant a request
+            // begins (nothing has been generated yet), but the KV-cache slot's occupancy
+            // is whatever the last turn on this source left it at, not 0 -- carried
+            // forward via LastKnown rather than fabricated, so this line doesn't fake a
+            // dip to empty on every single turn of an ongoing conversation. Published
+            // before forwarding, not after, so the chart's "generation starting" edge
+            // lines up with when the request was actually made, not with however long
+            // the engine took to send its first chunk.
+            var lastKnown = _llamaCppMetrics.LastKnown(llamaMetrics.Value.SourceId)
+                ?? new LlamaCppChunkTimings { PredictedPerSecond = 0, PromptN = 0, CacheN = 0, PredictedN = 0 };
+            _ = PublishLlamaCppMetricsAsync(llamaMetrics.Value, lastKnown with { PredictedPerSecond = 0 });
+        }
+
         using var upstream = new HttpRequestMessage(new HttpMethod(context.Request.Method), targetUrl);
         if (context.Request.ContentLength is > 0)
             upstream.Content = new StringContent(bufferedBody);
@@ -337,7 +414,7 @@ public sealed class ModelProxyService : IModelProxyService
             // from buffering a streaming SSE response into one chunk.
             context.Response.Headers["X-Accel-Buffering"] = "no";
 
-            await StreamWithTeeAsync(context, upstreamResponse, sourceId, requestId, ct);
+            await StreamWithTeeAsync(context, upstreamResponse, sourceId, requestId, llamaMetrics, ct);
         }
         BroadcastFinished(sourceId, requestId, context.Response.StatusCode, sw.ElapsedMilliseconds, null);
     }
@@ -347,7 +424,9 @@ public sealed class ModelProxyService : IModelProxyService
     /// text — not the surrounding JSON/SSE envelope — to the live traffic view. The
     /// mirror is capped and best-effort — it never affects what the real client
     /// receives, and never adds retries/blocking beyond the client's own write.</summary>
-    private async Task StreamWithTeeAsync(HttpContext context, HttpResponseMessage upstreamResponse, string sourceId, string requestId, CancellationToken ct)
+    private async Task StreamWithTeeAsync(
+        HttpContext context, HttpResponseMessage upstreamResponse, string sourceId, string requestId,
+        LlamaCppMetricsContext? llamaMetrics, CancellationToken ct)
     {
         var decoder = Encoding.UTF8.GetDecoder();
         var lineBuffer = new StringBuilder();
@@ -369,6 +448,18 @@ public sealed class ModelProxyService : IModelProxyService
         var maxPayloadCharsSeen = 0;
         var oversizedPayloadsSkipped = 0;
         _logger.LogInformation("Proxy stream {RequestId} for source {SourceId} starting.", requestId, sourceId);
+
+        // P7: the live publisher only fires while chunks are actually arriving, so
+        // without this, the Overview charts' last point is whatever the final in-flight
+        // chunk reported, and both lines just dangle there forever once generation stops
+        // -- there is no "idle" scrape (unlike vLLM's continuous poller) to ever report
+        // throughput falling back to 0. Tracked here so the finally block below can
+        // publish exactly one closing sample reusing this request's own last real
+        // cache occupancy (cache_n/prompt_n/predicted_n don't reset just because this
+        // turn ended -- llama.cpp keeps that slot's context cached for the next one),
+        // with only PredictedPerSecond forced to 0, which is the one thing that's
+        // actually true: there is no generation happening right now.
+        LlamaCppChunkTimings? lastLlamaTimings = null;
 
         void EmitText(string text, TrafficChunkKind kind)
         {
@@ -426,6 +517,20 @@ public sealed class ModelProxyService : IModelProxyService
             var content = TryExtractDeltaText(payload);
             if (!string.IsNullOrEmpty(content))
                 EmitText(content, TrafficChunkKind.Content);
+
+            // P7: only present on a llama.cpp-targeted request (InjectTimingsPerToken is
+            // never called for vLLM), and absent from most chunks even then (e.g. the
+            // final chunk's "usage" payload) -- TryParse returning null is the normal
+            // case, not an error.
+            if (llamaMetrics is { } lm)
+            {
+                var timings = LlamaCppTimingsParser.TryParse(payload);
+                if (timings is not null)
+                {
+                    lastLlamaTimings = timings;
+                    _ = PublishLlamaCppMetricsAsync(lm, timings);
+                }
+            }
         }
 
         void ProcessLine(string line)
@@ -509,6 +614,32 @@ public sealed class ModelProxyService : IModelProxyService
                 "Proxy stream {RequestId} failed after {Elapsed:0}s, {Bytes} bytes forwarded.",
                 requestId, sw.Elapsed.TotalSeconds, totalBytesForwarded);
             throw;
+        }
+        finally
+        {
+            // Covers every exit path (success, cancellation, error) -- generation has
+            // genuinely stopped in all three, so reporting 0 tok/s is correct in all
+            // three. Skipped only when this wasn't a llama.cpp request, or no chunk with
+            // a parseable "timings" object was ever seen (e.g. the request errored before
+            // any content streamed) -- nothing real to hold the cache occupancy at.
+            if (llamaMetrics is { } lm && lastLlamaTimings is { } lt)
+                _ = PublishLlamaCppMetricsAsync(lm, lt with { PredictedPerSecond = 0 });
+        }
+    }
+
+    // Fire-and-forget, same reasoning as SendTrafficEventAsync: a live-metrics sample is
+    // best-effort UI data, never something the proxied request itself should wait on or
+    // fail over, and CancellationToken.None is deliberate -- a sample from the last chunk
+    // before a client disconnects is still worth recording/broadcasting.
+    private async Task PublishLlamaCppMetricsAsync(LlamaCppMetricsContext ctx, LlamaCppChunkTimings timings)
+    {
+        try
+        {
+            await _llamaCppMetrics.PublishAsync(ctx.SourceId, ctx.Label, timings, ctx.CtxSize, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "llama.cpp live metrics publish failed.");
         }
     }
 

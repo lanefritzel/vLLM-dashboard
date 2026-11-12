@@ -48,7 +48,7 @@ public sealed class InstanceMetricsPollingService : IHostedService, IDisposable
         _logger = logger;
     }
 
-    public static string SourceIdFor(int instanceId) => "instance-" + instanceId;
+    public static string SourceIdFor(int instanceId) => InstanceSourceId.For(instanceId);
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -108,14 +108,7 @@ public sealed class InstanceMetricsPollingService : IHostedService, IDisposable
                 var baseUrl = ModelProxyService.BuildInferenceBaseUrl(instance);
                 if (baseUrl is null) continue; // no host configured yet -- nothing to scrape
 
-                var source = new SourceInfo
-                {
-                    Id = SourceIdFor(instance.Id),
-                    Label = instance.Label,
-                    Type = SourceType.Vllm,
-                    MetricsUrl = baseUrl,
-                    ScrapeIntervalSeconds = Math.Max(1, instance.PollIntervalMs / 1000),
-                };
+                var source = InstanceSourceMapper.ToSourceInfo(instance, SourceIdFor(instance.Id), baseUrl);
 
                 var cts = new CancellationTokenSource();
                 _loops[instance.Id] = cts;

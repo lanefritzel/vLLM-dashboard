@@ -39,6 +39,10 @@ public class Recipe
     public string? ToolCallParser { get; set; }
     public string? ReasoningParser { get; set; }
 
+    /// <summary>llama.cpp-only (P6): "auto" | "all" | "cpu", stored via
+    /// LlamaCppGpuLayersExtensions.ToStorage/FromStorage. Unread for a vLLM recipe.</summary>
+    public string GpuLayers { get; set; } = "auto";
+
     // 5 - Advanced (escape hatches) -- key/value rows as jsonb; blank value = boolean flag.
     public string ExtraArgs { get; set; } = "[]";
     public string ExtraEnv { get; set; } = "[]";

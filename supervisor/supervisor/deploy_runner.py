@@ -29,7 +29,7 @@ from .gpu_backend import GpuBackend, GpuInfo, detect_backend
 from .log_store import DeploymentArchive
 from .process_manager import ProcessManager
 from .smoke_test import SmokeResult, resolve_smoke_config, run_smoke_test
-from .startup_phases import StartupTracker
+from .engines import VLLM, engine_info, extract_value, fetch_version, served_model_name as extract_served_model_name, tracker_for
 from .state import StateStore, SupervisorState
 
 RELEASING_GPU_INITIAL_WAIT_SECONDS = 2.0
@@ -47,6 +47,9 @@ CRASH_WATCH_POLL_INTERVAL_SECONDS = 1.0
 LOG_BATCH_INTERVAL_SECONDS = 1.0
 DEFAULT_CHILD_PORT = 9999
 STARTUP_WATCH_INTERVAL_SECONDS = 1.0
+# GET /admin/status is polled often; an unreadable child /props backs off 2s, 4s, ... up to 30s.
+VERSION_RETRY_INITIAL_SECONDS = 2.0
+VERSION_RETRY_MAX_SECONDS = 30.0
 
 
 @dataclass
@@ -98,7 +101,13 @@ class DeployRunner:
         event_pusher: Optional[EventPusher] = None,
         gpu_backend: Optional[GpuBackend] = None,
         archive: Optional[DeploymentArchive] = None,
+        engine: str = VLLM,
     ) -> None:
+        self._engine = engine
+        self._version_pid: Optional[int] = None
+        self._version: Optional[str] = None
+        self._version_next_try = 0.0
+        self._version_delay = VERSION_RETRY_INITIAL_SECONDS
         self._process_manager = process_manager
         self._state_store = state_store
         self._event_pusher = event_pusher or EventPusher(url=None)
@@ -181,6 +190,28 @@ class DeployRunner:
     @property
     def archive(self) -> DeploymentArchive:
         return self._archive
+
+    @property
+    def engine(self) -> str:
+        return self._engine
+
+    @property
+    def engine_info(self) -> dict:
+        """{name, version} for GET /admin/status. The version is read from the running child
+        (cached once read, per pid; a failed read backs off before the next probe); None while
+        nothing is serving or the version can't be read."""
+        info = self._process_manager.info
+        if info is not None and self._process_manager.is_running():
+            if self._version_pid != info.pid:  # a new child: forget the old one's result and backoff
+                self._version_pid, self._version = info.pid, None
+                self._version_next_try, self._version_delay = 0.0, VERSION_RETRY_INITIAL_SECONDS
+            if self._version is None and _now() >= self._version_next_try:
+                self._version = fetch_version(self._engine, _extract_port(info.argv))
+                if self._version is None:
+                    self._version_next_try = _now() + self._version_delay
+                    self._version_delay = min(self._version_delay * 2, VERSION_RETRY_MAX_SECONDS)
+            return engine_info(self._engine, self._version)
+        return engine_info(self._engine)
 
     @property
     def last_smoke_ok(self) -> Optional[bool]:
@@ -338,7 +369,7 @@ class DeployRunner:
         process exits, the deploy is cancelled, or `max_wait` elapses. Returns the seconds spent
         here so the caller can give the final health wait only what is left of the budget.
         """
-        tracker = StartupTracker()
+        tracker = tracker_for(self._engine)
         last_key = None
         start = time.monotonic()
         health_url = f"http://127.0.0.1:{port}/health"
@@ -387,7 +418,7 @@ class DeployRunner:
             self._record(deployment_id, "starting")
             await asyncio.to_thread(self._process_manager.spawn, argv, env)
             log_batch_task = asyncio.create_task(self._run_log_batch(deployment_id))
-            served_model_name = _extract_value(argv, "--served-model-name")
+            served_model_name = extract_served_model_name(argv, self._engine)
             port = _extract_port(argv)
             startup_elapsed = await self._watch_startup(deployment_id, port, health_timeout, cancel_event)
             self._record(deployment_id, "waiting_health")
@@ -531,7 +562,7 @@ class DeployRunner:
         info = self._process_manager.info
         if self._state != "ready" or info is None or not self._process_manager.is_running():
             raise NotServingError(self._state)
-        served_model_name = _extract_value(info.argv, "--served-model-name") or ""
+        served_model_name = extract_served_model_name(info.argv, self._engine) or ""
         port = _extract_port(info.argv)
         result = await asyncio.to_thread(run_smoke_test, port, served_model_name)
         self._last_smoke_ok = result.ok
@@ -691,20 +722,16 @@ class DeployRunner:
             pass  # superseded by a new deploy -- not actually a crash
 
 
+def _now() -> float:
+    return time.monotonic()
+
+
 def _vram_released(before_mb: int, current_mb: int) -> bool:
     return current_mb <= max(before_mb * RELEASED_FRACTION_THRESHOLD, RELEASED_ABSOLUTE_FLOOR_MB)
 
 
-def _extract_value(argv: list[str], flag: str) -> Optional[str]:
-    if flag in argv:
-        idx = argv.index(flag)
-        if idx + 1 < len(argv):
-            return argv[idx + 1]
-    return None
-
-
 def _extract_port(argv: list[str], default: int = DEFAULT_CHILD_PORT) -> int:
-    value = _extract_value(argv, "--port")
+    value = extract_value(argv, "--port")
     if value is not None:
         try:
             return int(value)

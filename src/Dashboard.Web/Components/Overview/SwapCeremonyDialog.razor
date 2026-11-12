@@ -1,4 +1,5 @@
 @using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
 @using Dashboard.Core.Supervisor
 @using Dashboard.Infrastructure.Persistence.V2
 @using Microsoft.JSInterop
@@ -54,7 +55,7 @@
         else if (_phase == Phase.Preview)
         {
             <div class="mb-2 text-muted small">
-                The vLLM process will restart inside the container. Endpoint down ~30–60s.
+                The @EngineCapabilities.DisplayName(Instance.EngineType) process will restart inside the container. Endpoint down ~30–60s.
             </div>
             <table class="table table-sm">
                 <thead><tr><th>Field</th><th>Current</th><th></th><th>New</th></tr></thead>
@@ -174,7 +175,7 @@
     [Parameter] public EventCallback OnClosed { get; set; }
     [Parameter] public EventCallback OnDeploymentSettled { get; set; }
 
-    private static readonly (string Key, string Label)[] Steps =
+    private static readonly (string Key, string Label)[] AllSteps =
     {
         ("stopping", "Stop old process"), // key = the supervisor's own state name
         ("releasing_gpu", "Release GPU"),
@@ -184,6 +185,14 @@
         ("waiting_health", "Health check"),
         ("smoke", "Smoke test"),
     };
+
+    /// <summary>The steps for THIS instance's engine. llama.cpp has no warm-up phase and no
+    /// weight-loading percentage (Findings 4), so it gets no "Warm up engine" row -- otherwise that
+    /// row would be ticked Done without ever having run -- and "Load weights" reads "Load model".</summary>
+    private (string Key, string Label)[] Steps =>
+        EngineCapabilities.HasWarmupPhase(Instance.EngineType)
+            ? AllSteps
+            : AllSteps.Where(s => s.Key != "warming_up").Select(s => s.Key == "loading" ? (s.Key, "Load model") : s).ToArray();
 
     private Phase _phase = Phase.Picking;
     private int _pickedModelId;
@@ -509,7 +518,7 @@
 
         try
         {
-            var result = await Recipes.ValidateDraftAsync(newRecipe, newModel.Id);
+            var result = await Recipes.ValidateDraftAsync(newRecipe, newModel.Id, Instance.EngineType);
             _softWarnings = result.SoftWarnings.Select(i => i.Message).ToList();
         }
         catch

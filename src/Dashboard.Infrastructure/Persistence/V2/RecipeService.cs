@@ -1,4 +1,5 @@
 using Dashboard.Core.Abstractions;
+using Dashboard.Core.Models;
 using Dashboard.Core.Recipes;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -35,7 +36,7 @@ public interface IRecipeService
     /// subset by throwing, see <see cref="CreateAsync"/>), deploy pre-flight, and
     /// the UI. Must be callable on an existing, possibly legacy-shaped row without
     /// throwing (doc 13 gap 12) -- it just reports issues.</summary>
-    Task<CompatibilityResult> ValidateAsync(int recipeId, int modelId, CancellationToken ct = default);
+    Task<CompatibilityResult> ValidateAsync(int recipeId, int modelId, SourceType? engine = null, CancellationToken ct = default);
 
     /// <summary>Same non-throwing validation as <see cref="ValidateAsync"/>, but for
     /// a draft that may not be saved yet (P13's recipe editor: inline validation as
@@ -43,7 +44,7 @@ public interface IRecipeService
     /// <see cref="ValidateAsync"/> can't be used). `modelId` is optional -- the
     /// model-dependent rules are skipped when it's null (no model picked yet), same
     /// as a recipe being model-agnostic at save time.</summary>
-    Task<CompatibilityResult> ValidateDraftAsync(Recipe draft, int? modelId, CancellationToken ct = default);
+    Task<CompatibilityResult> ValidateDraftAsync(Recipe draft, int? modelId, SourceType? engine = null, CancellationToken ct = default);
 
     /// <summary>Builds an UNSAVED draft recipe for the editor's "New recipe" entry
     /// point (P13) -- max_model_len prefilled from the model's own native context
@@ -79,9 +80,9 @@ public sealed class RecipeService : IRecipeService
     /// non-throwing equivalent, for callers (deploy pre-flight, the UI, or
     /// re-checking an existing legacy row) that need issues without an
     /// exception.</summary>
-    private static void ValidateFieldRulesForSave(Recipe recipe, Server server)
+    private static void ValidateFieldRulesForSave(Recipe recipe, Server server, SourceType engine)
     {
-        var result = CompatibilityPass.CheckRecipe(CoreRecipeMappers.ToCoreRecipe(recipe), CoreRecipeMappers.ToCoreServer(server));
+        var result = CompatibilityPass.CheckRecipe(CoreRecipeMappers.ToCoreRecipe(recipe, engine), CoreRecipeMappers.ToCoreServer(server));
         if (result.HardBlocks.Count > 0)
             throw new ArgumentException(string.Join(" ", result.HardBlocks.Select(i => i.Message)));
     }
@@ -107,7 +108,7 @@ public sealed class RecipeService : IRecipeService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var server = await RequireServerAsync(db, recipe.ServerId, ct);
-        ValidateFieldRulesForSave(recipe, server);
+        ValidateFieldRulesForSave(recipe, server, await ResolveEngineAsync(db, recipe.ServerId, ct));
 
         db.RecipesV2.Add(recipe);
         try
@@ -128,7 +129,7 @@ public sealed class RecipeService : IRecipeService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var server = await RequireServerAsync(db, recipe.ServerId, ct);
-        ValidateFieldRulesForSave(recipe, server);
+        ValidateFieldRulesForSave(recipe, server, await ResolveEngineAsync(db, recipe.ServerId, ct));
 
         db.RecipesV2.Update(recipe);
         try
@@ -203,7 +204,7 @@ public sealed class RecipeService : IRecipeService
         return await CreateAsync(recipe, ct);
     }
 
-    public async Task<CompatibilityResult> ValidateAsync(int recipeId, int modelId, CancellationToken ct = default)
+    public async Task<CompatibilityResult> ValidateAsync(int recipeId, int modelId, SourceType? engine = null, CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -213,23 +214,25 @@ public sealed class RecipeService : IRecipeService
             ?? throw new KeyNotFoundException($"No model with id {modelId}.");
         var server = await RequireServerAsync(db, recipe.ServerId, ct);
 
+        var effective = engine ?? await ResolveEngineAsync(db, recipe.ServerId, ct);
         return CompatibilityPass.Check(
-            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(recipe), CoreRecipeMappers.ToCoreServer(server));
+            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(recipe, effective), CoreRecipeMappers.ToCoreServer(server));
     }
 
-    public async Task<CompatibilityResult> ValidateDraftAsync(Recipe draft, int? modelId, CancellationToken ct = default)
+    public async Task<CompatibilityResult> ValidateDraftAsync(Recipe draft, int? modelId, SourceType? engine = null, CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var server = await RequireServerAsync(db, draft.ServerId, ct);
+        var effective = engine ?? await ResolveEngineAsync(db, draft.ServerId, ct);
 
         if (modelId is null)
-            return CompatibilityPass.CheckRecipe(CoreRecipeMappers.ToCoreRecipe(draft), CoreRecipeMappers.ToCoreServer(server));
+            return CompatibilityPass.CheckRecipe(CoreRecipeMappers.ToCoreRecipe(draft, effective), CoreRecipeMappers.ToCoreServer(server));
 
         var model = await db.ModelsV2.FindAsync([modelId.Value], ct)
             ?? throw new KeyNotFoundException($"No model with id {modelId}.");
         return CompatibilityPass.Check(
-            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(draft), CoreRecipeMappers.ToCoreServer(server));
+            CoreRecipeMappers.ToCoreModel(model), CoreRecipeMappers.ToCoreRecipe(draft, effective), CoreRecipeMappers.ToCoreServer(server));
     }
 
     public Recipe NewDraftForModel(Model model, string servedModelName) => new()
@@ -239,6 +242,17 @@ public sealed class RecipeService : IRecipeService
         MaxModelLen = CoreRecipeMappers.ReadNativeContextLength(model.Config) ?? new Recipe().MaxModelLen,
         GpuMemoryUtilization = 0.90f,
     };
+
+    /// <summary>Which engine's rules apply to a recipe when the caller doesn't say. Recipes belong to
+    /// a server, not an instance, so this looks at the server's instances: llama.cpp only when every
+    /// instance there is llama.cpp. A server with no instances, any vLLM instance, or a mix gets the
+    /// vLLM rules (the stricter set -- the recipe could be deployed to a vLLM instance); a swap
+    /// re-checks against its own instance's engine regardless.</summary>
+    private static async Task<SourceType> ResolveEngineAsync(AppDbContext db, int serverId, CancellationToken ct)
+    {
+        var engines = await db.InstancesV2.Where(i => i.ServerId == serverId).Select(i => i.Engine).Distinct().ToListAsync(ct);
+        return engines.Count > 0 && engines.All(e => e == SourceType.LlamaCpp.ToStorage()) ? SourceType.LlamaCpp : SourceType.Vllm;
+    }
 
     private static async Task<Server> RequireServerAsync(AppDbContext db, int serverId, CancellationToken ct) =>
         await db.ServersV2.FindAsync([serverId], ct)

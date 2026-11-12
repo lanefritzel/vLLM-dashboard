@@ -55,7 +55,7 @@ public class AddModelDownloadE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("button:has-text('+ Add model')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         await dialog.Locator("input.form-control").First.FillAsync("e2e-hf-model");
         await dialog.Locator("input[placeholder='org/repo-name']").FillAsync("org/stub-repo");
         await dialog.Locator("button:has-text('Inspect')").ClickAsync();
@@ -86,12 +86,12 @@ public class AddModelDownloadE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("button:has-text('+ Add model')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         await dialog.Locator("input.form-control").First.FillAsync("e2e-low-disk-model");
         await dialog.Locator("input[placeholder='org/repo-name']").FillAsync("org/stub-repo-big");
         await dialog.Locator("button:has-text('Inspect')").ClickAsync();
 
-        await dialog.Locator(".alert-danger:has-text('Not enough disk space')").WaitForAsync();
+        await dialog.Locator(".ui-callout-danger:has-text('Not enough disk space')").WaitForAsync();
         await dialog.Locator("text=Required 1,000,000 bytes, available 100 bytes.").WaitForAsync();
         Assert.Equal(0, await dialog.Locator("button:has-text('Download')").CountAsync());
 
@@ -109,7 +109,7 @@ public class AddModelDownloadE2ETests
         await page.GotoAsync(_fixture.BaseUrl + "/models-recipes", new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         await page.ClickAsync("button:has-text('+ Add model')");
-        var dialog = page.Locator(".modal-dialog-custom");
+        var dialog = page.Locator("dialog[open]");
         await dialog.Locator("input.form-control").First.FillAsync("e2e-busy-model");
         await dialog.Locator("input[placeholder='org/repo-name']").FillAsync("org/stub-repo-busy");
         await dialog.Locator("button:has-text('Inspect')").ClickAsync();

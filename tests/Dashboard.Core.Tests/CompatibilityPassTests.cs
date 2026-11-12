@@ -6,7 +6,7 @@ public class CompatibilityPassTests
 {
     private static RecipeModel PlainModel() => new() { Path = "/data/models/hf-cache/plain-model" };
     private static RecipeServer PlainServer() => new() { ModelsDir = "/data/models" };
-    private static Recipe PlainRecipe() => new();
+    private static VllmRecipe PlainRecipe() => new();
 
     [Fact]
     public void Check_TensorParallelSizeExceedingGpuCount_IsAHardBlock()

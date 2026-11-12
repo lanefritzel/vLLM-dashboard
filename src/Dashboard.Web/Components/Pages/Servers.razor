@@ -2,6 +2,8 @@
 @rendermode InteractiveServer
 @attribute [Authorize]
 @using Dashboard.Core.Abstractions
+@using Dashboard.Core.Models
+@using Dashboard.Core.Onboarding
 @using Dashboard.Core.Supervisor
 @using Dashboard.Infrastructure.Persistence.V2
 @using Dashboard.Web.Components.Shared
@@ -36,11 +38,11 @@ else
                      Description="@($"{server.DockerHost ?? "no Docker host"} · {server.GpuName ?? "no GPU set"} {(server.GpuCount > 1 ? $"x{server.GpuCount}" : "")} {(server.GpuMemGb is { } gb ? $"({gb} GB)" : "")} · models dir: {(string.IsNullOrWhiteSpace(server.ModelsDir) ? "—" : server.ModelsDir)}")"
                      HeaderActions="@ServerHeaderActions(server)"
                      Flush="true">
-                <TableShell Caption="@($"Instances on {server.Label}")" ColumnCount="5"
+                <TableShell Caption="@($"Engine Instances on {server.Label}")" ColumnCount="5"
                             IsEmpty="@(!HasInstances(server.Id))"
-                            EmptyTitle="No instances on this server yet">
+                            EmptyTitle="No engine instances on this server yet">
                     <Header>
-                        <th scope="col">Instance</th>
+                        <th scope="col">Engine Instance</th>
                         <th scope="col">Proxy slug</th>
                         <th scope="col">Port</th>
                         <th scope="col">Supervisor</th>
@@ -67,7 +69,7 @@ else
                         }
                     </ChildContent>
                     <Footer>
-                        <UiButton Variant="secondary" Size="sm" OnClick="@(() => OpenNewInstance(server))">+ Add instance</UiButton>
+                        <UiButton Variant="secondary" Size="sm" OnClick="@(() => OpenNewInstance(server))">+ Add engine instance</UiButton>
                     </Footer>
                 </TableShell>
             </UiPanel>
@@ -131,7 +133,7 @@ else
 
 @if (_editingInstance is not null)
 {
-    <Dialog Title="@(_instanceIsNew ? "Add instance" : "Edit instance")" Size="md"
+    <Dialog Title="@(_instanceIsNew ? "Add engine instance" : "Edit engine instance")" Size="md"
             Open="@(_editingInstance is not null)" OpenChanged="@(open => { if (!open) CloseInstanceDialog(); })"
             Footer="@InstanceDialogFooter">
         <form id="instance-form" @onsubmit="SaveInstanceAsync" @onsubmit:preventDefault="true" class="row g-3">
@@ -147,7 +149,17 @@ else
                 </UiField>
             </div>
             <div class="col-md-4">
-                <UiField Label="vLLM port" For="in-port">
+                <UiField Label="Engine" For="in-engine">
+                    <UiSelect Id="in-engine" @bind-Value="_inEngine">
+                        @foreach (var engine in EngineCapabilities.Options)
+                        {
+                            <option value="@engine.Storage">@engine.Label</option>
+                        }
+                    </UiSelect>
+                </UiField>
+            </div>
+            <div class="col-md-4">
+                <UiField Label="Engine port" For="in-port">
                     <UiInput Id="in-port" Type="number" Value="@_inPort.ToString()" ValueChanged="@(v => _inPort = int.TryParse(v, out var n) ? n : _inPort)" />
                 </UiField>
             </div>
@@ -173,9 +185,29 @@ else
                 @if (_testResult is not null)
                 {
                     <div style="margin-top: var(--ui-space-2);">
-                        <Callout Tone="@(_testOk ? "success" : "danger")">@_testResult</Callout>
+                        <Callout Tone="@(_testWarning is not null ? "warn" : _testOk ? "success" : "danger")">
+                            @_testResult
+                            @if (_testWarning is not null)
+                            {
+                                <div>@_testWarning</div>
+                            }
+                        </Callout>
                     </div>
                 }
+            </div>
+
+            <div class="col-md-12">
+                <UiField Label="Compose snippet" For="in-snippet-gpu"
+                         Hint="Paste this into your own compose file to run this engine's supervisor. The dashboard never touches Docker.">
+                    <UiSelect Id="in-snippet-gpu" Value="@_snippetGpu.ToStorage()"
+                              ValueChanged="@(v => _snippetGpu = GpuVendorExtensions.FromStorage(v))">
+                        @foreach (var gpu in Enum.GetValues<GpuVendor>())
+                        {
+                            <option value="@gpu.ToStorage()">@ComposeSnippet.GpuLabel(gpu)</option>
+                        }
+                    </UiSelect>
+                </UiField>
+                <CodeBlock Code="@CurrentSnippet" Language="docker-compose.yml" />
             </div>
 
             @if (!_instanceIsNew && _editingInstance!.AdminUrl is not null)
@@ -223,6 +255,7 @@ else
     private bool _instanceIsNew;
     private string _inLabel = "";
     private string _inProxySlug = "";
+    private string _inEngine = EngineCapabilities.DefaultEngine.Storage;
     private int _inPort = 9999;
     private string _inContainerName = "";
     private int _inPollIntervalMs = 1000;
@@ -230,8 +263,29 @@ else
 
     private bool _testBusy;
     private bool _testOk;
+    private string? _testWarning;
+    private GpuVendor _snippetGpu = GpuVendor.None;
     private string? _testResult;
     private bool? _autoStartOn;
+
+    /// <summary>The compose service block for the instance as currently entered in the dialog.</summary>
+    private string CurrentSnippet
+    {
+        get
+        {
+            var server = _servers.FirstOrDefault(sv => sv.Id == _editingInstanceServerId);
+            var adminPort = Uri.TryCreate(_inAdminUrl.Trim(), UriKind.Absolute, out var uri) && !uri.IsDefaultPort ? uri.Port : 8000;
+            return ComposeSnippet.Generate(new ComposeSnippetRequest
+            {
+                Engine = SourceTypeExtensions.FromStorage(_inEngine),
+                Gpu = _snippetGpu,
+                ModelsDir = server?.ModelsDir ?? "/models",
+                ServiceName = string.IsNullOrWhiteSpace(_inProxySlug) ? "supervisor" : _inProxySlug.Trim(),
+                ContainerName = string.IsNullOrWhiteSpace(_inContainerName) ? null : _inContainerName.Trim(),
+                AdminPort = adminPort,
+            });
+        }
+    }
 
     private bool HasInstances(int serverId) => _instancesByServer.TryGetValue(serverId, out var list) && list.Count > 0;
 
@@ -334,9 +388,11 @@ else
         _editingInstanceServerId = server.Id;
         _editingInstance = new Instance { ServerId = server.Id };
         _instanceIsNew = true;
-        _inLabel = ""; _inProxySlug = ""; _inPort = 9999; _inContainerName = ""; _inPollIntervalMs = 1000;
+        _inLabel = ""; _inProxySlug = ""; _inEngine = EngineCapabilities.DefaultEngine.Storage; _inPort = 9999; _inContainerName = ""; _inPollIntervalMs = 1000;
         _inAdminUrl = "";
         _testResult = null;
+        _testWarning = null;
+        _snippetGpu = ComposeSnippet.GuessGpu(server.GpuName);
         _autoStartOn = null;
     }
 
@@ -347,11 +403,14 @@ else
         _instanceIsNew = false;
         _inLabel = instance.Label;
         _inProxySlug = instance.ProxySlug;
+        _inEngine = instance.Engine;
         _inPort = instance.Port;
         _inContainerName = instance.ContainerName ?? "";
         _inPollIntervalMs = instance.PollIntervalMs;
         _inAdminUrl = instance.AdminUrl ?? "";
         _testResult = null;
+        _testWarning = null;
+        _snippetGpu = ComposeSnippet.GuessGpu(server.GpuName);
         // null ("checking…") until RefreshAutoStartAsync resolves the real value --
         // showing a guessed default here would flash the wrong state on every open.
         _autoStartOn = null;
@@ -380,6 +439,7 @@ else
     {
         _testBusy = true;
         _testResult = null;
+        _testWarning = null;
         StateHasChanged();
         try
         {
@@ -395,6 +455,7 @@ else
             var gpu = await SupervisorClient.GetGpuAsync(_inAdminUrl.Trim());
             var currentModel = status.Child?.Argv is { Count: > 0 } argv ? string.Join(" ", argv.TakeLast(2)) : "idle";
             _testOk = true;
+            _testWarning = EngineMismatch.Check(SourceTypeExtensions.FromStorage(_inEngine), status.Engine);
             _testResult = $"Connected. GPU: {gpu.Vendor} ({gpu.TotalMb ?? 0} MB total) · supervisor state: {status.State} · {currentModel}";
         }
         catch (Exception ex)
@@ -431,7 +492,7 @@ else
             var instance = new Instance
             {
                 Id = _editingInstance!.Id, ServerId = _editingInstanceServerId,
-                Label = _inLabel.Trim(), ProxySlug = _inProxySlug.Trim(), Port = Math.Max(1, _inPort),
+                Label = _inLabel.Trim(), ProxySlug = _inProxySlug.Trim(), Engine = _inEngine, Port = Math.Max(1, _inPort),
                 ContainerName = string.IsNullOrWhiteSpace(_inContainerName) ? null : _inContainerName.Trim(),
                 PollIntervalMs = Math.Max(100, _inPollIntervalMs),
                 AdminUrl = string.IsNullOrWhiteSpace(_inAdminUrl) ? null : _inAdminUrl.Trim(),

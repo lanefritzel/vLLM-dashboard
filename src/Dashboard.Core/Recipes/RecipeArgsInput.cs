@@ -1,13 +1,30 @@
 namespace Dashboard.Core.Recipes;
 
-/// <summary>A model-agnostic settings bundle, in <see cref="ArgBuilder"/>'s own
-/// plain-input shape — deliberately not the EF entity (Dashboard.Infrastructure.
-/// Persistence.V2.Recipe), since this builder is pure code with no DB dependency
-/// (P09a). A caller maps from the persisted recipe once that wiring exists (P09b+).</summary>
-public sealed record Recipe
+/// <summary>The engine-independent part of a recipe: only the fields that mean the
+/// same thing on every engine (P1). Engine-specific dials live on the derived
+/// <see cref="VllmRecipe"/> / <see cref="LlamaCppRecipe"/>, so an engine's builder
+/// can't even see another engine's dials -- structural, not runtime-ignored.
+/// Deliberately not the EF entity (Dashboard.Infrastructure.Persistence.V2.Recipe):
+/// pure code with no DB dependency (P09a).</summary>
+public abstract record Recipe
 {
     public string ServedModelName { get; init; } = "main";
     public int MaxModelLen { get; init; } = 8192;
+
+    /// <summary>Key/value rows, no leading "--"; a blank value means a boolean flag.
+    /// Applied last, after every dial, and in encounter order: a key that
+    /// duplicates an earlier flag REPLACES its value in place rather than emitting
+    /// the flag twice (doc 11 Phase 9).</summary>
+    public IReadOnlyList<RecipeExtraArg> ExtraArgs { get; init; } = Array.Empty<RecipeExtraArg>();
+
+    /// <summary>Env overrides for the engine process. Later entries win on a duplicate
+    /// key. The compose-owned base env is merged in by the caller, not here.</summary>
+    public IReadOnlyList<RecipeEnvOverride> ExtraEnv { get; init; } = Array.Empty<RecipeEnvOverride>();
+}
+
+/// <summary>vLLM's dial set, on top of the shared <see cref="Recipe"/> fields.</summary>
+public sealed record VllmRecipe : Recipe
+{
     public double GpuMemoryUtilization { get; init; } = 0.90;
     public string KvCacheDtype { get; init; } = "auto";
     public string Dtype { get; init; } = "auto";
@@ -24,16 +41,45 @@ public sealed record Recipe
     public bool EnableAutoToolChoice { get; init; }
     public string? ToolCallParser { get; init; }
     public string? ReasoningParser { get; init; }
+}
 
-    /// <summary>Key/value rows, no leading "--"; a blank value means a boolean flag.
-    /// Applied last, after every dial above, and in encounter order: a key that
-    /// duplicates an earlier flag REPLACES its value in place rather than emitting
-    /// the flag twice (doc 11 Phase 9).</summary>
-    public IReadOnlyList<RecipeExtraArg> ExtraArgs { get; init; } = Array.Empty<RecipeExtraArg>();
+/// <summary>llama.cpp's dial set. The spike found only the shared fields (served name
+/// -> --alias, max len -> --ctx-size, extra args/env) carry over directly; <see
+/// cref="GpuLayers"/> (P6) is llama.cpp's own, with no vLLM equivalent (vLLM's analogous
+/// "how much VRAM" concept is <see cref="VllmRecipe.GpuMemoryUtilization"/>).</summary>
+public sealed record LlamaCppRecipe : Recipe
+{
+    public LlamaCppGpuLayers GpuLayers { get; init; } = LlamaCppGpuLayers.Auto;
+}
 
-    /// <summary>Env overrides for the vLLM process. Later entries win on a duplicate
-    /// key. The compose-owned base env is merged in by the caller, not here.</summary>
-    public IReadOnlyList<RecipeEnvOverride> ExtraEnv { get; init; } = Array.Empty<RecipeEnvOverride>();
+/// <summary>How many model layers llama-server offloads to the GPU, confirmed against
+/// a real CUDA build's own --help (P6): llama.cpp's --gpu-layers takes an exact number,
+/// "auto", or "all" -- deliberately a closed dropdown here, not a free number field
+/// (owner call: no free text where a fat-finger could land on a nonsense value).
+/// "auto" is the engine's own default, so <see cref="Auto"/> omits the flag entirely
+/// rather than spelling out the word.</summary>
+public enum LlamaCppGpuLayers
+{
+    Auto,
+    All,
+    Cpu,
+}
+
+public static class LlamaCppGpuLayersExtensions
+{
+    public static string ToStorage(this LlamaCppGpuLayers value) => value switch
+    {
+        LlamaCppGpuLayers.All => "all",
+        LlamaCppGpuLayers.Cpu => "cpu",
+        _ => "auto",
+    };
+
+    public static LlamaCppGpuLayers FromStorage(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "all" => LlamaCppGpuLayers.All,
+        "cpu" => LlamaCppGpuLayers.Cpu,
+        _ => LlamaCppGpuLayers.Auto,
+    };
 }
 
 public sealed record RecipeExtraArg(string Key, string? Value);

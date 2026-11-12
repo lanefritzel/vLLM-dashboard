@@ -19,6 +19,7 @@ public sealed class MetricsSourceFactory : IMetricsSourceFactory
         {
             SourceType.Ollama => new OllamaSource(source.InferenceUrl, _httpFactory),
             SourceType.Mock => new MockMetricsSource(),
+            SourceType.LlamaCpp => new LlamaCppMetricsSource(source.InferenceUrl, _httpFactory),
             _ => new VllmPrometheusSource(source.MetricsUrl, _httpFactory),
         };
     }

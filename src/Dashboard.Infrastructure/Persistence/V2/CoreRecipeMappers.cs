@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dashboard.Core.Models;
 using Dashboard.Core.Recipes;
 
 namespace Dashboard.Infrastructure.Persistence.V2;
@@ -12,7 +13,7 @@ internal static class CoreRecipeMappers
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public static Dashboard.Core.Recipes.Recipe ToCoreRecipe(Recipe recipe) => new()
+    public static VllmRecipe ToCoreRecipe(Recipe recipe) => new()
     {
         ServedModelName = recipe.ServedModelName,
         MaxModelLen = recipe.MaxModelLen,
@@ -29,6 +30,22 @@ internal static class CoreRecipeMappers
         ReasoningParser = recipe.ReasoningParser,
         ExtraArgs = ParseExtraArgs(recipe.ExtraArgs),
         ExtraEnv = ParseExtraEnv(recipe.ExtraEnv),
+    };
+
+    /// <summary>The recipe in the pure shape for the given engine. A llama.cpp recipe keeps only
+    /// the shared fields -- the entity's vLLM-only columns are simply not read.</summary>
+    public static Dashboard.Core.Recipes.Recipe ToCoreRecipe(Recipe recipe, SourceType engine) => engine switch
+    {
+        SourceType.Vllm => ToCoreRecipe(recipe),
+        SourceType.LlamaCpp => new LlamaCppRecipe
+        {
+            ServedModelName = recipe.ServedModelName,
+            MaxModelLen = recipe.MaxModelLen,
+            GpuLayers = LlamaCppGpuLayersExtensions.FromStorage(recipe.GpuLayers),
+            ExtraArgs = ParseExtraArgs(recipe.ExtraArgs),
+            ExtraEnv = ParseExtraEnv(recipe.ExtraEnv),
+        },
+        _ => throw new NotSupportedException($"No recipe mapping for engine '{engine}'."),
     };
 
     public static RecipeServer ToCoreServer(Server server) => new()

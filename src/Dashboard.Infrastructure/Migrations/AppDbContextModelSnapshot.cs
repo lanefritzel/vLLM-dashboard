@@ -720,6 +720,13 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<string>("Engine")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasDefaultValue("vllm");
+
                     b.Property<string>("Host")
                         .HasColumnType("text");
 
@@ -854,6 +861,10 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<string>("ExtraEnv")
                         .IsRequired()
                         .HasColumnType("jsonb");
+
+                    b.Property<string>("GpuLayers")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<float>("GpuMemoryUtilization")
                         .HasColumnType("real");

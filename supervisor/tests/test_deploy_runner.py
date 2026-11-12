@@ -459,3 +459,82 @@ def test_loading_is_not_reported_while_vllm_is_still_importing(tmp_path):
         pm.stop()
     assert current == "starting"
     assert "loading" not in states and "waiting_health" not in states
+
+
+# --- P2: engine-aware deploys (llama.cpp) ---
+
+FAKE_LLAMACPP = str(Path(__file__).parent.parent.parent / "tests" / "fake-llamacpp" / "fake_llamacpp.py")
+LLAMACPP_LOG = str(Path(__file__).parent / "fixtures" / "llamacpp_qwen2.5-0.5b_startup.log")
+
+
+def llamacpp_argv(port: int, alias: str) -> list[str]:
+    return [sys.executable, FAKE_LLAMACPP, "--port", str(port), "--alias", alias, "--fake-startup-log", LLAMACPP_LOG]
+
+
+def test_llamacpp_deploy_uses_its_own_tracker_and_reaches_ready(tmp_path):
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path), engine="llamacpp")
+    try:
+        ok = run(runner.deploy_and_wait(llamacpp_argv(free_port(), "model-a"), deployment_id="d1", health_timeout=15))
+        assert ok is True
+        states = [e.state for e in runner.events_for("d1")]
+        assert "warming_up" not in states  # vLLM-only phase must never be reported for llama.cpp
+        assert states[0] == "starting" and states[-2:] == ["ready", "smoke"]
+        assert runner.state == "ready"
+    finally:
+        pm.stop()
+
+
+def test_default_runner_engine_is_vllm(tmp_path):
+    runner, _ = new_runner(tmp_path)
+    assert runner.engine == "vllm"
+
+
+def test_llamacpp_smoke_test_sends_the_alias_as_the_model(tmp_path):
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path), engine="llamacpp")
+    try:
+        argv = llamacpp_argv(free_port(), "model-a") + ["--fake-require-model", "model-a"]
+        ok = run(runner.deploy_and_wait(argv, deployment_id="d1", health_timeout=15))
+        assert ok is True
+        assert runner.last_smoke_ok is True  # fake answers OK only when the request's model == alias
+    finally:
+        pm.stop()
+
+
+def test_failed_version_fetch_is_not_retried_on_every_status_poll(tmp_path, monkeypatch):
+    """engine_info() runs on every GET /admin/status; an unreadable /props must back off
+    instead of costing a blocking probe per poll for the deployment's whole life."""
+    calls = []
+    clock = [1000.0]
+    monkeypatch.setattr("supervisor.deploy_runner.fetch_version", lambda engine, port: calls.append(port) or None)
+    monkeypatch.setattr("supervisor.deploy_runner._now", lambda: clock[0])
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path), engine="llamacpp")
+    try:
+        assert run(runner.deploy_and_wait(llamacpp_argv(free_port(), "m"), deployment_id="d1", health_timeout=15))
+        for _ in range(10):
+            assert runner.engine_info["version"] is None
+        assert len(calls) == 1  # one probe, then backed off
+
+        clock[0] += 3600  # long past any backoff window
+        runner.engine_info
+        assert len(calls) == 2  # eventually retried, so a late /props is still picked up
+    finally:
+        pm.stop()
+
+
+def test_version_fetch_backoff_resets_for_a_new_child(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("supervisor.deploy_runner.fetch_version", lambda engine, port: calls.append(port) or None)
+    monkeypatch.setattr("supervisor.deploy_runner._now", lambda: 1000.0)
+    pm = ProcessManager()
+    runner = DeployRunner(pm, StateStore(tmp_path / "state.json"), archive=DeploymentArchive(tmp_path), engine="llamacpp")
+    try:
+        run(runner.deploy_and_wait(llamacpp_argv(free_port(), "a"), deployment_id="d1", health_timeout=15))
+        runner.engine_info
+        run(runner.deploy_and_wait(llamacpp_argv(free_port(), "b"), deployment_id="d2", health_timeout=15))
+        runner.engine_info
+        assert len(calls) == 2  # the new pid is probed immediately, not held back by the old child's backoff
+    finally:
+        pm.stop()

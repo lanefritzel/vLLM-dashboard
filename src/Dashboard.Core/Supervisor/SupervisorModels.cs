@@ -11,6 +11,14 @@ public sealed record SupervisorChildInfo
     public double Uptime { get; init; }
 }
 
+/// <summary>Which inference engine the supervisor wraps (P2). Version is null until
+/// the supervisor can report one.</summary>
+public sealed record SupervisorEngineInfo
+{
+    public required string Name { get; init; }
+    public string? Version { get; init; }
+}
+
 public sealed record SupervisorStatus
 {
     public required string State { get; init; }
@@ -20,6 +28,9 @@ public sealed record SupervisorStatus
     public string? CurrentDeploymentId { get; init; }
     public Dictionary<string, object?>? FailureReport { get; init; }
     public bool? SmokeOk { get; init; }
+
+    /// <summary>Null when talking to a supervisor older than P2.</summary>
+    public SupervisorEngineInfo? Engine { get; init; }
 }
 
 public sealed record SupervisorDeploymentEvent
