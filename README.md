@@ -2,10 +2,12 @@
 
 [![Docker Hub](https://img.shields.io/docker/v/lanedfritz/vllm-dashboard?sort=semver)](https://hub.docker.com/r/lanedfritz/vllm-dashboard)
 
-A self-hosted dashboard for monitoring and controlling one or more [vLLM](https://github.com/vllm-project/vllm)
-inference servers on your own network — live metrics, historical usage, a
-curated model/recipe catalog, one-click model swapping with a live progress
-view, and a transparent OpenAI-compatible proxy in front of it all.
+A self-hosted dashboard for monitoring and controlling one or more
+[vLLM](https://github.com/vllm-project/vllm) or
+[llama.cpp](https://github.com/ggml-org/llama.cpp) inference servers on your
+own network — live metrics, historical usage, a curated model/recipe
+catalog, one-click model swapping with a live progress view, and a
+transparent OpenAI-compatible proxy in front of it all.
 
 Think of it as **llama-swap, but with a UI**: a stable `/v1` endpoint that your
 tools (OpenWebUI, LibreChat, opencode, any OpenAI SDK client) talk to
@@ -36,36 +38,65 @@ This image is **one piece of a small stack**, not a single-container app:
 - **Dashboard** (this image) — the web UI, Postgres-backed state (servers,
   models, recipes, metrics history), and the proxy. This is the only piece
   published to Docker Hub.
-- **Supervisor** — a small Python sidecar that runs *alongside* vLLM on each
-  GPU machine and actually starts/stops/health-checks the vLLM process on the
-  dashboard's behalf. It's built, not pulled — the Compose stack below builds
-  it straight from this repo's `supervisor/` directory on your own machine,
-  layered onto whatever vLLM base image matches your hardware (e.g.
-  `intel/llm-scaler-vllm` or `vllm/vllm-openai`). `docker compose up -d --build`
-  handles the clone and build for you; no separate image, no manual git clone.
-  Its admin API binds to loopback only, so the dashboard reaches it over
-  `127.0.0.1` on a shared network namespace (`network_mode: host` is the
-  simplest way to get there) rather than any token or network-exposed auth.
-- **Visualizer plugin** (inside the supervisor image) — a vLLM plugin that
-  vLLM loads by itself. It serves a small activity summary on loopback port
-  `9998`; the dashboard connects to it only while someone has the Neuron map
-  open. Nothing to deploy separately.
+- **Supervisor** — a small Python sidecar that runs *alongside* the inference
+  engine on each GPU machine and actually starts/stops/health-checks its
+  process on the dashboard's behalf. Each instance picks its engine (vLLM or
+  llama.cpp) per recipe. It's built, not pulled — the Compose stack below
+  builds it straight from this repo's `supervisor/` directory on your own
+  machine, layered onto whatever base image matches your hardware and engine
+  (e.g. `intel/llm-scaler-vllm` or `vllm/vllm-openai` for vLLM via
+  `supervisor/Dockerfile`; the official `ghcr.io/ggml-org/llama.cpp` server
+  image for llama.cpp via `supervisor/Dockerfile.llamacpp`). `docker compose
+  up -d --build` handles the clone and build for you; no separate image, no
+  manual git clone. Its admin API binds to loopback only, so the dashboard
+  reaches it over `127.0.0.1` on a shared network namespace (`network_mode:
+  host` is the simplest way to get there) rather than any token or
+  network-exposed auth.
+- **Visualizer plugin** (inside the vLLM supervisor image only) — a vLLM
+  plugin that vLLM loads by itself. It serves a small activity summary on
+  loopback port `9998`; the dashboard connects to it only while someone has
+  the Neuron map open. Nothing to deploy separately. **vLLM only** — llama.cpp
+  has no equivalent runtime plugin mechanism (see
+  [Engine differences](#engine-differences) below), so instances on that
+  engine don't show a Neuron map.
 - **Postgres** — metrics history, server/model/recipe config, accounts.
 
-If you just want live metrics/history for a vLLM (or Ollama) server that's
-already running somewhere, you don't need a supervisor at all — add it as a
-monitoring-only source and skip straight to the proxy. Model swapping,
+If you just want live metrics/history for a vLLM, llama.cpp, or Ollama server
+that's already running somewhere, you don't need a supervisor at all — add it
+as a monitoring-only source and skip straight to the proxy. Model swapping,
 idle-unload, and restore-on-boot all require that source's supervisor.
+
+### Engine differences
+
+Both engines share the same recipe catalog, swap ceremony, proxy, and
+history, but a few things only work on one of them:
+
+| Capability | vLLM | llama.cpp |
+|---|---|---|
+| Live throughput / KV cache % | Prometheus `/metrics` scrape | read from each request's own streamed `timings` object (no scrape race, see below) |
+| Neuron map (live per-layer activation view) | yes | no — llama.cpp has no runtime plugin hook equivalent to vLLM's; it would require a patched/forked `llama-server` build (researched, not pursued — see the project's internal notes) |
+| GPU offload control | `--gpu-memory-utilization` and friends | `--gpu-layers` (**All** / **CPU only** / a specific layer count via Extra args) |
+
+llama.cpp's live metrics deliberately do **not** come from its `/metrics`
+endpoint's token counters: `llama-server` is effectively single-threaded
+while streaming a completion, so a scrape made mid-generation can queue
+behind it and read back an inflated tok/s on the next successful scrape.
+Instead, the proxy asks for `timings_per_token` on every llama.cpp request and
+reads throughput/KV% directly out of each streamed chunk's own numbers — the
+engine's own live truth, not a sampled approximation.
 
 ## Features
 
 - **Live monitoring** — requests running/waiting, KV cache usage, throughput,
-  latency (TTFT/ITL/E2E), scraped from vLLM's Prometheus `/metrics`, with
-  30-day history and hourly rollups.
-- **Model-driven swap** — a curated, typed catalog of vLLM launch options
-  (recipes: context length, GPU memory utilization, dtype, and the rest of
-  vLLM's flags) instead of free-text CLI strings, with a live step-by-step
-  progress view and log tail while a swap is in flight.
+  latency (TTFT/ITL/E2E); scraped from vLLM's Prometheus `/metrics`, or read
+  live from llama.cpp's own per-request streaming timings (see
+  [Engine differences](#engine-differences)) — with 30-day history and hourly
+  rollups either way.
+- **Model-driven swap** — a curated, typed catalog of engine launch options
+  per recipe (vLLM: context length, GPU memory utilization, dtype, and the
+  rest of vLLM's flags; llama.cpp: context size, GPU layer offload, and the
+  rest of `llama-server`'s flags) instead of free-text CLI strings, with a
+  live step-by-step progress view and log tail while a swap is in flight.
 - **Transparent OpenAI-compatible proxy** — point any client at
   `/proxy/<slug>/v1`; `/v1/models` answers with the full registered catalog
   for that source, not just whatever's currently loaded.
@@ -242,6 +273,31 @@ you're only adding monitoring-only sources, you can drop the `supervisor`
 service entirely and the `network_mode: host` lines above — a plain
 `ports: ["8080:8080"]` mapping on the dashboard is enough.
 
+### llama.cpp hosts
+
+A server can run llama.cpp instead of vLLM — the dashboard talks to both the
+same way, through its own supervisor. Point the `supervisor` service at the
+llama.cpp Dockerfile and the official llama.cpp server image instead:
+
+```yaml
+  supervisor:
+    build:
+      context: https://github.com/lanefritzel/vLLM-dashboard.git#main:supervisor
+      dockerfile: Dockerfile.llamacpp
+      args:
+        # Pin by digest, not the floating `:server` tag -- bump deliberately.
+        BASE_IMAGE: ghcr.io/ggml-org/llama.cpp:server
+    # GPU passthrough is the same shape as above: /dev/dri for Intel/AMD, or
+    # the NVIDIA `deploy.resources.reservations` block shown above for NVIDIA.
+```
+
+Everything else (Postgres, the dashboard service, `network_mode: host`) is
+unchanged. When you create a recipe for an instance on this server, pick
+**llama.cpp** as its engine — the recipe editor, Help page, and Playground
+all adapt to show that engine's own fields (context size, GPU layer offload)
+instead of vLLM's. There's no Neuron map for llama.cpp instances — see
+[Engine differences](#engine-differences).
+
 ## Configuration
 
 | Variable | Required | Description |
@@ -320,12 +376,11 @@ currently loaded, so a client with model auto-discovery (e.g. LibreChat's
 ## Getting started: the three steps
 
 1. **Servers** — register the machine (label, GPU info, models directory) and
-   an instance on it (proxy slug, vLLM port, the supervisor's own URL). Use
+   an instance on it (proxy slug, engine, port, the supervisor's own URL). Use
    **Test connection** before saving.
 2. **Models & Recipes** — add a model (a local path, or download one from
-   Hugging Face through the supervisor) and create a recipe for it (context
-   length, GPU memory utilization, dtype, and the rest of vLLM's launch
-   flags).
+   Hugging Face through the supervisor) and create a recipe for it — fields
+   depend on the instance's engine (see [Engine differences](#engine-differences)).
 3. **Overview** — pick a recipe and swap it in. The swap view shows a live
    diff, step-by-step progress as the supervisor reports it, and the result.
 
@@ -358,6 +413,20 @@ Your own values will differ; this is here for the escape-hatch fields
 The **Extra args** row is the general escape hatch for any vLLM flag the
 typed recipe fields don't cover — like this model's Mamba-cache options —
 without waiting on the dashboard to add a dedicated field for it.
+
+### Example llama.cpp recipe
+
+A llama.cpp recipe has its own, much smaller dial set — no GPU memory
+utilization, dtype, or block size, since those are vLLM-specific:
+
+| Field | Value |
+|---|---|
+| Served model name | `gemma-uncensored` |
+| Max model length (`--ctx-size`) | `8192` |
+| GPU layers | **All** (or **CPU only**, or a specific count via Extra args) |
+| Extra args | any other `llama-server` flag, e.g. `flash-attn` (blank value — boolean flag) |
+
+`--metrics` and a free port are added automatically; you don't set them.
 
 ### Known recipes
 
