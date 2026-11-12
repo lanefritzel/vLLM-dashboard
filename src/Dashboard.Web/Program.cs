@@ -118,6 +118,12 @@ builder.Services.AddSingleton<IBroadcastThrottler, Dashboard.Application.Metrics
 builder.Services.AddSingleton<IMetricsService, Dashboard.Application.Metrics.MetricsService>();
 builder.Services.AddSingleton<IMetricsSourceFactory, Dashboard.Infrastructure.Scrapers.MetricsSourceFactory>();
 builder.Services.AddSingleton<IInferenceProbe, Dashboard.Application.Metrics.InferenceProbeService>();
+// P7: the proxy (observing a real llama.cpp stream) and the poller (scraping /metrics)
+// are two producers feeding the same IMetricsService/MetricsHub consumer -- this is the
+// proxy-side producer's own broadcaster, needed because Dashboard.Infrastructure and
+// Dashboard.Application are sibling projects that don't reference each other.
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.IMetricsBroadcaster, Dashboard.Application.Metrics.MetricsBroadcaster>();
+builder.Services.AddSingleton<Dashboard.Core.Abstractions.ILlamaCppLiveMetricsPublisher, Dashboard.Infrastructure.Proxy.LlamaCppLiveMetricsPublisher>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Proxy.IModelProxyService, Dashboard.Infrastructure.Proxy.ModelProxyService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Proxy.IInFlightTrafficTracker, Dashboard.Infrastructure.Proxy.InFlightTrafficTracker>();
 builder.Services.AddSingleton<IMetricsHistory, MetricsHistory>();

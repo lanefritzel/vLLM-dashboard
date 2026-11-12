@@ -42,7 +42,25 @@ public class LlamaCppMetricsSourceTests
 
         Assert.True(snapshot.Up);
         Assert.Equal(2, snapshot.Running);
-        Assert.Equal(500, snapshot.GenTokensTotal);
+    }
+
+    /// <summary>P7: confirmed live against serenity -- llama-server is effectively
+    /// single-threaded while streaming a completion, so a /metrics scrape made during a
+    /// long generation can queue for the whole generation; the next successful scrape's
+    /// counter delta then lands compressed enough for MetricsAggregator's rate math to
+    /// read as an absurd tok/s spike. The proxy-chunk live path (P7) is the sole GenTps/
+    /// PromptTps source for llama.cpp now; this scraper must never also feed them, even
+    /// though the parser still has the raw counters available.</summary>
+    [Fact]
+    public async Task ScrapeAsync_NeverSurfacesGenOrPromptTokenCounters_EvenWhenThePayloadHasThem()
+    {
+        var source = CreateSource(_ => Text(HttpStatusCode.OK,
+            "llamacpp:tokens_predicted_total 500\nllamacpp:prompt_tokens_total 200\n"));
+
+        var snapshot = await source.ScrapeAsync();
+
+        Assert.Null(snapshot.GenTokensTotal);
+        Assert.Null(snapshot.PromptTokensTotal);
     }
 
     [Fact]

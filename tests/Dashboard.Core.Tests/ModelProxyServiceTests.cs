@@ -184,4 +184,39 @@ public class ModelProxyServiceTests
         Assert.Empty(ModelProxyService.ExtractMessages(null));
         Assert.Empty(ModelProxyService.ExtractMessages(""));
     }
+
+    // --- InjectTimingsPerToken (P7): the pure request-body-side counterpart of
+    // LlamaCppTimingsParser below -- makes llama-server embed a live `timings` object
+    // in every streamed chunk instead of only the final one (confirmed against a real
+    // server; see LlamaCppTimingsParserTests for the response-side chunk shape this unlocks).
+
+    [Fact]
+    public void InjectTimingsPerToken_AddsTheFlagToAPlainObject()
+    {
+        var json = """{"model":"main","messages":[{"role":"user","content":"hi"}],"stream":true}""";
+        var result = ModelProxyService.InjectTimingsPerToken(json);
+        Assert.Contains("\"timings_per_token\":true", result);
+    }
+
+    [Fact]
+    public void InjectTimingsPerToken_LeavesAnExplicitValueUntouched()
+    {
+        var json = """{"model":"main","timings_per_token":false}""";
+        var result = ModelProxyService.InjectTimingsPerToken(json);
+        Assert.Contains("\"timings_per_token\":false", result);
+    }
+
+    [Fact]
+    public void InjectTimingsPerToken_ReturnsNullForNonObjectJson()
+    {
+        Assert.Null(ModelProxyService.InjectTimingsPerToken("[1,2,3]"));
+    }
+
+    [Fact]
+    public void InjectTimingsPerToken_ReturnsNullForBlankOrMalformedInput()
+    {
+        Assert.Null(ModelProxyService.InjectTimingsPerToken(null));
+        Assert.Null(ModelProxyService.InjectTimingsPerToken(""));
+        Assert.Null(ModelProxyService.InjectTimingsPerToken("{not valid"));
+    }
 }

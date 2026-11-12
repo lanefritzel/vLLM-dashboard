@@ -81,6 +81,13 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
                     services.AddSingleton<IRecipeService, RecipeService>();
                     services.AddSingleton<IDeploymentService, DeploymentService>();
                     services.AddSingleton<IInFlightTrafficTracker, InFlightTrafficTracker>();
+                    services.AddSingleton<IBroadcastThrottler, Dashboard.Application.Metrics.MetricsBroadcastThrottler>();
+                    services.AddSingleton<IMetricsAggregator, Dashboard.Infrastructure.Scrapers.MetricsAggregator>();
+                    services.AddSingleton<IMetricsSourceFactory, Dashboard.Infrastructure.Scrapers.MetricsSourceFactory>();
+                    services.AddSingleton<IMetricsService, Dashboard.Application.Metrics.MetricsService>();
+                    services.AddSingleton<ISampleStore, Dashboard.Infrastructure.Persistence.SampleStore>();
+                    services.AddSingleton<IMetricsBroadcaster, Dashboard.Application.Metrics.MetricsBroadcaster>();
+                    services.AddSingleton<ILlamaCppLiveMetricsPublisher, LlamaCppLiveMetricsPublisher>();
                     services.AddSingleton<IModelProxyService, ModelProxyService>();
                 });
                 webBuilder.Configure(app =>

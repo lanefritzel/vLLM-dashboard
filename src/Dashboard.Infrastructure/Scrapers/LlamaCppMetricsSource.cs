@@ -62,8 +62,25 @@ public sealed class LlamaCppMetricsSource : IMetricsSource
             Running = m.Running,
             Waiting = m.Waiting,
             KvPct = m.KvPct,
-            GenTokensTotal = m.GenTokensTotal,
-            PromptTokensTotal = m.PromptTokensTotal,
+
+            // P7: deliberately NOT surfaced here, even though LlamaCppMetricsParser still
+            // parses them. llama-server is effectively single-threaded while it's busy
+            // streaming a completion, so a /metrics GET made during a long generation can
+            // sit queued for however long that generation takes; MetricsAggregator's
+            // counter-rate math (delta tokens / delta wall-clock time since the last
+            // successful scrape) is sound in general, but when the *previous* successful
+            // scrape landed well before a long busy stretch, the next one's token delta
+            // can land compressed enough to read as an absurd tok/s spike -- confirmed
+            // live against serenity (rows with no KvPct, i.e. from this poller, at
+            // 1000-4000+ "tok/s" during/after a long generation). The P7 proxy path
+            // (LlamaCppLiveMetricsPublisher) is llama.cpp's sole live throughput source
+            // now -- it reads the engine's own per-chunk timings.predicted_per_second
+            // directly, with no polling-interval race to be wrong about. Leaving these
+            // null here, rather than also computing them and letting both producers write
+            // to the same source, is what keeps GenTps/PromptTps samples for a llama.cpp
+            // instance unambiguously single-sourced.
+            GenTokensTotal = null,
+            PromptTokensTotal = null,
         };
     }
 
