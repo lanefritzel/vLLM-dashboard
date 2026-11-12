@@ -137,7 +137,7 @@
 
 @if (_showPathPicker)
 {
-    <FolderPickerDialog Title="Choose the weights folder" StartPath="@_localPath"
+    <FolderPickerDialog Title="Choose the weights folder or file" StartPath="@_localPath" AllowFiles="true"
         OnSelected="@(path => { _localPath = path; _showPathPicker = false; })"
         OnCancelled="@(() => _showPathPicker = false)" />
 }

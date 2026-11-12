@@ -24,11 +24,23 @@ public sealed class LocalFilesystemBrowser : IFilesystemBrowser
         var target = ResolveWithinRoot(path);
 
         var subfolders = new List<FolderEntry>();
+        var files = new List<FolderEntry>();
         if (Directory.Exists(target))
         {
             foreach (var dir in Directory.EnumerateDirectories(target).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
             {
                 subfolders.Add(new FolderEntry(Path.GetFileName(dir), dir));
+            }
+
+            // .gguf only -- a complete, loadable model on its own (llama.cpp always,
+            // vLLM's own GGUF load path too). .safetensors/.bin shards are deliberately
+            // never listed here: they're only ever valid as part of their containing
+            // folder, for either engine, so there's no "pick this one" case for them.
+            foreach (var file in Directory.EnumerateFiles(target)
+                         .Where(f => string.Equals(Path.GetExtension(f), ".gguf", StringComparison.OrdinalIgnoreCase))
+                         .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            {
+                files.Add(new FolderEntry(Path.GetFileName(file), file));
             }
         }
 
@@ -41,6 +53,7 @@ public sealed class LocalFilesystemBrowser : IFilesystemBrowser
             CanGoUp = parent is not null,
             ParentPath = parent,
             Subfolders = subfolders,
+            Files = files,
         };
     }
 
