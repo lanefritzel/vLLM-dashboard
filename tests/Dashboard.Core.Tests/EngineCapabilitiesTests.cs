@@ -9,7 +9,7 @@ public class EngineCapabilitiesTests
 {
     [Theory]
     [InlineData(SourceType.Vllm, true)]
-    [InlineData(SourceType.LlamaCpp, false)]
+    [InlineData(SourceType.LlamaCpp, true)]
     public void ReportsKvCacheUsage(SourceType engine, bool expected) =>
         Assert.Equal(expected, EngineCapabilities.ReportsKvCacheUsage(engine));
 

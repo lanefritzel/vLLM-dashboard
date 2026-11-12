@@ -48,7 +48,7 @@ public sealed class InstanceMetricsPollingService : IHostedService, IDisposable
         _logger = logger;
     }
 
-    public static string SourceIdFor(int instanceId) => "instance-" + instanceId;
+    public static string SourceIdFor(int instanceId) => InstanceSourceId.For(instanceId);
 
     public Task StartAsync(CancellationToken cancellationToken)
     {

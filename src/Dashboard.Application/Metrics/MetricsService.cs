@@ -44,12 +44,22 @@ public sealed class MetricsService : IMetricsService
         return sample;
     }
 
-    public void SetState(SourceInfo source, bool up, string? error)
+    public void SetState(SourceInfo source, bool up, string? error) =>
+        SetStateCore(source.Id, source.Label, up, error);
+
+    /// <inheritdoc />
+    public void RecordExternalSample(MetricsSample sample)
     {
-        _states[source.Id] = new SourceState
+        _samples.Append(sample);
+        SetStateCore(sample.SourceId, sample.SourceLabel, sample.Up, sample.Error);
+    }
+
+    private void SetStateCore(string id, string label, bool up, string? error)
+    {
+        _states[id] = new SourceState
         {
-            Id = source.Id,
-            Label = source.Label,
+            Id = id,
+            Label = label,
             Up = up,
             Error = error,
             LastSeen = up ? DateTime.UtcNow : null,
