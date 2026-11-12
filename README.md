@@ -242,7 +242,10 @@ volumes:
 ### NVIDIA hosts
 
 Three changes to the `supervisor` service (needs the NVIDIA Container Toolkit
-on the host):
+on the host) — this is a diff against the full `supervisor` service in the
+main example above, not a standalone block: keep everything else from that
+block (`restart`, `network_mode`, `ipc`, `privileged`, `volumes`,
+`environment`) and only change what's shown here:
 
 ```yaml
   supervisor:
@@ -277,8 +280,13 @@ service entirely and the `network_mode: host` lines above — a plain
 ### llama.cpp hosts
 
 A server can run llama.cpp instead of vLLM — the dashboard talks to both the
-same way, through its own supervisor. Point the `supervisor` service at the
-llama.cpp Dockerfile and the official llama.cpp server image instead:
+same way, through its own supervisor. **llama.cpp's supervisor needs less than
+vLLM's**: no `ipc: host` or `privileged: true` (those are a vLLM/CUDA IPC
+requirement, not something llama.cpp needs) — live-verified end to end
+(swap, recipe, live metrics) on an NVIDIA RTX 3060. This is the complete
+`supervisor` service for llama.cpp on NVIDIA — unlike the NVIDIA hosts diff
+above, this one **replaces** the whole service, since so much changes between
+the two engines:
 
 ```yaml
   supervisor:
@@ -287,16 +295,33 @@ llama.cpp Dockerfile and the official llama.cpp server image instead:
       dockerfile: Dockerfile.llamacpp
       args:
         # Pin by digest, not the floating `:server` tag -- bump deliberately.
-        BASE_IMAGE: ghcr.io/ggml-org/llama.cpp:server
-    # GPU passthrough is the same shape as above: /dev/dri for Intel/AMD, or
-    # the NVIDIA `deploy.resources.reservations` block shown above for NVIDIA.
+        BASE_IMAGE: ghcr.io/ggml-org/llama.cpp@sha256:<current server digest>
+    restart: unless-stopped
+    network_mode: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - /path/to/your/hf-models:/models
+      - supervisor-state:/state
+    environment:
+      ADMIN_PORT: "18001"
+      DASHBOARD_EVENT_URL: "http://127.0.0.1:8080/internal/supervisor-events"
 ```
 
-Everything else (Postgres, the dashboard service, `network_mode: host`) is
-unchanged. When you create a recipe for an instance on this server, pick
-**llama.cpp** as its engine — the recipe editor, Help page, and Playground
-all adapt to show that engine's own fields (context size, GPU layer offload)
-instead of vLLM's. There's no Neuron map for llama.cpp instances — see
+On Intel/AMD instead of NVIDIA, swap the `deploy.resources.reservations`
+block for `devices: ["/dev/dri"]`, same as the main example's `supervisor`
+block — everything else above is engine-specific, not GPU-vendor-specific.
+
+Postgres and the `dashboard` service are unchanged from the main example.
+When you create a recipe for an instance on this server, pick **llama.cpp**
+as its engine — the recipe editor, Help page, and Playground all adapt to
+show that engine's own fields (context size, GPU layer offload) instead of
+vLLM's. There's no Neuron map for llama.cpp instances — see
 [Engine differences](#engine-differences).
 
 ## Configuration
