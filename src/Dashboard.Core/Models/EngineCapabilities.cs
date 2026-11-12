@@ -4,11 +4,14 @@ namespace Dashboard.Core.Models;
 
 /// <summary>What each inference engine can report or support, so the UI can say "not available"
 /// rather than render a misleading blank/zero. Values are confirmed against real engines
-/// (Findings docs): llama.cpp's /metrics has no KV-cache usage and its startup has no warm-up
-/// phase; the neuron-map plugin hooks vLLM's plugin entry point and exists only there.</summary>
+/// (Findings docs): llama.cpp's /metrics has no KV-cache usage gauge, but P7 gets it a
+/// different way (deriving it from each streamed chunk's own <c>timings</c> object via
+/// <c>timings_per_token</c> -- see <see cref="LlamaCppChunkTimings"/>), so it reports here
+/// too; its startup still has no warm-up phase; the neuron-map plugin hooks vLLM's plugin
+/// entry point and exists only there.</summary>
 public static class EngineCapabilities
 {
-    public static bool ReportsKvCacheUsage(SourceType engine) => engine == SourceType.Vllm;
+    public static bool ReportsKvCacheUsage(SourceType engine) => engine == SourceType.Vllm || engine == SourceType.LlamaCpp;
     public static bool HasNeuronMap(SourceType engine) => engine == SourceType.Vllm;
     public static bool HasWarmupPhase(SourceType engine) => engine == SourceType.Vllm;
 
