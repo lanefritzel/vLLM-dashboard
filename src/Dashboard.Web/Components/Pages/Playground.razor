@@ -33,7 +33,7 @@ else
             </div>
             <div class="col-md-3">
                 <UiField Label="Temperature" For="pg-temperature">
-                    <UiInput Id="pg-temperature" Type="number" Value="@_temperature.ToString()" ValueChanged="@(v => _temperature = double.TryParse(v, out var n) ? n : _temperature)" />
+                    <UiInput Id="pg-temperature" Type="number" Value="@_temperature.ToString()" ValueChanged="@(v => _temperature = double.TryParse(v, out var n) ? n : _temperature)" step="0.1" min="0" max="2" />
                 </UiField>
             </div>
             <div class="col-md-12" style="display:flex; align-items:center; gap: var(--ui-space-2);">
