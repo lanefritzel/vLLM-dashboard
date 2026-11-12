@@ -207,6 +207,7 @@ services:
       # no local clone needed. Swap #main for a tagged release if you want a
       # pinned version instead of tracking the branch.
       context: https://github.com/lanefritzel/vLLM-dashboard.git#main:supervisor
+      # dockerfile: Dockerfile.llamacpp   # llama.cpp instead of vLLM -- see "llama.cpp hosts" below
       args:
         # Must match your actual GPU host's vLLM image/vendor.
         BASE_IMAGE: intel/llm-scaler-vllm:0.26.0-b2
