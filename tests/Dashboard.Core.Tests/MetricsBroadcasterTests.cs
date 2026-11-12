@@ -67,4 +67,20 @@ public class MetricsBroadcasterTests
         // here is that it completes without throwing against a real IHubContext.
         await sut.BroadcastAsync(new MetricsSample { SourceId = "instance-7", GenTps = 12.3 });
     }
+
+    [Fact]
+    public async Task BroadcastAsync_NeverConsultsTheThrottle_ForAZeroGenTpsMarkerSample()
+    {
+        // GenTps == 0 is the llama.cpp bracket-marker convention (ModelProxyService's
+        // start/end markers) -- it's the one sample a dropped broadcast would make an
+        // already-reported chart bug (the ramp-up/ramp-down edges silently vanishing)
+        // come right back, since a marker always lands within the same ~1s throttle
+        // window as the real sample next to it.
+        var throttler = new FakeThrottler { AllowResult = false };
+        var sut = NewSut(throttler);
+
+        await sut.BroadcastAsync(new MetricsSample { SourceId = "instance-7", GenTps = 0 });
+
+        Assert.Empty(throttler.AllowCalledWith);
+    }
 }
