@@ -243,6 +243,73 @@ public class V2ServiceTests(PostgresFixture postgres)
         Assert.NotNull(await models.GetAsync(model.Id));
     }
 
+    private static async Task SeedInstanceWithAdminUrlAsync(IServiceScopeFactory scopeFactory, int serverId, string adminUrl = "http://host:8000/admin")
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        db.InstancesV2.Add(new Instance { ServerId = serverId, Label = "i", ProxySlug = "i" + Guid.NewGuid().ToString("N"), AdminUrl = adminUrl });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task ModelService_Delete_WithDeleteFiles_ForAGgufFile_DeletesTheContainingFolder_NotJustTheFile()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        await SeedInstanceWithAdminUrlAsync(scopeFactory, server.Id);
+        var supervisor = new RecordingSupervisorClient();
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard(), supervisor);
+        var model = await models.CreateAsync(new Model
+        {
+            ServerId = server.Id, Name = "m", LoadFormat = "gguf", Path = "/models/qwen2.5-coder/qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+        });
+
+        await models.DeleteAsync(model.Id, deleteFiles: true);
+
+        var sent = Assert.Single(supervisor.DeleteCalls);
+        Assert.Equal("/models/qwen2.5-coder", sent.Path);
+    }
+
+    [Fact]
+    public async Task ModelService_Delete_WithDeleteFiles_ForAWholeFolderModel_DeletesTheFolderItself()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        await SeedInstanceWithAdminUrlAsync(scopeFactory, server.Id);
+        var supervisor = new RecordingSupervisorClient();
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard(), supervisor);
+        var model = await models.CreateAsync(new Model
+        {
+            ServerId = server.Id, Name = "m", LoadFormat = "auto", Path = "/models/some-safetensors-model",
+        });
+
+        await models.DeleteAsync(model.Id, deleteFiles: true);
+
+        var sent = Assert.Single(supervisor.DeleteCalls);
+        Assert.Equal("/models/some-safetensors-model", sent.Path);
+    }
+
+    [Fact]
+    public async Task ModelService_Delete_WithDeleteFiles_ForAGgufFileDirectlyAtTheModelsRoot_FallsBackToJustTheFile()
+    {
+        // No per-model subfolder here -- escalating "up one level" would otherwise
+        // resolve to the shared models root itself, nuking every model on the server.
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        await SeedInstanceWithAdminUrlAsync(scopeFactory, server.Id);
+        var supervisor = new RecordingSupervisorClient();
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard(), supervisor);
+        var model = await models.CreateAsync(new Model
+        {
+            ServerId = server.Id, Name = "m", LoadFormat = "gguf", Path = "/models/standalone.gguf",
+        });
+
+        await models.DeleteAsync(model.Id, deleteFiles: true);
+
+        var sent = Assert.Single(supervisor.DeleteCalls);
+        Assert.Equal("/models/standalone.gguf", sent.Path);
+    }
+
     [Fact]
     public async Task RecipeService_CrudRoundTrips()
     {

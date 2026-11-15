@@ -17,7 +17,7 @@
         <UiToggle Value="@_deleteFiles" ValueChanged="@(v => _deleteFiles = v)"
                   Disabled="@(_busy || !_capabilityChecked || _capabilityDisabledReason is not null)"
                   DisabledHint="@_capabilityDisabledReason">
-            Also delete files from disk@(Model.SizeBytes is { } sz ? $" ({FormatBytes(sz)})" : "")
+            Also delete files from disk@(ShowableSizeBytes is { } sz ? $" ({FormatBytes(sz)})" : "")
         </UiToggle>
         @if (_capabilityChecked && _capabilityDisabledReason is not null)
         {
@@ -25,7 +25,7 @@
         }
         else if (_deleteFiles)
         {
-            <p class="ui-hint" style="margin: 4px 0 0;">This permanently removes the weight files from the server's disk. It cannot be undone.</p>
+            <p class="ui-hint" style="margin: 4px 0 0;">This permanently removes this model's entire folder on the server's disk -- including any other files in it (e.g. other quantizations, a drafter, an mmproj file). It cannot be undone.</p>
         }
     </div>
 </Dialog>
@@ -47,6 +47,14 @@
 
     private bool _capabilityChecked;
     private string? _capabilityDisabledReason;
+
+    /// <summary>Model.SizeBytes only ever covers this model's OWN registered path --
+    /// for a single .gguf file, that understates what actually gets deleted now
+    /// (the whole containing folder, per ModelService.DeletePathFor), so showing it
+    /// there would be a wrong number, not just an approximate one. Shown only for a
+    /// whole-folder model, where SizeBytes already covers everything being deleted.</summary>
+    private long? ShowableSizeBytes =>
+        string.Equals(Model.LoadFormat, "gguf", StringComparison.OrdinalIgnoreCase) ? null : Model.SizeBytes;
 
     protected override async Task OnInitializedAsync()
     {

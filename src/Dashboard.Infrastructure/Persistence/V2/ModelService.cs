@@ -52,6 +52,32 @@ public sealed class ModelService : IModelService
             throw new ArgumentException("A model must have a weights path.");
     }
 
+    private const string ContainerModelsRoot = "/models";
+
+    /// <summary>"Delete files" removes the model's ENTIRE containing folder, not just
+    /// the one file registered as its path -- owner call: a companion file (mmproj,
+    /// an MTP draft model) sitting next to it is useless on its own anyway, and if an
+    /// operator wants to keep individual files from a shared download around, that's
+    /// on them to pull again, not something this app tries to guess at. For a
+    /// safetensors-folder model (LoadFormat != "gguf"), <paramref name="containerPath"/>
+    /// already IS that folder. For a single .gguf file, this takes its parent --
+    /// EXCEPT when that file sits with no subfolder directly at the models root, where
+    /// "parent" would otherwise be the shared root itself, nuking every model on the
+    /// server; that one case falls back to deleting just the file.</summary>
+    private static string DeletePathFor(Model model, string containerPath)
+    {
+        if (!string.Equals(model.LoadFormat, "gguf", StringComparison.OrdinalIgnoreCase))
+            return containerPath;
+
+        var trimmed = containerPath.TrimEnd('/');
+        var lastSlash = trimmed.LastIndexOf('/');
+        if (lastSlash <= 0)
+            return containerPath;
+
+        var parent = trimmed[..lastSlash];
+        return string.Equals(parent, ContainerModelsRoot, StringComparison.Ordinal) ? containerPath : parent;
+    }
+
     public async Task<IReadOnlyList<Model>> ListByServerAsync(int serverId, CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -115,7 +141,8 @@ public sealed class ModelService : IModelService
             // entirely rather than leave an orphaned directory with no catalog
             // entry to retry the delete from.
             var containerPath = ArgBuilderCommon.ContainerModelPath(model.Path, server.ModelsDir);
-            await _supervisorClient.DeleteModelFilesAsync(instance.AdminUrl, containerPath, ct);
+            var deletePath = DeletePathFor(model, containerPath);
+            await _supervisorClient.DeleteModelFilesAsync(instance.AdminUrl, deletePath, ct);
         }
 
         db.ModelsV2.Remove(model);
