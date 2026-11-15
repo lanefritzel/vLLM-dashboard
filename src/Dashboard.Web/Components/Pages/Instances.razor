@@ -97,9 +97,9 @@ else
                     try
                     {
                         var active = await Deployments.GetActiveAsync(instance.Id);
-                        if (active is not null)
+                        if (active is not null && active.RecipeId is int activeRecipeId)
                         {
-                            var recipe = await Recipes.GetAsync(active.RecipeId);
+                            var recipe = await Recipes.GetAsync(activeRecipeId);
                             row.ActiveServedName = recipe?.ServedModelName;
                         }
                     }

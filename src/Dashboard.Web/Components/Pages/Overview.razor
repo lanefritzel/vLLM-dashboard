@@ -227,7 +227,7 @@ else
                     {
                         <tr>
                             <td>@NameFor(d.ModelId, _models)</td>
-                            <td>@NameFor(d.RecipeId, _recipes)</td>
+                            <td>@d.RecipeName</td>
                             <td><StatusPill Status="@d.Status" Size="sm" /></td>
                             <td>@(d.StopReason ?? "—")</td>
                             <td>@((d.StoppedAt ?? d.CreatedAt).ToLocalTime().ToString("MMM d, HH:mm"))</td>
@@ -464,7 +464,7 @@ else
             if (_lastWorking is not null)
             {
                 _lastWorkingModelName = NameFor(_lastWorking.ModelId, _models);
-                _lastWorkingRecipeName = NameFor(_lastWorking.RecipeId, _recipes);
+                _lastWorkingRecipeName = _lastWorking.RecipeName;
             }
         }
         else
@@ -491,7 +491,6 @@ else
     }
 
     private static string NameFor(int id, List<Model> models) => models.FirstOrDefault(m => m.Id == id)?.Name ?? $"#{id}";
-    private static string NameFor(int id, List<Recipe> recipes) => recipes.FirstOrDefault(r => r.Id == id)?.Name ?? $"#{id}";
 
     private string UptimeText()
     {
@@ -542,10 +541,16 @@ else
             // same (model, recipe) pair, as far as the DB can tell. ForceRedeployAsync
             // exists specifically to bypass that for this exact mismatch. A
             // genuinely idle instance (no active row at all) still goes through
-            // the normal SwapAsync path.
+            // the normal SwapAsync path. If the recipe behind "last working" has
+            // since been deleted (RecipeId null), SwapAsync has nothing live to
+            // pre-flight/build against -- fall back to replaying that deployment's
+            // own frozen args_snapshot instead, same as the Deployments page's
+            // "Redeploy this".
             var result = _activeDeployment is not null && _activeDeployment.Id == _lastWorking.Id
                 ? await Swap.ForceRedeployAsync(_instance.Id)
-                : await Swap.SwapAsync(_instance.Id, _lastWorking.ModelId, _lastWorking.RecipeId, acknowledgeServedNameChange: true);
+                : _lastWorking.RecipeId is int lastWorkingRecipeId
+                    ? await Swap.SwapAsync(_instance.Id, _lastWorking.ModelId, lastWorkingRecipeId, acknowledgeServedNameChange: true)
+                    : await Swap.RedeployAsync(_lastWorking.Id);
             _resumeDeploymentId = result.DeploymentId;
             _swapOpen = true;
         }

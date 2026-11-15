@@ -6,7 +6,6 @@
 @inject IServerService Servers
 @inject IInstanceService Instances
 @inject IModelService Models
-@inject IRecipeService Recipes
 @inject IDeploymentService DeploymentsSvc
 @inject ISwapService Swap
 @inject Dashboard.Web.Components.Shared.IDialogService Dialogs
@@ -55,7 +54,7 @@ else
             {
                 <tr>
                     <td>@d.Id</td>
-                    <td>@NameFor(d.RecipeId, _recipes)</td>
+                    <td>@d.RecipeName</td>
                     <td>@NameFor(d.ModelId, _models)</td>
                     <td><StatusPill Status="@d.Status" Size="sm" /></td>
                     <td>@(d.StartedAt?.ToLocalTime().ToString("MMM d, HH:mm") ?? "—")</td>
@@ -102,7 +101,6 @@ else
 
     private Instance? _instance;
     private List<Model> _models = new();
-    private List<Recipe> _recipes = new();
     private List<Deployment> _deployments = new();
 
     private string _statusFilter = "all";
@@ -124,7 +122,6 @@ else
                 if (_instance is not null)
                 {
                     _models = (await Models.ListByServerAsync(servers[0].Id)).ToList();
-                    _recipes = (await Recipes.ListByServerAsync(servers[0].Id)).ToList();
                     _deployments = (await DeploymentsSvc.ListByInstanceAsync(_instance.Id)).ToList();
                 }
             }
@@ -149,14 +146,13 @@ else
             var needle = _nameSearch.Trim();
             q = q.Where(d =>
                 NameFor(d.ModelId, _models).Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-                NameFor(d.RecipeId, _recipes).Contains(needle, StringComparison.OrdinalIgnoreCase));
+                d.RecipeName.Contains(needle, StringComparison.OrdinalIgnoreCase));
         }
 
         return q.ToList();
     }
 
     private static string NameFor(int id, List<Model> models) => models.FirstOrDefault(m => m.Id == id)?.Name ?? $"#{id}";
-    private static string NameFor(int id, List<Recipe> recipes) => recipes.FirstOrDefault(r => r.Id == id)?.Name ?? $"#{id}";
 
     private static string DurationText(Deployment d)
     {

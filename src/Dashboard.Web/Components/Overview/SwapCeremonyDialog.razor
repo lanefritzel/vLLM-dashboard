@@ -632,7 +632,7 @@
         }
 
         var model = await Models.GetAsync(deployment.ModelId);
-        var recipe = await Recipes.GetAsync(deployment.RecipeId);
+        var recipe = deployment.RecipeId is int recipeId ? await Recipes.GetAsync(recipeId) : null;
         _resultModelName = model?.Name ?? "model";
         _resultServedName = recipe?.ServedModelName ?? "main";
 

@@ -626,8 +626,12 @@ namespace Dashboard.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
-                    b.Property<int>("RecipeId")
+                    b.Property<int?>("RecipeId")
                         .HasColumnType("integer");
+
+                    b.Property<string>("RecipeName")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone");
@@ -1141,8 +1145,7 @@ namespace Dashboard.Infrastructure.Migrations
                     b.HasOne("Dashboard.Infrastructure.Persistence.V2.Recipe", "Recipe")
                         .WithMany()
                         .HasForeignKey("RecipeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("Instance");
 

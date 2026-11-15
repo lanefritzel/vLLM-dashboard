@@ -10,7 +10,18 @@ public class Deployment
     public int Id { get; set; }
     public int InstanceId { get; set; }
     public int ModelId { get; set; }
-    public int RecipeId { get; set; }
+
+    /// <summary>Nullable (not Restrict) -- a recipe can be deleted at any time, even
+    /// with deployment history pointing at it (owner call: history isn't a reason to
+    /// keep a recipe around). <see cref="RecipeName"/> is what actually keeps the
+    /// history legible once that happens.</summary>
+    public int? RecipeId { get; set; }
+
+    /// <summary>The recipe's name, frozen at deploy time -- same "point-in-time
+    /// record" rationale as <see cref="ArgsSnapshot"/>, so the Deployments grid still
+    /// shows a real name after the recipe itself is edited or deleted, instead of
+    /// falling back to a bare id.</summary>
+    public string RecipeName { get; set; } = "";
 
     /// <summary>Exact vLLM argv at deploy time (v1: argv only), stored as jsonb.</summary>
     public string ArgsSnapshot { get; set; } = "";

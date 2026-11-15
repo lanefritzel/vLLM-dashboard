@@ -141,8 +141,8 @@ public sealed class ModelProxyService : IModelProxyService
     private async Task<int> GetActiveContextSizeAsync(Instance instance, CancellationToken ct)
     {
         var active = await _deployments.GetActiveAsync(instance.Id, ct);
-        if (active is null) return 0;
-        var recipe = await _recipes.GetAsync(active.RecipeId, ct);
+        if (active is null || active.RecipeId is not int recipeId) return 0;
+        var recipe = await _recipes.GetAsync(recipeId, ct);
         return recipe?.MaxModelLen ?? 0;
     }
 
@@ -164,9 +164,9 @@ public sealed class ModelProxyService : IModelProxyService
         Instance instance, string requestedModelName, string body, CancellationToken ct)
     {
         var active = await _deployments.GetActiveAsync(instance.Id, ct);
-        if (active is not null)
+        if (active is not null && active.RecipeId is int activeRecipeId)
         {
-            var activeRecipe = await _recipes.GetAsync(active.RecipeId, ct);
+            var activeRecipe = await _recipes.GetAsync(activeRecipeId, ct);
             if (activeRecipe is not null)
             {
                 if (string.Equals(activeRecipe.ServedModelName, requestedModelName, StringComparison.Ordinal))

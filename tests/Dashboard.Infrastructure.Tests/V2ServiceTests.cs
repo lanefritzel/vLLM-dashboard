@@ -146,21 +146,21 @@ public class V2ServiceTests(PostgresFixture postgres)
         Assert.Equal("/models/m", (await service.GetAsync(created.Id))!.Path);
     }
 
-    private static async Task<Deployment> SeedDeploymentAsync(IServiceScopeFactory scopeFactory, int serverId, int modelId, int recipeId)
+    private static async Task<Deployment> SeedDeploymentAsync(IServiceScopeFactory scopeFactory, int serverId, int modelId, int recipeId, string recipeName = "r")
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var instance = new Instance { ServerId = serverId, Label = "i", ProxySlug = "i" + Guid.NewGuid().ToString("N") };
         db.InstancesV2.Add(instance);
         await db.SaveChangesAsync();
-        var deployment = new Deployment { InstanceId = instance.Id, ModelId = modelId, RecipeId = recipeId, ArgsSnapshot = "[]", Status = "stopped", StopReason = "swapped" };
+        var deployment = new Deployment { InstanceId = instance.Id, ModelId = modelId, RecipeId = recipeId, RecipeName = recipeName, ArgsSnapshot = "[]", Status = "stopped", StopReason = "swapped" };
         db.DeploymentsV2.Add(deployment);
         await db.SaveChangesAsync();
         return deployment;
     }
 
     [Fact]
-    public async Task RecipeService_Delete_OfARecipeWithDeploymentHistory_ExplainsWhy_AndKeepsTheRecipe()
+    public async Task RecipeService_Delete_OfARecipeWithDeploymentHistory_Succeeds_AndHistoryKeepsItsSnapshotName()
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
@@ -168,13 +168,17 @@ public class V2ServiceTests(PostgresFixture postgres)
         var recipes = new RecipeService(scopeFactory, new ReadOnlyGuard());
         var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
         var recipe = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "used", ServedModelName = "main" });
-        await SeedDeploymentAsync(scopeFactory, server.Id, model.Id, recipe.Id);
+        var deployment = await SeedDeploymentAsync(scopeFactory, server.Id, model.Id, recipe.Id, recipeName: "used");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => recipes.DeleteAsync(recipe.Id));
+        await recipes.DeleteAsync(recipe.Id);
 
-        Assert.Contains("can't be deleted", ex.Message);
-        Assert.Contains("1 deployment", ex.Message);
-        Assert.NotNull(await recipes.GetAsync(recipe.Id));
+        Assert.Null(await recipes.GetAsync(recipe.Id));
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var reloaded = await db.DeploymentsV2.FindAsync(deployment.Id);
+        Assert.Null(reloaded!.RecipeId);
+        Assert.Equal("used", reloaded.RecipeName);
     }
 
     [Fact]

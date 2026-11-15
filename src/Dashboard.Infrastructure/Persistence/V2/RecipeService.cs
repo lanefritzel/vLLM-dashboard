@@ -152,14 +152,9 @@ public sealed class RecipeService : IRecipeService
         if (recipe is null)
             return;
 
-        // Deployment history keeps pointing at the recipe it was built from (FK, restrict),
-        // so a recipe that has ever been deployed can't be removed without erasing that history.
-        var used = await db.DeploymentsV2.CountAsync(d => d.RecipeId == id, ct);
-        if (used > 0)
-            throw new InvalidOperationException(
-                $"Recipe '{recipe.Name}' can't be deleted: it was used by {used} deployment{(used == 1 ? "" : "s")} " +
-                "that are kept in the Deployments history. Edit it instead, or create a new recipe and leave this one.");
-
+        // Deployment history keeps its own frozen RecipeName/ArgsSnapshot, so it
+        // doesn't need this row to still exist -- the FK is SetNull, not Restrict,
+        // and a recipe is deletable at any time regardless of deployment history.
         db.RecipesV2.Remove(recipe);
         try
         {
