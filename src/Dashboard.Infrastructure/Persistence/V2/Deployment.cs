@@ -9,7 +9,18 @@ public class Deployment
 {
     public int Id { get; set; }
     public int InstanceId { get; set; }
-    public int ModelId { get; set; }
+
+    /// <summary>Nullable (not Restrict) -- a model can be deleted at any time, even
+    /// with deployment history pointing at it (same call as <see cref="RecipeId"/>:
+    /// history isn't a reason to keep a model around). <see cref="ModelName"/> is
+    /// what actually keeps the history legible once that happens.</summary>
+    public int? ModelId { get; set; }
+
+    /// <summary>The model's name, frozen at deploy time -- same "point-in-time
+    /// record" rationale as <see cref="ArgsSnapshot"/>, so the Deployments grid still
+    /// shows a real name after the model itself is edited or deleted, instead of
+    /// falling back to a bare id.</summary>
+    public string ModelName { get; set; } = "";
 
     /// <summary>Nullable (not Restrict) -- a recipe can be deleted at any time, even
     /// with deployment history pointing at it (owner call: history isn't a reason to

@@ -257,6 +257,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             entity.HasKey(d => d.Id);
             entity.Property(d => d.Id).UseIdentityAlwaysColumn();
             entity.Property(d => d.ArgsSnapshot).HasColumnType("jsonb").IsRequired();
+            entity.Property(d => d.ModelName).IsRequired();
             entity.Property(d => d.RecipeName).IsRequired();
             entity.Property(d => d.Status).HasMaxLength(20).IsRequired();
             entity.Property(d => d.StopReason).HasMaxLength(20);
@@ -288,13 +289,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
                 .WithMany()
                 .HasForeignKey(d => d.InstanceId)
                 .OnDelete(DeleteBehavior.Restrict);
+            // SetNull, not Restrict: deployment history is a reporting record, not a
+            // reason to keep a model/recipe alive -- ModelName/RecipeName already
+            // snapshot what the grid needs to display, so losing the live FK here
+            // costs nothing.
             entity.HasOne(d => d.Model)
                 .WithMany()
                 .HasForeignKey(d => d.ModelId)
-                .OnDelete(DeleteBehavior.Restrict);
-            // SetNull, not Restrict: deployment history is a reporting record, not a
-            // reason to keep a recipe alive -- RecipeName already snapshots what the
-            // grid needs to display, so losing the live FK here costs nothing.
+                .OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(d => d.Recipe)
                 .WithMany()
                 .HasForeignKey(d => d.RecipeId)

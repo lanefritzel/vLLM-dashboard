@@ -631,7 +631,7 @@
             _logLines.AddRange(deployment.LogTail.Split('\n'));
         }
 
-        var model = await Models.GetAsync(deployment.ModelId);
+        var model = deployment.ModelId is int modelId ? await Models.GetAsync(modelId) : null;
         var recipe = deployment.RecipeId is int recipeId ? await Recipes.GetAsync(recipeId) : null;
         _resultModelName = model?.Name ?? "model";
         _resultServedName = recipe?.ServedModelName ?? "main";

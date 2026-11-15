@@ -226,7 +226,7 @@ else
                     @foreach (var d in SortedRecentDeployments)
                     {
                         <tr>
-                            <td>@NameFor(d.ModelId, _models)</td>
+                            <td>@d.ModelName</td>
                             <td>@d.RecipeName</td>
                             <td><StatusPill Status="@d.Status" Size="sm" /></td>
                             <td>@(d.StopReason ?? "—")</td>
@@ -463,7 +463,7 @@ else
                 ?? history.FirstOrDefault(d => d.FailureReason is null);
             if (_lastWorking is not null)
             {
-                _lastWorkingModelName = NameFor(_lastWorking.ModelId, _models);
+                _lastWorkingModelName = _lastWorking.ModelName;
                 _lastWorkingRecipeName = _lastWorking.RecipeName;
             }
         }
@@ -489,8 +489,6 @@ else
             _gpuInfo = null;
         }
     }
-
-    private static string NameFor(int id, List<Model> models) => models.FirstOrDefault(m => m.Id == id)?.Name ?? $"#{id}";
 
     private string UptimeText()
     {
@@ -541,15 +539,15 @@ else
             // same (model, recipe) pair, as far as the DB can tell. ForceRedeployAsync
             // exists specifically to bypass that for this exact mismatch. A
             // genuinely idle instance (no active row at all) still goes through
-            // the normal SwapAsync path. If the recipe behind "last working" has
-            // since been deleted (RecipeId null), SwapAsync has nothing live to
-            // pre-flight/build against -- fall back to replaying that deployment's
-            // own frozen args_snapshot instead, same as the Deployments page's
-            // "Redeploy this".
+            // the normal SwapAsync path. If the model or recipe behind "last
+            // working" has since been deleted (ModelId/RecipeId null), SwapAsync
+            // has nothing live to pre-flight/build against -- fall back to
+            // replaying that deployment's own frozen args_snapshot instead, same
+            // as the Deployments page's "Redeploy this".
             var result = _activeDeployment is not null && _activeDeployment.Id == _lastWorking.Id
                 ? await Swap.ForceRedeployAsync(_instance.Id)
-                : _lastWorking.RecipeId is int lastWorkingRecipeId
-                    ? await Swap.SwapAsync(_instance.Id, _lastWorking.ModelId, lastWorkingRecipeId, acknowledgeServedNameChange: true)
+                : _lastWorking.ModelId is int lastWorkingModelId && _lastWorking.RecipeId is int lastWorkingRecipeId
+                    ? await Swap.SwapAsync(_instance.Id, lastWorkingModelId, lastWorkingRecipeId, acknowledgeServedNameChange: true)
                     : await Swap.RedeployAsync(_lastWorking.Id);
             _resumeDeploymentId = result.DeploymentId;
             _swapOpen = true;

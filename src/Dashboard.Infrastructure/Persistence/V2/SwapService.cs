@@ -100,7 +100,7 @@ public sealed class SwapService : ISwapService
         // previous row once THIS one reaches ready (P10b).
         var deployment = await _deployments.CreateAsync(new Deployment
         {
-            InstanceId = instanceId, ModelId = modelId, RecipeId = recipeId, RecipeName = recipe.Name,
+            InstanceId = instanceId, ModelId = modelId, ModelName = model.Name, RecipeId = recipeId, RecipeName = recipe.Name,
             ArgsSnapshot = JsonSerializer.Serialize(built.Argv), Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
@@ -132,7 +132,7 @@ public sealed class SwapService : ISwapService
         // is frozen in args_snapshot, not rebuilt from them.
         var deployment = await _deployments.CreateAsync(new Deployment
         {
-            InstanceId = instanceId, ModelId = previous.ModelId, RecipeId = previous.RecipeId, RecipeName = previous.RecipeName,
+            InstanceId = instanceId, ModelId = previous.ModelId, ModelName = previous.ModelName, RecipeId = previous.RecipeId, RecipeName = previous.RecipeName,
             ArgsSnapshot = previous.ArgsSnapshot, Status = "pending", PendingStopReason = "rollback",
         }, ct);
 
@@ -150,7 +150,7 @@ public sealed class SwapService : ISwapService
 
         var deployment = await _deployments.CreateAsync(new Deployment
         {
-            InstanceId = source.InstanceId, ModelId = source.ModelId, RecipeId = source.RecipeId, RecipeName = source.RecipeName,
+            InstanceId = source.InstanceId, ModelId = source.ModelId, ModelName = source.ModelName, RecipeId = source.RecipeId, RecipeName = source.RecipeName,
             ArgsSnapshot = source.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
@@ -211,7 +211,7 @@ public sealed class SwapService : ISwapService
 
         var deployment = await _deployments.CreateAsync(new Deployment
         {
-            InstanceId = instanceId, ModelId = active.ModelId, RecipeId = active.RecipeId, RecipeName = active.RecipeName,
+            InstanceId = instanceId, ModelId = active.ModelId, ModelName = active.ModelName, RecipeId = active.RecipeId, RecipeName = active.RecipeName,
             ArgsSnapshot = active.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
         }, ct);
 
@@ -234,7 +234,7 @@ public sealed class SwapService : ISwapService
         // the DB's own (wrong) row being replaced, not a real swap.
         var deployment = await _deployments.CreateAsync(new Deployment
         {
-            InstanceId = instanceId, ModelId = active.ModelId, RecipeId = active.RecipeId, RecipeName = active.RecipeName,
+            InstanceId = instanceId, ModelId = active.ModelId, ModelName = active.ModelName, RecipeId = active.RecipeId, RecipeName = active.RecipeName,
             ArgsSnapshot = active.ArgsSnapshot, Status = "pending", PendingStopReason = "swapped",
         }, ct);
 

@@ -76,6 +76,7 @@ public class ModelProxyServiceTests(PostgresFixture postgres) : IAsyncDisposable
                     services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
                     services.AddHttpClient("proxy", c => c.Timeout = Timeout.InfiniteTimeSpan);
                     services.AddSingleton<IReadOnlyGuard, ReadOnlyGuard>();
+                    services.AddSingleton<ISupervisorClient, UnusedSupervisorClient>();
                     services.AddSingleton<IInstanceService, InstanceService>();
                     services.AddSingleton<IModelService, ModelService>();
                     services.AddSingleton<IRecipeService, RecipeService>();

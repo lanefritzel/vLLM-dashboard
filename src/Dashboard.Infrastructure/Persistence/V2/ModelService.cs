@@ -1,4 +1,5 @@
 using Dashboard.Core.Abstractions;
+using Dashboard.Core.Recipes;
 using Dashboard.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,7 +12,16 @@ public interface IModelService
     Task<Model?> GetAsync(int id, CancellationToken ct = default);
     Task<Model> CreateAsync(Model model, CancellationToken ct = default);
     Task<Model> UpdateAsync(Model model, CancellationToken ct = default);
-    Task DeleteAsync(int id, CancellationToken ct = default);
+
+    /// <summary>Always removes the catalog row, same as before. When
+    /// <paramref name="deleteFiles"/> is true, also deletes the model's weight files
+    /// via the server's supervisor (never directly from this process -- see
+    /// <see cref="Dashboard.Core.Abstractions.ISupervisorClient.DeleteModelFilesAsync"/>)
+    /// BEFORE touching the DB row, so a file-delete failure never leaves an orphaned
+    /// multi-GB directory with no catalog entry to retry from. Throws if files were
+    /// requested but no reachable supervisor is registered for this model's server,
+    /// or if that supervisor doesn't support the "model_delete" capability yet.</summary>
+    Task DeleteAsync(int id, bool deleteFiles = false, CancellationToken ct = default);
 }
 
 /// <summary>CRUD for the new-schema <see cref="Model"/> table (P09b). Blank
@@ -25,11 +35,13 @@ public sealed class ModelService : IModelService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IReadOnlyGuard _readOnlyGuard;
+    private readonly ISupervisorClient _supervisorClient;
 
-    public ModelService(IServiceScopeFactory scopeFactory, IReadOnlyGuard readOnlyGuard)
+    public ModelService(IServiceScopeFactory scopeFactory, IReadOnlyGuard readOnlyGuard, ISupervisorClient supervisorClient)
     {
         _scopeFactory = scopeFactory;
         _readOnlyGuard = readOnlyGuard;
+        _supervisorClient = supervisorClient;
     }
 
     private static void ValidateForSave(Model model)
@@ -76,7 +88,7 @@ public sealed class ModelService : IModelService
         return model;
     }
 
-    public async Task DeleteAsync(int id, CancellationToken ct = default)
+    public async Task DeleteAsync(int id, bool deleteFiles = false, CancellationToken ct = default)
     {
         _readOnlyGuard.EnsureWritable();
         using var scope = _scopeFactory.CreateScope();
@@ -85,11 +97,26 @@ public sealed class ModelService : IModelService
         if (model is null)
             return;
 
-        var recipes = await db.DeploymentsV2.CountAsync(d => d.ModelId == id, ct);
-        if (recipes > 0)
-            throw new InvalidOperationException(
-                $"Model '{model.Name}' can't be deleted: it was used by {recipes} deployment{(recipes == 1 ? "" : "s")} " +
-                "that are kept in the Deployments history.");
+        // Deployment history is a reporting record, not a reason to keep a model
+        // around -- same call as recipes (ModelId is SetNull, not Restrict; the
+        // Deployment row's own ModelName snapshot keeps the history legible).
+        if (deleteFiles)
+        {
+            var server = await db.ServersV2.FindAsync([model.ServerId], ct)
+                ?? throw new InvalidOperationException($"Model '{model.Name}'s files can't be deleted: its server no longer exists.");
+            var instance = await db.InstancesV2
+                .Where(i => i.ServerId == model.ServerId && i.AdminUrl != null)
+                .FirstOrDefaultAsync(ct);
+            if (instance?.AdminUrl is null)
+                throw new InvalidOperationException(
+                    $"Model '{model.Name}'s files can't be deleted: no reachable supervisor is registered for this server.");
+
+            // Files first, DB row second: if the supervisor call fails, abort
+            // entirely rather than leave an orphaned directory with no catalog
+            // entry to retry the delete from.
+            var containerPath = ArgBuilderCommon.ContainerModelPath(model.Path, server.ModelsDir);
+            await _supervisorClient.DeleteModelFilesAsync(instance.AdminUrl, containerPath, ct);
+        }
 
         db.ModelsV2.Remove(model);
         try

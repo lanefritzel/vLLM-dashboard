@@ -255,6 +255,35 @@ class DownloadManager:
             raise DownloadNotFoundError(f"no such download: {download_id}")
         return state.to_dict()
 
+    def resolve_within_root(self, path: str) -> Path:
+        """Clamps an arbitrary requested path to _models_root -- same purpose as the
+        dashboard's own LocalFilesystemBrowser.ResolveWithinRoot, just enforced here
+        too since this is the side that actually deletes things. Raises ValueError
+        (not silently falling back to the root) for anything that resolves outside:
+        unlike a read-only browse, a delete that silently redirected to "the root
+        itself" would be worse than just refusing.
+        """
+        candidate = Path(path).resolve()
+        root = self._models_root.resolve()
+        if candidate != root and root not in candidate.parents:
+            raise ValueError(f"path is outside the models root: {path}")
+        return candidate
+
+    def delete_model(self, path: str) -> None:
+        """Deletes a model's weight files -- a directory (the common case) or a
+        single .gguf file (the "pick one file" case, doc 6). Only ever called after
+        the dashboard's own DB delete already succeeded or is about to be attempted
+        right after -- this module doesn't know about recipes/deployments at all,
+        it just removes whatever is at this path.
+        """
+        target = self.resolve_within_root(path)
+        if not target.exists():
+            raise FileNotFoundError(f"no such path: {path}")
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+
     def cancel(self, download_id: str) -> None:
         """DELETE /admin/downloads/{id}: cancel + remove the partial
         directory (doc 6). Also doubles as "Clean up" for an

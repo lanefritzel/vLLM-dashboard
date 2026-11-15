@@ -1,0 +1,65 @@
+/* ============================================================================
+   toggle.css — on/off switch primitive (UiToggle.razor)
+
+   Consumes --ui-* tokens only. No hardcoded color values.
+   ============================================================================ */
+
+.ui-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text);
+  cursor: pointer;
+}
+
+.ui-toggle-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+
+.ui-toggle-track {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  background: var(--ui-surface-2);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.ui-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 16px;
+  height: 16px;
+  background: var(--ui-text);
+  border-radius: 50%;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.ui-toggle-input:checked + .ui-toggle-track {
+  background: var(--ui-primary);
+  border-color: var(--ui-primary);
+}
+
+.ui-toggle-input:checked + .ui-toggle-track .ui-toggle-thumb {
+  background: var(--ui-primary-contrast);
+  transform: translateX(16px);
+}
+
+.ui-toggle-input:focus-visible + .ui-toggle-track {
+  box-shadow: var(--ui-focus-ring);
+}
+
+.ui-toggle-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ui-toggle-label { user-select: none; }

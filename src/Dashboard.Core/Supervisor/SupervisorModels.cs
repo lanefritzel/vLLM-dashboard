@@ -31,6 +31,13 @@ public sealed record SupervisorStatus
 
     /// <summary>Null when talking to a supervisor older than P2.</summary>
     public SupervisorEngineInfo? Engine { get; init; }
+
+    /// <summary>Feature names this supervisor build supports beyond its baseline API
+    /// (e.g. "model_delete") -- empty/null for a supervisor older than this field,
+    /// never used to gate anything that's been in the baseline API since early
+    /// versions. A dashboard feature that depends on a newer supervisor checks for
+    /// its own name here before offering itself, rather than assuming presence.</summary>
+    public IReadOnlyList<string>? Capabilities { get; init; }
 }
 
 public sealed record SupervisorDeploymentEvent

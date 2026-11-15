@@ -260,3 +260,84 @@ def test_cleanup_of_an_already_failed_download_removes_its_partial_directory(tmp
 
     manager.cancel(download_id)
     assert not dest.exists()
+
+
+def test_delete_model_removes_a_directory(tmp_path):
+    models_root = tmp_path / "models"
+    target = models_root / "my-model"
+    target.mkdir(parents=True)
+    (target / "weights.safetensors").write_bytes(b"x")
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+
+    manager.delete_model(str(target))
+
+    assert not target.exists()
+
+
+def test_delete_model_removes_a_single_gguf_file(tmp_path):
+    models_root = tmp_path / "models"
+    models_root.mkdir(parents=True)
+    target = models_root / "model.gguf"
+    target.write_bytes(b"x")
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+
+    manager.delete_model(str(target))
+
+    assert not target.exists()
+
+
+def test_delete_model_rejects_a_path_outside_the_models_root(tmp_path):
+    models_root = tmp_path / "models"
+    models_root.mkdir(parents=True)
+    outside = tmp_path / "not-models" / "evil"
+    outside.mkdir(parents=True)
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+
+    try:
+        manager.delete_model(str(outside))
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+    assert outside.exists()  # never touched
+
+
+def test_delete_model_rejects_a_path_that_merely_starts_with_the_same_prefix(tmp_path):
+    # "/models-evil" starts with "/models" as a raw string but is not inside it --
+    # the resolve()-based containment check must not be fooled by a naive prefix match.
+    models_root = tmp_path / "models"
+    models_root.mkdir(parents=True)
+    sibling = tmp_path / "models-evil"
+    sibling.mkdir(parents=True)
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+
+    try:
+        manager.delete_model(str(sibling))
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+    assert sibling.exists()
+
+
+def test_delete_model_raises_for_a_missing_path(tmp_path):
+    models_root = tmp_path / "models"
+    models_root.mkdir(parents=True)
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+
+    try:
+        manager.delete_model(str(models_root / "does-not-exist"))
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError:
+        pass
+
+
+def test_delete_model_accepts_the_models_root_prefix_itself(tmp_path):
+    # A model stored directly at the root (not under a slug subdirectory) is a
+    # valid, if unusual, shape -- resolve_within_root must not treat "equal to
+    # root" as "outside root".
+    models_root = tmp_path / "models"
+    models_root.mkdir(parents=True)
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+
+    resolved = manager.resolve_within_root(str(models_root))
+
+    assert resolved == models_root.resolve()

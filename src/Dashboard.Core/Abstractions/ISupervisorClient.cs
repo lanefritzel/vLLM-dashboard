@@ -66,4 +66,15 @@ public interface ISupervisorClient
     /// <summary>Cancels an in-flight download, or cleans up (removes the partial
     /// directory of) an already-finished failed/cancelled one.</summary>
     Task CancelDownloadAsync(string adminUrl, string downloadId, CancellationToken ct = default);
+
+    /// <summary>Deletes a model's weight files from the supervisor's own models_root
+    /// mount -- only ever called by <see cref="Dashboard.Infrastructure.Persistence.V2.ModelService"/>
+    /// when the operator explicitly opted in to deleting files, never as a side
+    /// effect of removing the catalog row alone. Requires a supervisor whose
+    /// <see cref="Dashboard.Core.Supervisor.SupervisorStatus.Capabilities"/> lists
+    /// "model_delete" -- callers check that first, since an older supervisor has no
+    /// route for this at all. <paramref name="path"/> is the container-side path
+    /// (i.e. already substituted via <see cref="Dashboard.Core.Recipes.ArgBuilderCommon.ContainerModelPath"/>,
+    /// not the raw host path stored on the model row).</summary>
+    Task DeleteModelFilesAsync(string adminUrl, string path, CancellationToken ct = default);
 }

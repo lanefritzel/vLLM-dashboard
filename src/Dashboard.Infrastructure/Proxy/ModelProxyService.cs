@@ -172,7 +172,7 @@ public sealed class ModelProxyService : IModelProxyService
                 if (string.Equals(activeRecipe.ServedModelName, requestedModelName, StringComparison.Ordinal))
                     return (null, body); // already the served name -- forward untouched
 
-                var activeModel = await _models.GetAsync(active.ModelId, ct);
+                var activeModel = active.ModelId is int activeModelId ? await _models.GetAsync(activeModelId, ct) : null;
                 if (activeModel is not null &&
                     string.Equals(activeModel.Name, requestedModelName, StringComparison.Ordinal))
                     return (null, RewriteModelField(body, activeRecipe.ServedModelName) ?? body);

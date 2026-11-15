@@ -155,6 +155,13 @@ else
                       OnSaved="@OnModelEditedAsync" />
 }
 
+@if (_deletingModel is not null)
+{
+    <DeleteModelDialog Model="@_deletingModel" Instance="@_selectedInstance"
+                        OnCancelled="@(() => _deletingModel = null)"
+                        OnDeleted="@OnModelDeletedAsync" />
+}
+
 @if (_editingRecipe is not null)
 {
     <RecipeEditorDialog Model="@_editingRecipe" IsNew="@_editingIsNew" ModelIdForValidation="@_servingModelId"
@@ -181,6 +188,7 @@ else
 
     private bool _addModelOpen;
     private Model? _editingModel;
+    private Model? _deletingModel;
     private Recipe? _editingRecipe;
     private bool _editingIsNew;
     private bool _swapBusy;
@@ -300,19 +308,12 @@ else
         }
     }
 
-    private async Task DeleteModelAsync(Model model)
+    private void DeleteModelAsync(Model model) => _deletingModel = model;
+
+    private async Task OnModelDeletedAsync()
     {
-        var confirmed = await Dialogs.ConfirmAsync($"Delete model \"{model.Name}\"? This cannot be undone.", confirmText: "Delete");
-        if (!confirmed) return;
-        try
-        {
-            await Models.DeleteAsync(model.Id);
-            _models = (await Models.ListByServerAsync(_selectedServerId)).ToList();
-        }
-        catch (Exception ex)
-        {
-            await Dialogs.AlertAsync("Could not delete: " + ex.Message);
-        }
+        _deletingModel = null;
+        _models = (await Models.ListByServerAsync(_selectedServerId)).ToList();
     }
 
     private async Task OnModelEditedAsync(Model saved)

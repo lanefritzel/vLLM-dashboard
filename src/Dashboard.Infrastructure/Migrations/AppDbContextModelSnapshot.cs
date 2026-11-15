@@ -619,8 +619,12 @@ namespace Dashboard.Infrastructure.Migrations
                     b.Property<string>("LogTail")
                         .HasColumnType("text");
 
-                    b.Property<int>("ModelId")
+                    b.Property<int?>("ModelId")
                         .HasColumnType("integer");
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<string>("PendingStopReason")
                         .HasMaxLength(20)
@@ -1139,8 +1143,7 @@ namespace Dashboard.Infrastructure.Migrations
                     b.HasOne("Dashboard.Infrastructure.Persistence.V2.Model", "Model")
                         .WithMany()
                         .HasForeignKey("ModelId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("Dashboard.Infrastructure.Persistence.V2.Recipe", "Recipe")
                         .WithMany()

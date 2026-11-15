@@ -47,6 +47,18 @@ class StartDownloadRequest(BaseModel):
     filename: Optional[str] = None
 
 
+class DeleteModelRequest(BaseModel):
+    path: str
+
+
+# Feature names this build supports beyond baseline -- the dashboard checks
+# this list (via /admin/status) before offering a feature that depends on a
+# newer supervisor, rather than assuming it's present. Never add an entry for
+# something that's been in the baseline API since early versions; only for a
+# feature added after a supervisor/dashboard version-skew became possible.
+SUPERVISOR_CAPABILITIES = ["model_delete"]
+
+
 def create_app(
     process_manager: ProcessManager,
     deploy_runner: DeployRunner,
@@ -99,6 +111,7 @@ def create_app(
             "failure_report": failure_report,
             "smoke_ok": deploy_runner.last_smoke_ok,
             "engine": deploy_runner.engine_info,
+            "capabilities": SUPERVISOR_CAPABILITIES,
         }
 
     @admin.post("/admin/deploy")
@@ -195,6 +208,16 @@ def create_app(
         except DownloadNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"status": "cancelled"}
+
+    @admin.delete("/admin/models")
+    def delete_model(body: DeleteModelRequest) -> dict:
+        try:
+            download_manager.delete_model(body.path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"status": "deleted"}
 
     @admin.get("/admin/deployments/{deployment_id}/events")
     def events(deployment_id: str, after: int = 0) -> list[dict]:

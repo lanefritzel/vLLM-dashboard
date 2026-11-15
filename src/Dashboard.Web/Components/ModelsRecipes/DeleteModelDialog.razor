@@ -1,0 +1,115 @@
+@using Dashboard.Core.Abstractions
+@using Dashboard.Infrastructure.Persistence.V2
+@inject IModelService Models
+@inject ISupervisorClient SupervisorClient
+
+<Dialog Title="@($"Delete model — {Model.Name}")" Size="sm" Open="true"
+        OpenChanged="@(open => { if (!open) _ = RequestCancel(); })"
+        Footer="@DialogFooter">
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <Callout Tone="danger">@_error</Callout>
+    }
+
+    <p>This removes "@Model.Name" from the catalog. This cannot be undone.</p>
+
+    <div style="margin-top: var(--ui-space-3);">
+        <UiToggle Value="@_deleteFiles" ValueChanged="@(v => _deleteFiles = v)"
+                  Disabled="@(_busy || !_capabilityChecked || _capabilityDisabledReason is not null)"
+                  DisabledHint="@_capabilityDisabledReason">
+            Also delete files from disk@(Model.SizeBytes is { } sz ? $" ({FormatBytes(sz)})" : "")
+        </UiToggle>
+        @if (_capabilityChecked && _capabilityDisabledReason is not null)
+        {
+            <p class="ui-hint" style="margin: 4px 0 0;">@_capabilityDisabledReason</p>
+        }
+        else if (_deleteFiles)
+        {
+            <p class="ui-hint" style="margin: 4px 0 0;">This permanently removes the weight files from the server's disk. It cannot be undone.</p>
+        }
+    </div>
+</Dialog>
+
+@code {
+    [Parameter, EditorRequired] public Model Model { get; set; } = null!;
+
+    /// <summary>The server's currently-selected instance, to reach its supervisor
+    /// for the capability check -- model storage is shared per server, not
+    /// per-instance, so any instance's supervisor on this server can answer.</summary>
+    [Parameter] public Instance? Instance { get; set; }
+
+    [Parameter] public EventCallback OnDeleted { get; set; }
+    [Parameter] public EventCallback OnCancelled { get; set; }
+
+    private bool _deleteFiles;
+    private bool _busy;
+    private string? _error;
+
+    private bool _capabilityChecked;
+    private string? _capabilityDisabledReason;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Instance?.AdminUrl is not { } adminUrl)
+        {
+            _capabilityDisabledReason = "Can't reach the supervisor to check this -- register one on the Servers page.";
+            _capabilityChecked = true;
+            return;
+        }
+
+        try
+        {
+            var status = await SupervisorClient.GetStatusAsync(adminUrl);
+            if (status.Capabilities?.Contains("model_delete") != true)
+                _capabilityDisabledReason = "Requires a newer supervisor -- update it to enable file deletion.";
+        }
+        catch (Exception)
+        {
+            _capabilityDisabledReason = "Can't reach the supervisor to check this.";
+        }
+        finally
+        {
+            _capabilityChecked = true;
+        }
+    }
+
+    private RenderFragment DialogFooter => @<text>
+        <UiButton Variant="secondary" Size="sm" OnClick="RequestCancel">Cancel</UiButton>
+        <UiButton Variant="danger" Size="sm" Disabled="@_busy" OnClick="DeleteAsync">@(_busy ? "Deleting…" : "Delete")</UiButton>
+    </text>;
+
+    private async Task RequestCancel() => await OnCancelled.InvokeAsync();
+
+    private async Task DeleteAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Models.DeleteAsync(Model.Id, deleteFiles: _deleteFiles);
+            await OnDeleted.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "Delete failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        double value = bytes;
+        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        return $"{value:0.#} {units[unit]}";
+    }
+}

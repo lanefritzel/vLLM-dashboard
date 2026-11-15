@@ -67,6 +67,7 @@ def test_admin_routes_never_401_for_auth_reasons(tmp_path):
         ("POST", "/admin/downloads"),
         ("GET", "/admin/downloads/x"),
         ("DELETE", "/admin/downloads/x"),
+        ("DELETE", "/admin/models"),
     ]:
         resp = client.request(method, path, json={} if method in ("POST", "PUT") else None)
         assert resp.status_code != 401, f"{method} {path} should never 401 -- there is no auth any more"
@@ -453,3 +454,49 @@ def test_llamacpp_status_reports_the_childs_build_as_version(tmp_path):
         assert client.get("/admin/status", headers=auth_headers()).json()["engine"] == {"name": "llamacpp", "version": "bFAKE-0000"}
     finally:
         pm.stop()
+
+
+def test_status_reports_capabilities(tmp_path):
+    client = new_client(tmp_path)
+    resp = client.get("/admin/status", headers=auth_headers())
+    assert resp.status_code == 200
+    assert "model_delete" in resp.json()["capabilities"]
+
+
+def test_delete_model_removes_the_directory(tmp_path):
+    models_root = tmp_path / "models"
+    target = models_root / "my-model"
+    target.mkdir(parents=True)
+    (target / "weights.bin").write_bytes(b"x")
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+    client = new_client(tmp_path, download_manager=manager)
+
+    resp = client.request("DELETE", "/admin/models", headers=auth_headers(), json={"path": str(target)})
+
+    assert resp.status_code == 200
+    assert not target.exists()
+
+
+def test_delete_model_outside_models_root_is_rejected(tmp_path):
+    models_root = tmp_path / "models"
+    models_root.mkdir(parents=True)
+    outside = tmp_path / "not-models" / "evil"
+    outside.mkdir(parents=True)
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+    client = new_client(tmp_path, download_manager=manager)
+
+    resp = client.request("DELETE", "/admin/models", headers=auth_headers(), json={"path": str(outside)})
+
+    assert resp.status_code == 400
+    assert outside.exists()
+
+
+def test_delete_model_missing_path_is_404(tmp_path):
+    models_root = tmp_path / "models"
+    models_root.mkdir(parents=True)
+    manager = DownloadManager(FakeHfClient({}), models_root=models_root)
+    client = new_client(tmp_path, download_manager=manager)
+
+    resp = client.request("DELETE", "/admin/models", headers=auth_headers(), json={"path": str(models_root / "nope")})
+
+    assert resp.status_code == 404

@@ -187,4 +187,15 @@ public sealed class SupervisorClient : ISupervisorClient
         using var response = await client.DeleteAsync(Url(adminUrl, $"/admin/downloads/{downloadId}"), ct);
         await EnsureSuccessAsync(response, ct);
     }
+
+    public async Task DeleteModelFilesAsync(string adminUrl, string path, CancellationToken ct = default)
+    {
+        using var client = NewClient();
+        using var request = new HttpRequestMessage(HttpMethod.Delete, Url(adminUrl, "/admin/models"))
+        {
+            Content = JsonContent.Create(new { path }),
+        };
+        using var response = await client.SendAsync(request, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
 }

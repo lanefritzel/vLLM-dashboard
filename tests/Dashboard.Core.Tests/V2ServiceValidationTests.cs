@@ -36,7 +36,7 @@ public class V2ServiceValidationTests
     {
         // The literal first qwen incident: an empty --model crash-looped the
         // container. A model with no weights location can never be deployed.
-        var service = new ModelService(UnusedScopeFactory, new ReadOnlyGuard());
+        var service = new ModelService(UnusedScopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var model = new Model { ServerId = 1, Name = "qwen", Path = "" };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(model));
@@ -45,7 +45,7 @@ public class V2ServiceValidationTests
     [Fact]
     public async Task ModelService_CreateWithBlankName_Rejected()
     {
-        var service = new ModelService(UnusedScopeFactory, new ReadOnlyGuard());
+        var service = new ModelService(UnusedScopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var model = new Model { ServerId = 1, Name = "", Path = "/models/hf-cache/qwen" };
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(model));
@@ -155,7 +155,7 @@ public class ReadOnlyGuardTests
     {
         var guard = new ReadOnlyGuard();
         guard.SetReadOnly(true);
-        var service = new ModelService(UnusedScopeFactory, guard);
+        var service = new ModelService(UnusedScopeFactory, guard, new UnusedSupervisorClient());
 
         await Assert.ThrowsAsync<Dashboard.Core.Abstractions.ReadOnlyModeException>(
             () => service.CreateAsync(new Model { ServerId = 1, Name = "qwen", Path = "/models/qwen" }));

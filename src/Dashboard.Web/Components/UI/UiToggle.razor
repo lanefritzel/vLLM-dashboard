@@ -1,0 +1,29 @@
+@* UiToggle — an on/off switch, for a setting rather than a selection (as
+   opposed to a checkbox in a list). Disabled state carries its own reason via
+   DisabledHint (shown as a title tooltip), so "why can't I turn this on" is
+   never a dead end -- e.g. "Requires a newer supervisor" vs "Can't reach the
+   supervisor to check this" are different messages, not just "disabled". *@
+<label class="ui-toggle @(Disabled ? "ui-toggle-disabled" : "")" title="@(Disabled ? DisabledHint : null)">
+    <input type="checkbox" class="ui-toggle-input" checked="@Value" disabled="@Disabled"
+           @onchange="@(e => OnChange((bool)(e.Value ?? false)))" />
+    <span class="ui-toggle-track" aria-hidden="true"><span class="ui-toggle-thumb"></span></span>
+    @if (ChildContent is not null)
+    {
+        <span class="ui-toggle-label">@ChildContent</span>
+    }
+</label>
+
+@code {
+    [Parameter] public bool Value { get; set; }
+    [Parameter] public EventCallback<bool> ValueChanged { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? DisabledHint { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private async Task OnChange(bool value)
+    {
+        if (Disabled) return;
+        Value = value;
+        await ValueChanged.InvokeAsync(value);
+    }
+}

@@ -1,7 +1,7 @@
 namespace Dashboard.Core.Recipes;
 
 /// <summary>Argv/env helpers shared by every engine's builder (P1).</summary>
-internal static class ArgBuilderCommon
+public static class ArgBuilderCommon
 {
     /// <summary>Appends "flag [value]" to argv, or — if that flag is already present
     /// — replaces its value in place (or removes a stale value if it's now a bare
@@ -30,8 +30,12 @@ internal static class ArgBuilderCommon
     /// any path under models_dir, whatever structure it's actually in.
     /// Leaves the path untouched if it doesn't actually start with that prefix --
     /// a mismatch here is a data problem for the compatibility pass to flag
-    /// (and, pre-conversion, for P01b's report), not something to silently guess at.</summary>
-    internal static string ContainerModelPath(string hostPath, string modelsDir)
+    /// (and, pre-conversion, for P01b's report), not something to silently guess at.
+    /// Also reused by <see cref="Dashboard.Infrastructure.Persistence.V2.ModelService"/>
+    /// to address a model's files on the supervisor's own filesystem for deletion --
+    /// same host-to-container substitution, just resolved against the supervisor's
+    /// mount instead of the vLLM container's.</summary>
+    public static string ContainerModelPath(string hostPath, string modelsDir)
     {
         var root = modelsDir.TrimEnd('/');
         return hostPath.StartsWith(root, StringComparison.Ordinal)

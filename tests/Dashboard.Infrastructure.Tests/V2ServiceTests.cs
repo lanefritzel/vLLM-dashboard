@@ -86,7 +86,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var service = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var service = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
 
         var created = await service.CreateAsync(new Model { ServerId = server.Id, Name = "qwen", Path = "/models/hf-cache/qwen" });
         Assert.True(created.Id > 0);
@@ -108,7 +108,7 @@ public class V2ServiceTests(PostgresFixture postgres)
         // What the Edit model dialog sends: a fresh object with the same Id, not a tracked entity.
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var service = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var service = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var created = await service.CreateAsync(new Model
         {
             ServerId = server.Id, Name = "gemma", Path = "/models/gemma/dir", LoadFormat = "auto",
@@ -135,7 +135,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var service = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var service = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var created = await service.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateAsync(new Model
@@ -146,14 +146,19 @@ public class V2ServiceTests(PostgresFixture postgres)
         Assert.Equal("/models/m", (await service.GetAsync(created.Id))!.Path);
     }
 
-    private static async Task<Deployment> SeedDeploymentAsync(IServiceScopeFactory scopeFactory, int serverId, int modelId, int recipeId, string recipeName = "r")
+    private static async Task<Deployment> SeedDeploymentAsync(
+        IServiceScopeFactory scopeFactory, int serverId, int modelId, int recipeId, string recipeName = "r", string modelName = "m")
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var instance = new Instance { ServerId = serverId, Label = "i", ProxySlug = "i" + Guid.NewGuid().ToString("N") };
         db.InstancesV2.Add(instance);
         await db.SaveChangesAsync();
-        var deployment = new Deployment { InstanceId = instance.Id, ModelId = modelId, RecipeId = recipeId, RecipeName = recipeName, ArgsSnapshot = "[]", Status = "stopped", StopReason = "swapped" };
+        var deployment = new Deployment
+        {
+            InstanceId = instance.Id, ModelId = modelId, ModelName = modelName, RecipeId = recipeId, RecipeName = recipeName,
+            ArgsSnapshot = "[]", Status = "stopped", StopReason = "swapped",
+        };
         db.DeploymentsV2.Add(deployment);
         await db.SaveChangesAsync();
         return deployment;
@@ -164,7 +169,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var models = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipes = new RecipeService(scopeFactory, new ReadOnlyGuard());
         var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
         var recipe = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "used", ServedModelName = "main" });
@@ -186,7 +191,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var models = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipes = new RecipeService(scopeFactory, new ReadOnlyGuard());
         var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
         var used = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "used", ServedModelName = "main" });
@@ -200,19 +205,41 @@ public class V2ServiceTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task ModelService_Delete_OfAModelWithDeploymentHistory_ExplainsWhy_AndKeepsTheModel()
+    public async Task ModelService_Delete_OfAModelWithDeploymentHistory_Succeeds_AndHistoryKeepsItsSnapshotName()
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory);
-        var models = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipes = new RecipeService(scopeFactory, new ReadOnlyGuard());
-        var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
+        var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "used", Path = "/models/m" });
         var recipe = await recipes.CreateAsync(new Recipe { ServerId = server.Id, Name = "r", ServedModelName = "main" });
-        await SeedDeploymentAsync(scopeFactory, server.Id, model.Id, recipe.Id);
+        var deployment = await SeedDeploymentAsync(scopeFactory, server.Id, model.Id, recipe.Id, modelName: "used");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => models.DeleteAsync(model.Id));
+        await models.DeleteAsync(model.Id);
 
-        Assert.Contains("can't be deleted", ex.Message);
+        Assert.Null(await models.GetAsync(model.Id));
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var reloaded = await db.DeploymentsV2.FindAsync(deployment.Id);
+        Assert.Null(reloaded!.ModelId);
+        Assert.Equal("used", reloaded.ModelName);
+    }
+
+    [Fact]
+    public async Task ModelService_Delete_WithDeleteFiles_ThrowsWhenNoSupervisorIsReachable()
+    {
+        var scopeFactory = await NewMigratedScopeFactoryAsync();
+        var server = await SeedServerAsync(scopeFactory);
+        var models = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
+        var model = await models.CreateAsync(new Model { ServerId = server.Id, Name = "m", Path = "/models/m" });
+
+        // No instance registered on this server at all -- deleteFiles has no
+        // supervisor to ask, so it must refuse rather than silently skip the
+        // file delete the operator explicitly asked for.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => models.DeleteAsync(model.Id, deleteFiles: true));
+
+        Assert.Contains("no reachable supervisor", ex.Message);
         Assert.NotNull(await models.GetAsync(model.Id));
     }
 
@@ -243,7 +270,7 @@ public class V2ServiceTests(PostgresFixture postgres)
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
         var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
-        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
         var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
@@ -273,7 +300,7 @@ public class V2ServiceTests(PostgresFixture postgres)
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
         var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
-        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
         var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
@@ -309,7 +336,7 @@ public class V2ServiceTests(PostgresFixture postgres)
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
         var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
-        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
         var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
@@ -332,7 +359,7 @@ public class V2ServiceTests(PostgresFixture postgres)
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
         var instanceService = new InstanceService(scopeFactory, new ReadOnlyGuard());
-        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
         var deploymentService = new DeploymentService(scopeFactory, new ReadOnlyGuard());
 
@@ -543,7 +570,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var model = await modelService.CreateAsync(new Model
@@ -569,7 +596,7 @@ public class V2ServiceTests(PostgresFixture postgres)
         // HF repo file, a different layer entirely, before anything is stored).
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var model = await modelService.CreateAsync(new Model
@@ -589,7 +616,7 @@ public class V2ServiceTests(PostgresFixture postgres)
     {
         var scopeFactory = await NewMigratedScopeFactoryAsync();
         var server = await SeedServerAsync(scopeFactory, gpuName: "NVIDIA RTX 4090");
-        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard());
+        var modelService = new ModelService(scopeFactory, new ReadOnlyGuard(), new UnusedSupervisorClient());
         var recipeService = new RecipeService(scopeFactory, new ReadOnlyGuard());
 
         var model = await modelService.CreateAsync(new Model
