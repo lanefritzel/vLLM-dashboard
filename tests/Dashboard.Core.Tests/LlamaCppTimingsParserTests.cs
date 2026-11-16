@@ -6,7 +6,7 @@ namespace Dashboard.Core.Tests;
 /// <summary>P7: parses the per-chunk <c>timings</c> object llama-server embeds in every
 /// streamed SSE chunk when the request body carries <c>"timings_per_token": true</c> (see
 /// ModelProxyServiceTests' InjectTimingsPerToken_* tests for the request-side counterpart).
-/// Confirmed against a real server (serenity, build b12282-aa75ff323): without that flag, a
+/// Confirmed against a real server (nvidia-host, build b12282-aa75ff323): without that flag, a
 /// chunk only carries <c>timings</c> in the FINAL chunk -- these are real intermediate-chunk
 /// bodies captured mid-generation with the flag set, not synthesized.</summary>
 public class LlamaCppTimingsParserTests

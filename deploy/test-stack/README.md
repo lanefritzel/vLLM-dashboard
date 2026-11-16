@@ -39,9 +39,9 @@ hardware (Intel XPU and NVIDIA) before they reach a live install.
 It only ever runs `docker compose` against project `vis-test`; it never stops, removes or kills
 anything else. `test-stack.test.sh` checks those properties with a stubbed `docker`/`ss`.
 
-## Procedure used (tes.home, Intel; same shape on serenity, NVIDIA)
+## Procedure used (gpu-host.lan, Intel; same shape on nvidia-host, NVIDIA)
 
-Work only inside one dev folder on the host, e.g. `/media/external6tb/docker-dev/vllm-visualizer`.
+Work only inside one dev folder on the host, e.g. `/mnt/storage/docker-dev/vllm-visualizer`.
 Install nothing on the host; everything runs in containers.
 
 1. **Copy the source up** (from the repo root, over ssh):

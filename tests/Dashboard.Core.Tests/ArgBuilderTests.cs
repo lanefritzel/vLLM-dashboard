@@ -127,8 +127,8 @@ public class ArgBuilderTests
     [Fact]
     public void Build_SubstitutesTheModelsDirPrefixForTheContainerPath()
     {
-        var model = PlainModel("/home/lanef/hf-models/hf-cache/some-model");
-        var server = PlainServer("/home/lanef/hf-models");
+        var model = PlainModel("/home/user/hf-models/hf-cache/some-model");
+        var server = PlainServer("/home/user/hf-models");
         var result = ArgBuilder.Build(model, PlainRecipe(), PlainInstance(), server);
 
         Assert.Equal("/models/hf-cache/some-model", result.Argv[2]);

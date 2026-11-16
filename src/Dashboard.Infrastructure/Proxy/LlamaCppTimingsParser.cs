@@ -8,7 +8,7 @@ namespace Dashboard.Infrastructure.Proxy;
 /// -- but only when the request body carried <c>"timings_per_token": true</c> (see
 /// <see cref="ModelProxyService.InjectTimingsPerToken"/>). Without that flag, a chunk
 /// only carries <c>timings</c> in the FINAL one, confirmed against a real server
-/// (serenity, build b12282-aa75ff323): polled through an entire real generation, not a
+/// (nvidia-host, build b12282-aa75ff323): polled through an entire real generation, not a
 /// single snapshot. Never throws on malformed/missing input, same contract as
 /// <see cref="Dashboard.Infrastructure.Scrapers.LlamaCppMetricsParser"/>.
 /// </summary>

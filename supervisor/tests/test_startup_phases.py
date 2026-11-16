@@ -1,4 +1,4 @@
-"""StartupTracker against REAL vLLM 0.33 startup output (captured on serenity, RTX 3060, Gemma 4
+"""StartupTracker against REAL vLLM 0.33 startup output (captured on nvidia-host, RTX 3060, Gemma 4
 12B AWQ): the fixture's own timestamps show ~75 s of silent imports, 8 s of weight loading and
 40 s of warm-up -- the phases the UI used to collapse into one instant "Load weights" step."""
 import sys

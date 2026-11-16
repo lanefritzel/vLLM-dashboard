@@ -5,8 +5,8 @@ namespace Dashboard.Core.Tests;
 public class SlugTests
 {
     [Theory]
-    [InlineData("tes.home local passthrough (vLLM)", "tes-home-local-passthrough-vllm")]
-    [InlineData("tes — main vLLM", "tes-main-vllm")]
+    [InlineData("gpu-host.lan local passthrough (vLLM)", "gpu-host-lan-local-passthrough-vllm")]
+    [InlineData("gpu-host — main vLLM", "gpu-host-main-vllm")]
     [InlineData("  Leading and trailing spaces  ", "leading-and-trailing-spaces")]
     [InlineData("ALREADY-lower-case", "already-lower-case")]
     [InlineData("multiple   spaces___and--dashes", "multiple-spaces-and-dashes")]

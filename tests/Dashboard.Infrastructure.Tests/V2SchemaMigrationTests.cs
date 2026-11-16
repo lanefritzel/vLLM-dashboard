@@ -49,7 +49,7 @@ public class V2SchemaMigrationTests(PostgresFixture postgres)
         // model, a metrics sample, an app log, and an Identity user.
         var physicalServer = new Persistence.PhysicalServer
         {
-            Label = "tes", DockerHost = "tcp://tes.home:2375", GpuVendor = "intel", GpuVramTotalGb = 12,
+            Label = "gpu-host", DockerHost = "tcp://gpu-host.lan:2375", GpuVendor = "intel", GpuVramTotalGb = 12,
             HfCacheHostPath = "/hf-cache", HfToken = "secret-token",
         };
         db.PhysicalServers.Add(physicalServer);
@@ -58,8 +58,8 @@ public class V2SchemaMigrationTests(PostgresFixture postgres)
         var source = new Persistence.Source
         {
             Slug = "main", Label = "main vLLM", Type = "vllm",
-            MetricsUrl = "http://tes.home:9999/metrics", InferenceUrl = "http://tes.home:9999/v1",
-            DockerHost = "tcp://tes.home:2375", PhysicalServerId = physicalServer.Id,
+            MetricsUrl = "http://gpu-host.lan:9999/metrics", InferenceUrl = "http://gpu-host.lan:9999/v1",
+            DockerHost = "tcp://gpu-host.lan:2375", PhysicalServerId = physicalServer.Id,
             LaunchSpec = new Persistence.LaunchSpecEntity
             {
                 Image = "intel/llm-scaler-vllm:0.26.0-b2", ModelArgTemplate = "{model}", RestartPolicy = "unless-stopped",

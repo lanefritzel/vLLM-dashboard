@@ -32,15 +32,15 @@ public class LegacyConversionServiceTests(PostgresFixture postgres)
         Assert.Equal(3, report.ModelsConverted); // all 4 legacy models minus... wait: there are 3 in the fixture
         Assert.Equal(3, report.RecipesCreated);
 
-        var server = await db.ServersV2.SingleAsync(s => s.Label == "tes.home");
+        var server = await db.ServersV2.SingleAsync(s => s.Label == "gpu-host.lan");
         var instance = await db.InstancesV2.SingleAsync(i => i.ServerId == server.Id);
-        Assert.Equal("tes-home", instance.ProxySlug);
+        Assert.Equal("gpu-host", instance.ProxySlug);
         Assert.Null(instance.AdminUrl);
 
         var model = await db.ModelsV2.SingleAsync(m => m.ServerId == server.Id && m.Name == "qwen3.8-vllm");
         Assert.Equal("available", model.Status);
         Assert.Equal("local", model.SourceType);
-        Assert.Equal("/media/external6tb/llm-models/hf-cache/Qwen3.8-27B-INT4", model.Path);
+        Assert.Equal("/mnt/storage/llm-models/hf-cache/Qwen3.8-27B-INT4", model.Path);
 
         var neverDownloaded = await db.ModelsV2.Where(m => m.ServerId == server.Id && m.Name != "qwen3.8-vllm").ToListAsync();
         Assert.All(neverDownloaded, m => Assert.Equal("download_failed", m.Status));

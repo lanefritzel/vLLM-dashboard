@@ -238,11 +238,11 @@ public sealed class VisualizerFeedServiceTests : IAsyncLifetime
     public async Task Resolver_BuildsPluginUrlFromHostOverrideAndPort()
     {
         var resolver = new InstanceVisualizerEndpointResolver(
-            scopes: null!, Options.Create(new VisualizerOptions { HostOverride = "tes.home", Port = 9998, Token = " " }));
+            scopes: null!, Options.Create(new VisualizerOptions { HostOverride = "gpu-host.lan", Port = 9998, Token = " " }));
 
         var ep = await resolver.ResolveAsync("7", CancellationToken.None);
 
-        Assert.Equal("http://tes.home:9998/stream", ep!.Url.ToString());
+        Assert.Equal("http://gpu-host.lan:9998/stream", ep!.Url.ToString());
         Assert.Null(ep.Token);
     }
 }

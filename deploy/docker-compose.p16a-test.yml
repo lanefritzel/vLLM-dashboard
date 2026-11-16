@@ -11,7 +11,7 @@
 #   2. supervisor, once (1) looks right -- this is the step that touches the
 #      GPU, so it's deliberately not auto-started with the rest.
 #
-# Usage (run from this directory on tes.home):
+# Usage (run from this directory on gpu-host.lan):
 #   docker compose -f docker-compose.p16a-test.yml up -d --build postgres dashboard
 #   docker compose -f docker-compose.p16a-test.yml up -d --build supervisor
 #
@@ -92,7 +92,7 @@ services:
     network_mode: host
     volumes:
       - p16a-dataprotection:/data
-      - /home/lanef/hf-models:/models:ro
+      - /home/user/hf-models:/models:ro
 
   supervisor:
     build:
@@ -115,7 +115,7 @@ services:
       - p16a-state:/state
       # Models root, not a single per-model mount -- the supervisor resolves
       # MODELS_ROOT + the recipe's own relative path at deploy time.
-      - /home/lanef/hf-models:/models:ro
+      - /home/user/hf-models:/models:ro
     ipc: host
     privileged: true
     init: true

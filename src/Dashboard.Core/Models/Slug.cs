@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 namespace Dashboard.Core.Models;
 
 /// <summary>Turns a source label into a short, URL-safe identifier for the proxy
-/// route (e.g. "/proxy/tes-vllm/v1/..." instead of the raw GUID). Pure/no I/O —
+/// route (e.g. "/proxy/gpu-host-vllm/v1/..." instead of the raw GUID). Pure/no I/O —
 /// uniqueness against other sources is the caller's job, since only the caller has
 /// the database.</summary>
 public static partial class Slug

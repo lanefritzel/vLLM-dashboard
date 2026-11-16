@@ -71,7 +71,7 @@ public sealed class LlamaCppMetricsSource : IMetricsSource
             // successful scrape) is sound in general, but when the *previous* successful
             // scrape landed well before a long busy stretch, the next one's token delta
             // can land compressed enough to read as an absurd tok/s spike -- confirmed
-            // live against serenity (rows with no KvPct, i.e. from this poller, at
+            // live against nvidia-host (rows with no KvPct, i.e. from this poller, at
             // 1000-4000+ "tok/s" during/after a long generation). The P7 proxy path
             // (LlamaCppLiveMetricsPublisher) is llama.cpp's sole live throughput source
             // now -- it reads the engine's own per-chunk timings.predicted_per_second

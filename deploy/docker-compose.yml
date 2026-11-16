@@ -35,8 +35,8 @@ services:
       # Certificate/KeyPath here is for a PEM cert+key pair; swap for
       # Certificate__Path + Certificate__Password if yours is a PFX instead.
       Kestrel__Endpoints__Https__Url: "https://+:8445"
-      Kestrel__Endpoints__Https__Certificate__Path: /certs/tes.home.pem
-      Kestrel__Endpoints__Https__Certificate__KeyPath: /certs/tes.home.key
+      Kestrel__Endpoints__Https__Certificate__Path: /certs/gpu-host.lan.pem
+      Kestrel__Endpoints__Https__Certificate__KeyPath: /certs/gpu-host.lan.key
       # Mount the same host directory below as the supervisor's own
       # MODELS_ROOT (same path on both sides) to let the Servers/Add-model
       # folder picker browse real paths. Omit both this var and the volume

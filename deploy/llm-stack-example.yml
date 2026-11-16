@@ -27,7 +27,7 @@ services:
       - /dev/dri:/dev/dri
     volumes:
       - /dev/dri/by-path:/dev/dri/by-path
-      - /media/external6tb/llm-models/hf-cache/Qwen3.8-27B-INT4:/models/qwen3.8-int4
+      - /mnt/storage/llm-models/hf-cache/Qwen3.8-27B-INT4:/models/qwen3.8-int4
     ipc: host
     privileged: true
     entrypoint: ["vllm"]
@@ -58,7 +58,7 @@ services:
     restart: unless-stopped
     network_mode: host
     volumes:
-      - /media/external6tb/docker-compose/llama-swap-config.yaml:/app/config.yaml
+      - /mnt/storage/docker-compose/llama-swap-config.yaml:/app/config.yaml
     command: ["-config", "/app/config.yaml", "-listen", "0.0.0.0:8990"]
 
   postgres:
@@ -79,7 +79,7 @@ services:
       POSTGRES_USER: dashboard
       POSTGRES_PASSWORD: dashboard
     volumes:
-      - /media/external6tb/app-data/vLLM-Dashboard/postgres:/var/lib/postgresql/data
+      - /mnt/storage/app-data/vLLM-Dashboard/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
       interval: 5s

@@ -44,7 +44,7 @@ public class LlamaCppMetricsSourceTests
         Assert.Equal(2, snapshot.Running);
     }
 
-    /// <summary>P7: confirmed live against serenity -- llama-server is effectively
+    /// <summary>P7: confirmed live against nvidia-host -- llama-server is effectively
     /// single-threaded while streaming a completion, so a /metrics scrape made during a
     /// long generation can queue for the whole generation; the next successful scrape's
     /// counter delta then lands compressed enough for MetricsAggregator's rate math to
