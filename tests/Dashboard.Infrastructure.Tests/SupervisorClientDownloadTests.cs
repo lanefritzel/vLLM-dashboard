@@ -16,6 +16,7 @@ namespace Dashboard.Infrastructure.Tests;
 public class SupervisorClientDownloadTests : IAsyncDisposable
 {
     private Microsoft.Extensions.Hosting.IHost? _fakeAdmin;
+    private string? LastDownloadRequestBody { get; set; }
 
     public async ValueTask DisposeAsync()
     {
@@ -34,11 +35,16 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
             ctx.Response.ContentType = "application/json";
             await ctx.Response.WriteAsync("""
                 {"files":[{"path":"model.safetensors","size":123456},{"path":"config.json","size":512}],
-                 "config":{"max_position_embeddings":8192},"free_bytes":999999999}
+                 "config":{"max_position_embeddings":8192},"free_bytes":999999999,
+                 "quant_groups":[{"name":"model.Q4_K_M","files":["model.Q4_K_M.gguf"],"total_bytes":1024},
+                                  {"name":"model.Q5_K_M","files":["model.Q5_K_M.gguf"],"total_bytes":2048}]}
                 """);
         });
+        LastDownloadRequestBody = null;
         app.MapPost("/admin/downloads", async (HttpContext ctx) =>
         {
+            using var reader = new StreamReader(ctx.Request.Body);
+            LastDownloadRequestBody = await reader.ReadToEndAsync();
             ctx.Response.ContentType = "application/json";
             await ctx.Response.WriteAsync("""{"download_id":"dl-1"}""");
         });
@@ -49,7 +55,8 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
                 {"status":"done","files_total":2,"files_done":2,"total_bytes":123968,"downloaded_bytes":123968,
                  "progress_pct":100.0,"speed_bps":5000.0,"eta_seconds":null,
                  "path":"/models/hf-cache/my-model","size_bytes":123968,
-                 "config":{"max_position_embeddings":8192},"load_format":"auto"}
+                 "config":{"max_position_embeddings":8192},"load_format":"auto",
+                 "candidate_files":[{"path":"/models/hf-cache/my-model/model.Q4_K_M.gguf","size":1024}]}
                 """);
         });
         app.MapDelete("/admin/downloads/{id}", (string id) => Results.Ok(new { status = "cancelled" }));
@@ -78,6 +85,9 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
         Assert.Equal(123456, result.Files[0].Size);
         Assert.Equal(999999999, result.FreeBytes);
         Assert.NotNull(result.Config);
+        Assert.Equal(2, result.QuantGroups.Count);
+        Assert.Equal("model.Q4_K_M", result.QuantGroups[0].Name);
+        Assert.Equal(1024, result.QuantGroups[0].TotalBytes);
     }
 
     [Fact]
@@ -89,6 +99,19 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
         var downloadId = await client.StartDownloadAsync(adminUrl, "org/repo", "my-model");
 
         Assert.Equal("dl-1", downloadId);
+        Assert.Contains("\"filenames\":null", LastDownloadRequestBody);
+    }
+
+    [Fact]
+    public async Task StartDownloadAsync_SendsTheSelectedFilenames()
+    {
+        var adminUrl = await StartFakeAdminAsync();
+        var client = NewClient();
+
+        await client.StartDownloadAsync(adminUrl, "org/repo", "my-model", filenames: ["model.Q4_K_M.gguf", "model.Q5_K_M.gguf"]);
+
+        Assert.Contains("model.Q4_K_M.gguf", LastDownloadRequestBody);
+        Assert.Contains("model.Q5_K_M.gguf", LastDownloadRequestBody);
     }
 
     [Fact]
@@ -104,6 +127,8 @@ public class SupervisorClientDownloadTests : IAsyncDisposable
         Assert.Equal("/models/hf-cache/my-model", status.Path);
         Assert.Equal(123968, status.SizeBytes);
         Assert.Equal("auto", status.LoadFormat);
+        Assert.Single(status.CandidateFiles);
+        Assert.Equal("/models/hf-cache/my-model/model.Q4_K_M.gguf", status.CandidateFiles[0].Path);
     }
 
     [Fact]

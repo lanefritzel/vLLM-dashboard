@@ -166,10 +166,10 @@ public sealed class SupervisorClient : ISupervisorClient
     }
 
     public async Task<string> StartDownloadAsync(
-        string adminUrl, string repoId, string slug, string? filename = null, CancellationToken ct = default)
+        string adminUrl, string repoId, string slug, IReadOnlyList<string>? filenames = null, CancellationToken ct = default)
     {
         using var client = NewClient();
-        using var response = await client.PostAsJsonAsync(Url(adminUrl, "/admin/downloads"), new { repo_id = repoId, slug, filename }, ct);
+        using var response = await client.PostAsJsonAsync(Url(adminUrl, "/admin/downloads"), new { repo_id = repoId, slug, filenames }, ct);
         var body = await ReadAsync<JsonElement>(response, ct);
         return body.GetProperty("download_id").GetString()!;
     }

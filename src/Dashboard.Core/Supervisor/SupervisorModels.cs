@@ -89,6 +89,17 @@ public sealed record SupervisorRepoFile
     public long Size { get; init; }
 }
 
+/// <summary>One selectable quantization in a multi-quant gguf repo -- usually one
+/// file, or every shard of a sharded quant grouped together (picking a quant
+/// can't leave a shard behind). Empty from the supervisor whenever there's
+/// nothing to choose between (a plain repo, or a repo with only one gguf file).</summary>
+public sealed record SupervisorQuantGroup
+{
+    public required string Name { get; init; }
+    public IReadOnlyList<string> Files { get; init; } = Array.Empty<string>();
+    public long TotalBytes { get; init; }
+}
+
 /// <summary>P13's "Add model" flow, step 1: <c>POST /admin/downloads/inspect</c> --
 /// the file listing + parsed config.json + the server's own free disk space,
 /// BEFORE anything is downloaded (doc 6: "Required X, Available Y" disk check).</summary>
@@ -97,6 +108,16 @@ public sealed record SupervisorDownloadInspectResult
     public IReadOnlyList<SupervisorRepoFile> Files { get; init; } = Array.Empty<SupervisorRepoFile>();
     public Dictionary<string, object?>? Config { get; init; }
     public long FreeBytes { get; init; }
+    public IReadOnlyList<SupervisorQuantGroup> QuantGroups { get; init; } = Array.Empty<SupervisorQuantGroup>();
+}
+
+/// <summary>One quant actually downloaded in a multi-quant selection, offered as a
+/// candidate for which path becomes the registered model (doc: "let the user pick
+/// which quants... then at Save, which one becomes this model").</summary>
+public sealed record SupervisorCandidateFile
+{
+    public required string Path { get; init; }
+    public long Size { get; init; }
 }
 
 /// <summary>Polled via <c>GET /admin/downloads/{id}</c> for the progress bar
@@ -117,6 +138,11 @@ public sealed record SupervisorDownloadStatus
     public long? SizeBytes { get; init; }
     public Dictionary<string, object?>? Config { get; init; }
     public string? LoadFormat { get; init; }
+
+    /// <summary>Populated only for a multi-quant selection (more than one file
+    /// requested) -- one representative per quant actually downloaded, for the
+    /// "which one becomes this model" picker. Empty otherwise.</summary>
+    public IReadOnlyList<SupervisorCandidateFile> CandidateFiles { get; init; } = Array.Empty<SupervisorCandidateFile>();
 }
 
 /// <summary>Thrown by <see cref="Dashboard.Core.Abstractions.ISupervisorClient"/>

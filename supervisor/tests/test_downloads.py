@@ -13,6 +13,8 @@ from supervisor.downloads import (
     DownloadManager,
     DownloadNotFoundError,
     FakeHfClient,
+    RemoteFile,
+    group_gguf_quants,
 )
 
 
@@ -37,6 +39,50 @@ def test_inspect_returns_files_config_and_free_bytes(tmp_path):
                                 {"path": "model.safetensors", "size": 1000}]
     assert result["config"] == {"max_position_embeddings": 4096}
     assert result["free_bytes"] > 0
+
+
+def test_group_gguf_quants_ignores_non_gguf_files():
+    groups = group_gguf_quants([RemoteFile("model.Q4_K_M.gguf", 10), RemoteFile("README.md", 5), RemoteFile("config.json", 3)])
+    assert [g.name for g in groups] == ["model.Q4_K_M"]
+
+
+def test_group_gguf_quants_collapses_shards_to_shard1_regardless_of_arrival_order():
+    # Shard 2 listed before shard 1 -- the representative must still end up as
+    # shard 1, and the group's name must still resolve from it, not "fossilize"
+    # on a placeholder name picked before shard 1 was seen.
+    groups = group_gguf_quants([
+        RemoteFile("model-00002-of-00002.gguf", 20),
+        RemoteFile("model-00001-of-00002.gguf", 10),
+    ])
+    assert len(groups) == 1
+    assert groups[0].name == "model"
+    assert groups[0].files == ["model-00001-of-00002.gguf", "model-00002-of-00002.gguf"]
+    assert groups[0].total_bytes == 30
+
+
+def test_inspect_reports_no_quant_groups_for_a_plain_repo(tmp_path):
+    repo = make_repo(tmp_path, "org/model-a", {"model.safetensors": b"x" * 1000, "README.md": b"r"})
+    manager = DownloadManager(FakeHfClient({"org/model-a": repo}), models_root=tmp_path / "models")
+
+    result = manager.inspect("org/model-a")
+
+    assert result["quant_groups"] == []
+
+
+def test_inspect_reports_quant_groups_for_a_multi_quant_gguf_repo(tmp_path):
+    repo = make_repo(tmp_path, "org/model-gguf", {
+        "model.Q4_K_M.gguf": b"a" * 1024,
+        "model.Q5_K_M.gguf": b"b" * 2048,
+        "README.md": b"ignored",
+    })
+    manager = DownloadManager(FakeHfClient({"org/model-gguf": repo}), models_root=tmp_path / "models")
+
+    result = manager.inspect("org/model-gguf")
+
+    assert sorted(result["quant_groups"], key=lambda g: g["name"]) == [
+        {"name": "model.Q4_K_M", "files": ["model.Q4_K_M.gguf"], "total_bytes": 1024},
+        {"name": "model.Q5_K_M", "files": ["model.Q5_K_M.gguf"], "total_bytes": 2048},
+    ]
 
 
 def test_inspect_unknown_repo_raises_404(tmp_path):
@@ -106,7 +152,7 @@ def test_single_file_gguf_download_sets_load_format_gguf(tmp_path):
     models_root = tmp_path / "models"
     manager = DownloadManager(FakeHfClient({"org/model-gguf": repo}), models_root=models_root)
 
-    download_id = manager.start_download("org/model-gguf", "model-gguf", filename="model.Q4_K_M.gguf")
+    download_id = manager.start_download("org/model-gguf", "model-gguf", filenames=["model.Q4_K_M.gguf"])
     for _ in range(100):
         status = manager.get(download_id)
         if status["status"] == "done":
@@ -120,6 +166,65 @@ def test_single_file_gguf_download_sets_load_format_gguf(tmp_path):
     assert status["config"] is None
     assert status["size_bytes"] == 2048
     assert status["path"] == str(models_root / "model-gguf" / "model.Q4_K_M.gguf")
+    assert status["candidate_files"] == []  # single-file selection, not a multi-quant pick
+
+
+def test_multi_quant_selection_downloads_only_those_files_and_lists_candidates(tmp_path):
+    repo = make_repo(tmp_path, "org/model-gguf", {
+        "model.Q4_K_M.gguf": b"a" * 1024,
+        "model.Q5_K_M.gguf": b"b" * 2048,
+        "model.Q8_0.gguf": b"c" * 4096,  # not selected -- must not be downloaded
+        "README.md": b"ignored",
+    })
+    models_root = tmp_path / "models"
+    manager = DownloadManager(FakeHfClient({"org/model-gguf": repo}), models_root=models_root)
+
+    download_id = manager.start_download(
+        "org/model-gguf", "model-gguf", filenames=["model.Q4_K_M.gguf", "model.Q5_K_M.gguf"],
+    )
+    for _ in range(100):
+        status = manager.get(download_id)
+        if status["status"] == "done":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("download never reached done")
+
+    dest = models_root / "model-gguf"
+    assert status["files_total"] == 2
+    assert (dest / "model.Q4_K_M.gguf").exists()
+    assert (dest / "model.Q5_K_M.gguf").exists()
+    assert not (dest / "model.Q8_0.gguf").exists()  # unselected quant never fetched
+    assert status["load_format"] is None  # no single path IS "the model" yet
+    assert status["path"] == str(dest)
+    assert sorted(status["candidate_files"], key=lambda c: c["path"]) == sorted([
+        {"path": str(dest / "model.Q4_K_M.gguf"), "size": 1024},
+        {"path": str(dest / "model.Q5_K_M.gguf"), "size": 2048},
+    ], key=lambda c: c["path"])
+
+
+def test_multi_quant_selection_collapses_a_sharded_quant_to_its_shard1_representative(tmp_path):
+    repo = make_repo(tmp_path, "org/model-gguf", {
+        "model-00001-of-00002.gguf": b"a" * 1024,
+        "model-00002-of-00002.gguf": b"b" * 1024,
+    })
+    models_root = tmp_path / "models"
+    manager = DownloadManager(FakeHfClient({"org/model-gguf": repo}), models_root=models_root)
+
+    download_id = manager.start_download(
+        "org/model-gguf", "model-gguf",
+        filenames=["model-00001-of-00002.gguf", "model-00002-of-00002.gguf"],
+    )
+    for _ in range(100):
+        status = manager.get(download_id)
+        if status["status"] == "done":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("download never reached done")
+
+    dest = models_root / "model-gguf"
+    assert status["candidate_files"] == [{"path": str(dest / "model-00001-of-00002.gguf"), "size": 2048}]
 
 
 def test_second_concurrent_download_gets_409(tmp_path):

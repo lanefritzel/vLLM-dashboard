@@ -24,7 +24,7 @@ public class UnusedSupervisorClient : ISupervisorClient
     public Task<string> SetAutoStartAsync(string adminUrl, string autoStart, CancellationToken ct = default) => throw NotUsed();
     public Task<SupervisorSmokeResult> SmokeTestAsync(string adminUrl, CancellationToken ct = default) => throw NotUsed();
     public Task<SupervisorDownloadInspectResult> InspectDownloadAsync(string adminUrl, string repoId, CancellationToken ct = default) => throw NotUsed();
-    public Task<string> StartDownloadAsync(string adminUrl, string repoId, string slug, string? filename = null, CancellationToken ct = default) => throw NotUsed();
+    public Task<string> StartDownloadAsync(string adminUrl, string repoId, string slug, IReadOnlyList<string>? filenames = null, CancellationToken ct = default) => throw NotUsed();
     public Task<SupervisorDownloadStatus> GetDownloadAsync(string adminUrl, string downloadId, CancellationToken ct = default) => throw NotUsed();
     public Task CancelDownloadAsync(string adminUrl, string downloadId, CancellationToken ct = default) => throw NotUsed();
     public virtual Task DeleteModelFilesAsync(string adminUrl, string path, CancellationToken ct = default) => throw NotUsed();

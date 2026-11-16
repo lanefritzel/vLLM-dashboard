@@ -44,7 +44,7 @@ class InspectRequest(BaseModel):
 class StartDownloadRequest(BaseModel):
     repo_id: str
     slug: str
-    filename: Optional[str] = None
+    filenames: Optional[list[str]] = None
 
 
 class DeleteModelRequest(BaseModel):
@@ -189,7 +189,7 @@ def create_app(
     @admin.post("/admin/downloads")
     def start_download(body: StartDownloadRequest) -> dict:
         try:
-            download_id = download_manager.start_download(body.repo_id, body.slug, body.filename)
+            download_id = download_manager.start_download(body.repo_id, body.slug, body.filenames)
         except DownloadInProgressError as exc:
             raise HTTPException(status_code=409, detail={"download_id": exc.download_id}) from exc
         return {"download_id": download_id}

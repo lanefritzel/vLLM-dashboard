@@ -8,6 +8,7 @@ never put into a request/response body or logged anywhere in this module.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 import time
@@ -19,6 +20,11 @@ from typing import Callable, Optional
 DEFAULT_MODELS_ROOT = Path("/models")
 CHUNK_SIZE = 1024 * 1024  # 1 MiB -- fine progress granularity without excessive overhead
 
+# llama.cpp/HF's own sharded-gguf convention: pointing --model at shard 1 makes
+# llama.cpp auto-discover the rest via metadata embedded in the gguf header, so
+# shard 1 is always the one "representative" path for a whole multi-part quant.
+_SHARD_PATTERN = re.compile(r"^(?P<base>.+)-(?P<idx>\d{5})-of-(?P<total>\d{5})\.gguf$", re.IGNORECASE)
+
 
 @dataclass
 class RemoteFile:
@@ -27,6 +33,55 @@ class RemoteFile:
 
     def to_dict(self) -> dict:
         return {"path": self.path, "size": self.size}
+
+
+@dataclass
+class QuantGroup:
+    """One selectable quantization: usually a single .gguf file, or -- for a
+    sharded quant -- every shard, downloaded together as one unit (doc: a quant
+    picker that let shards be picked individually could leave one behind)."""
+    name: str
+    files: list[str]
+    total_bytes: int
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "files": self.files, "total_bytes": self.total_bytes}
+
+
+def group_gguf_quants(files: list[RemoteFile]) -> list[QuantGroup]:
+    """Groups a repo's .gguf files into one entry per quant, shards collapsed
+    into their shard-1 representative. Non-.gguf files (config.json, README,
+    tokenizer*, ...) are never part of a quant choice, so they're excluded
+    entirely -- the caller only shows this as a picker when it finds more than
+    one group; a single group (or none) means there's nothing to choose between."""
+    groups: dict[str, QuantGroup] = {}
+    for f in files:
+        if not f.path.lower().endswith(".gguf"):
+            continue
+        m = _SHARD_PATTERN.match(f.path)
+        if m:
+            key = f"{m.group('base')}::{m.group('total')}"
+            idx = int(m.group("idx"))
+            name = m.group("base") if idx == 1 else None
+        else:
+            key = f.path
+            idx = 1
+            name = f.path[: -len(".gguf")]
+
+        group = groups.get(key)
+        if group is None:
+            groups[key] = QuantGroup(name=name or key, files=[], total_bytes=0)
+            group = groups[key]
+        elif name is not None:
+            group.name = name  # shard 1 arriving after a later shard -- fix the name up
+
+        if idx == 1 or not m:
+            group.files.insert(0, f.path)
+        else:
+            group.files.append(f.path)
+        group.total_bytes += f.size
+
+    return sorted(groups.values(), key=lambda g: g.name)
 
 
 class HfRepoError(Exception):
@@ -171,7 +226,7 @@ class DownloadState:
     download_id: str
     repo_id: str
     slug: str
-    filename: Optional[str]
+    filenames: Optional[list[str]]
     dest_dir: str
     status: str = "downloading"  # "downloading" | "done" | "download_failed" | "cancelled"
     files_total: int = 0
@@ -183,6 +238,10 @@ class DownloadState:
     size_bytes: Optional[int] = None
     config: Optional[dict] = None
     load_format: Optional[str] = None
+    # Populated only for a multi-quant selection (more than one filename
+    # requested) -- one representative {path, size} per quant actually
+    # downloaded, for the dashboard's "which one becomes this model" picker.
+    candidate_files: list[dict] = field(default_factory=list)
     started_at: float = field(default_factory=time.monotonic)
     finished_at: Optional[float] = None
 
@@ -206,6 +265,7 @@ class DownloadState:
             result.update({
                 "path": self.path, "size_bytes": self.size_bytes,
                 "config": self.config, "load_format": self.load_format,
+                "candidate_files": self.candidate_files,
             })
         elif self.status == "download_failed":
             result["error"] = self.error
@@ -230,15 +290,20 @@ class DownloadManager:
         config = self._hf_client.get_config(repo_id)
         self._models_root.mkdir(parents=True, exist_ok=True)  # disk_usage needs it to exist
         free_bytes = shutil.disk_usage(self._models_root).free
-        return {"files": [f.to_dict() for f in files], "config": config, "free_bytes": free_bytes}
+        # Only worth showing a picker when there's actually something to choose
+        # between -- a plain repo (one or zero gguf files) downloads whole, same
+        # as always.
+        groups = group_gguf_quants(files)
+        quant_groups = [g.to_dict() for g in groups] if len(groups) >= 2 else []
+        return {"files": [f.to_dict() for f in files], "config": config, "free_bytes": free_bytes, "quant_groups": quant_groups}
 
-    def start_download(self, repo_id: str, slug: str, filename: Optional[str] = None) -> str:
+    def start_download(self, repo_id: str, slug: str, filenames: Optional[list[str]] = None) -> str:
         with self._lock:
             if self._current is not None and self._current.status == "downloading":
                 raise DownloadInProgressError(self._current.download_id)
             download_id = str(uuid.uuid4())
             state = DownloadState(
-                download_id=download_id, repo_id=repo_id, slug=slug, filename=filename,
+                download_id=download_id, repo_id=repo_id, slug=slug, filenames=filenames,
                 dest_dir=str(self.dest_dir(slug)),
             )
             self._current = state
@@ -306,10 +371,11 @@ class DownloadManager:
     def _run(self, state: DownloadState, cancel_event: threading.Event) -> None:
         try:
             files = self._hf_client.list_files(state.repo_id)
-            if state.filename is not None:
-                files = [f for f in files if f.path == state.filename]
+            if state.filenames is not None:
+                wanted = set(state.filenames)
+                files = [f for f in files if f.path in wanted]
                 if not files:
-                    raise HfRepoError(f"{state.filename} not found in {state.repo_id}", status=404)
+                    raise HfRepoError(f"none of the requested files were found in {state.repo_id}", status=404)
             state.files_total = len(files)
             state.total_bytes = sum(f.size for f in files)
 
@@ -341,13 +407,28 @@ class DownloadManager:
                 state.finished_at = time.monotonic()
                 return
 
-            is_gguf = state.filename is not None and state.filename.lower().endswith(".gguf")
-            if is_gguf:
-                gguf_path = dest / state.filename
+            is_single_gguf = (
+                state.filenames is not None and len(state.filenames) == 1 and state.filenames[0].lower().endswith(".gguf")
+            )
+            is_multi_select = state.filenames is not None and len(state.filenames) > 1
+            if is_single_gguf:
+                gguf_path = dest / state.filenames[0]
                 state.path = str(gguf_path)
                 state.size_bytes = gguf_path.stat().st_size
                 state.config = None
                 state.load_format = "gguf"
+            elif is_multi_select:
+                # No single file IS "the model" here -- state.path is the whole
+                # folder, and candidate_files lists one representative per quant
+                # actually downloaded, for the dashboard to let the operator pick
+                # which one becomes this model's own registered path.
+                state.path = str(dest)
+                state.size_bytes = sum(f.size for f in files)
+                state.config = None
+                state.load_format = None
+                state.candidate_files = [
+                    {"path": str(dest / g.files[0]), "size": g.total_bytes} for g in group_gguf_quants(files)
+                ]
             else:
                 state.path = str(dest)
                 state.size_bytes = sum(f.size for f in files)

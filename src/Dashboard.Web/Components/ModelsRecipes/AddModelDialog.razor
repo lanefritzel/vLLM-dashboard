@@ -74,7 +74,10 @@
 
         @if (_inspected is not null)
         {
-            var requiredBytes = _inspected.Files.Sum(f => f.Size);
+            var hasQuantPicker = _inspected.QuantGroups.Count >= 2;
+            var requiredBytes = hasQuantPicker
+                ? _inspected.QuantGroups.Where(g => _selectedQuantNames.Contains(g.Name)).Sum(g => g.TotalBytes)
+                : _inspected.Files.Sum(f => f.Size);
             var diskCheck = DiskGuard.Check(requiredBytes, _inspected.FreeBytes);
 
             <div style="margin-top: var(--ui-space-2);">
@@ -92,6 +95,24 @@
                 </UiPanel>
             </div>
 
+            @if (hasQuantPicker)
+            {
+                <div style="margin-top: var(--ui-space-2);">
+                    <UiField Label="Quants to download" For="am-quants" Hint="Pick one or more -- only the selected quants are fetched, not the whole repo.">
+                        <div style="display:flex; flex-direction:column; gap: 4px;">
+                            @foreach (var group in _inspected.QuantGroups)
+                            {
+                                <label style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                                    <input type="checkbox" checked="@_selectedQuantNames.Contains(group.Name)"
+                                           disabled="@IsBusy" @onchange="@(e => ToggleQuant(group.Name, (bool)(e.Value ?? false)))" />
+                                    @group.Name (@FormatBytes(group.TotalBytes)@(group.Files.Count > 1 ? $", {group.Files.Count} shards" : ""))
+                                </label>
+                            }
+                        </div>
+                    </UiField>
+                </div>
+            }
+
             @if (!diskCheck.Ok)
             {
                 <div style="margin-top: var(--ui-space-2);">
@@ -101,7 +122,7 @@
             else if (_downloadStatus is null)
             {
                 <div class="mt-2">
-                    <UiButton Variant="primary" Size="sm" Disabled="@(!CanSaveHf || IsBusy)" OnClick="StartDownloadAsync">Download</UiButton>
+                    <UiButton Variant="primary" Size="sm" Disabled="@(!CanSaveHf || IsBusy || (hasQuantPicker && _selectedQuantNames.Count == 0))" OnClick="StartDownloadAsync">Download</UiButton>
                     <UiButton Variant="secondary" Size="sm" OnClick="RequestCancelIfIdle">Cancel</UiButton>
                 </div>
             }
@@ -124,6 +145,20 @@
             else if (status.Status == "done")
             {
                 <div class="mt-2"><Callout Tone="success">Available</Callout></div>
+                @if (status.CandidateFiles.Count > 1)
+                {
+                    <div class="mt-2">
+                        <UiField Label="Which quant is this model?" For="am-candidate"
+                                 Hint="@($"{status.CandidateFiles.Count} quants downloaded to this folder -- add another model to use a different one.")">
+                            <UiSelect Id="am-candidate" Value="@_selectedCandidatePath" ValueChanged="@(v => _selectedCandidatePath = v)" Disabled="IsBusy">
+                                @foreach (var candidate in status.CandidateFiles)
+                                {
+                                    <option value="@candidate.Path">@System.IO.Path.GetFileName(candidate.Path) (@FormatBytes(candidate.Size))</option>
+                                }
+                            </UiSelect>
+                        </UiField>
+                    </div>
+                }
                 <UiButton Variant="primary" Size="sm" Disabled="IsBusy" OnClick="FinishHfDownloadAsync">Add to catalog</UiButton>
             }
             else
@@ -159,10 +194,12 @@
     private string? _inspectError;
     private SupervisorDownloadInspectResult? _inspected;
     private HuggingFaceModelInfo? _hfLookup;
+    private readonly HashSet<string> _selectedQuantNames = new(StringComparer.Ordinal);
 
     private string? _downloadId;
     private SupervisorDownloadStatus? _downloadStatus;
     private CancellationTokenSource? _pollCts;
+    private string _selectedCandidatePath = "";
 
     private bool CanSaveLocal => !string.IsNullOrWhiteSpace(_name) && !string.IsNullOrWhiteSpace(_localPath);
     private bool CanSaveHf => !string.IsNullOrWhiteSpace(_name) && _inspected is not null;
@@ -207,6 +244,7 @@
         _inspectError = null;
         _inspected = null;
         _hfLookup = null;
+        _selectedQuantNames.Clear();
         StateHasChanged();
         try
         {
@@ -223,13 +261,21 @@
         }
     }
 
+    private void ToggleQuant(string name, bool selected)
+    {
+        if (selected) _selectedQuantNames.Add(name);
+        else _selectedQuantNames.Remove(name);
+    }
+
     private void ResetInspection()
     {
         _inspected = null;
         _hfLookup = null;
         _inspectError = null;
+        _selectedQuantNames.Clear();
         _downloadId = null;
         _downloadStatus = null;
+        _selectedCandidatePath = "";
     }
 
     private async Task StartDownloadAsync()
@@ -239,7 +285,10 @@
         _error = null;
         try
         {
-            _downloadId = await SupervisorClient.StartDownloadAsync(Instance.AdminUrl, _repoId.Trim(), _name.Trim());
+            IReadOnlyList<string>? filenames = _inspected!.QuantGroups.Count >= 2
+                ? _inspected.QuantGroups.Where(g => _selectedQuantNames.Contains(g.Name)).SelectMany(g => g.Files).ToList()
+                : null;
+            _downloadId = await SupervisorClient.StartDownloadAsync(Instance.AdminUrl, _repoId.Trim(), _name.Trim(), filenames);
             _pollCts = new CancellationTokenSource();
             _ = PollDownloadAsync(Instance.AdminUrl, _downloadId, _pollCts.Token);
         }
@@ -266,6 +315,8 @@
                 _error = "Lost contact with the download: " + ex.Message;
                 return;
             }
+            if (_downloadStatus.Status == "done" && _downloadStatus.CandidateFiles.Count > 0)
+                _selectedCandidatePath = _downloadStatus.CandidateFiles[0].Path;
             await InvokeAsync(StateHasChanged);
             if (_downloadStatus.Status != "downloading")
                 return;
@@ -302,16 +353,24 @@
         _error = null;
         try
         {
+            // A multi-quant download has no single file that IS "the model" --
+            // the operator picks which downloaded candidate becomes this row's
+            // path; the other quants stay on disk, unregistered, for a later
+            // "Add model" (local path) pointing at the same already-downloaded folder.
+            var candidate = _downloadStatus.CandidateFiles.Count > 1
+                ? _downloadStatus.CandidateFiles.FirstOrDefault(c => c.Path == _selectedCandidatePath) ?? _downloadStatus.CandidateFiles[0]
+                : null;
+
             var model = new Model
             {
                 ServerId = Instance!.ServerId,
                 Name = _name.Trim(),
                 SourceType = "huggingface",
                 RepoId = _repoId.Trim(),
-                Path = _downloadStatus.Path ?? "",
-                SizeBytes = _downloadStatus.SizeBytes,
-                LoadFormat = _downloadStatus.LoadFormat ?? "auto",
-                Config = _downloadStatus.Config is null ? null : System.Text.Json.JsonSerializer.Serialize(_downloadStatus.Config),
+                Path = candidate?.Path ?? _downloadStatus.Path ?? "",
+                SizeBytes = candidate?.Size ?? _downloadStatus.SizeBytes,
+                LoadFormat = candidate is not null ? "gguf" : (_downloadStatus.LoadFormat ?? "auto"),
+                Config = candidate is not null || _downloadStatus.Config is null ? null : System.Text.Json.JsonSerializer.Serialize(_downloadStatus.Config),
                 Status = "available",
             };
             var saved = await Models.CreateAsync(model);

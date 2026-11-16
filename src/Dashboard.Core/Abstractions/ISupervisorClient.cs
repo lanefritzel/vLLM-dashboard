@@ -58,8 +58,13 @@ public interface ISupervisorClient
 
     /// <summary>Starts a download into <c>&lt;models_dir&gt;/&lt;slug&gt;</c>.
     /// Throws <see cref="SupervisorApiException"/> with StatusCode 409 if one is
-    /// already in flight on this instance's supervisor (one download at a time, doc 6).</summary>
-    Task<string> StartDownloadAsync(string adminUrl, string repoId, string slug, string? filename = null, CancellationToken ct = default);
+    /// already in flight on this instance's supervisor (one download at a time, doc 6).
+    /// <paramref name="filenames"/> null downloads the whole repo (unchanged default);
+    /// one entry replays the original "single gguf file" behavior; more than one is a
+    /// multi-quant selection (doc: quants grouped at Inspect time) -- the supervisor
+    /// fetches only those files and reports one candidate path per quant via
+    /// <see cref="Dashboard.Core.Supervisor.SupervisorDownloadStatus.CandidateFiles"/>.</summary>
+    Task<string> StartDownloadAsync(string adminUrl, string repoId, string slug, IReadOnlyList<string>? filenames = null, CancellationToken ct = default);
 
     Task<SupervisorDownloadStatus> GetDownloadAsync(string adminUrl, string downloadId, CancellationToken ct = default);
 
