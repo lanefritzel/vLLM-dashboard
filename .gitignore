@@ -17,3 +17,6 @@ plan/screenshots/
 
 # Personal Docker Hub publish script -- local-only, not for the public repo.
 deploy-dockerhub.sh
+
+# Local Claude Code project instructions -- not for the public repo.
+CLAUDE.md
