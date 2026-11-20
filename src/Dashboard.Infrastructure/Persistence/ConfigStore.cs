@@ -25,6 +25,7 @@ public sealed class ConfigStore : IConfigStore
     public bool RollupsEnabled => Get("rollups.enabled", "true") == "true";
     public int UiUpdateRateMs => GetInt("ui.updateRateMs", 1000);
     public int DefaultHistoryWindowMinutes => GetInt("default.history.windowMinutes", 60);
+    public bool RequireApiKey => Get("security.requireApiKey", "false") == "true";
 
     public int GetInt(string key, int defaultValue)
     {

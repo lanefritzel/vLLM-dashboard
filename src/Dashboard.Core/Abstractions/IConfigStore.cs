@@ -12,6 +12,11 @@ public interface IConfigStore
     int UiUpdateRateMs { get; }
     int DefaultHistoryWindowMinutes { get; }
 
+    /// <summary>Whether the inference proxy (<c>/proxy/&lt;slug&gt;/...</c>) requires a
+    /// valid API key. Off by default so an existing install isn't locked out the moment
+    /// it upgrades -- turning it on is a deliberate step once a key has been generated.</summary>
+    bool RequireApiKey { get; }
+
     /// <summary>Raised after any source/model/config change; listeners re-bind.</summary>
     event EventHandler? Changed;
 

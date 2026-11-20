@@ -145,6 +145,7 @@ public class V2SchemaMigrationTests(PostgresFixture postgres)
         // "fresh install, nothing to do yet".
         var services = new ServiceCollection();
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
+        services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IApiKeyService, Dashboard.Infrastructure.Persistence.V2.ApiKeyService>();
         using var provider = services.BuildServiceProvider();
         var logger = new CapturingLogger<Dashboard.Web.DbInitializerHostedService>();
         var hosted = new Dashboard.Web.DbInitializerHostedService(

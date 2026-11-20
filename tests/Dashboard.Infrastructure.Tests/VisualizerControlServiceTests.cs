@@ -80,6 +80,7 @@ public sealed class VisualizerControlServiceTests : IAsyncLifetime
         public bool RollupsEnabled => true;
         public int UiUpdateRateMs => 1000;
         public int DefaultHistoryWindowMinutes => 60;
+        public bool RequireApiKey => false;
 #pragma warning disable CS0067
         public event EventHandler? Changed;
 #pragma warning restore CS0067

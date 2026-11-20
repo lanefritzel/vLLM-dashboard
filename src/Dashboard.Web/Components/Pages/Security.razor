@@ -1,0 +1,128 @@
+@page "/security"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Dashboard.Core.Abstractions
+@using Dashboard.Infrastructure.Persistence.V2
+@inject IConfigStore Config
+@inject IApiKeyService ApiKeys
+@inject Dashboard.Web.Components.Shared.IToastService Toast
+
+<PageTitle>Security — vLLM Dashboard</PageTitle>
+
+<h1 class="page-title">Security</h1>
+
+@if (_loading)
+{
+    <p class="text-muted">Loading…</p>
+}
+else
+{
+    <div style="margin-bottom: var(--ui-space-3);">
+        <UiPanel Title="Proxy API key"
+                 Description="Controls the inference endpoint (/proxy/<slug>/...) that clients like OpenWebUI point at -- not the dashboard's own login, which is separate and always required.">
+            <div style="margin-bottom: var(--ui-space-3);">
+                <UiToggle Value="_requireApiKey" ValueChanged="OnToggleChangedAsync"
+                          Disabled="@(!_hasActiveKey)" DisabledHint="Generate a key below first.">
+                    Require an API key on the inference proxy
+                </UiToggle>
+            </div>
+
+            @if (_newRawKey is not null)
+            {
+                <Callout Tone="warning" Title="Copy this key now">
+                    <p>It will not be shown again.</p>
+                    <div style="display:flex; align-items:center; gap: var(--ui-space-2);">
+                        <code>@_newRawKey</code>
+                        <CopyButton Text="@_newRawKey" />
+                    </div>
+                </Callout>
+            }
+
+            @if (_keys.Count == 0)
+            {
+                <EmptyState Title="No API key yet" Description="Generate one before turning on enforcement." />
+            }
+            else
+            {
+                <TableShell Caption="API keys" ColumnCount="4" IsEmpty="false">
+                    <Header>
+                        <th scope="col">Label</th>
+                        <th scope="col">Created</th>
+                        <th scope="col">Last used</th>
+                        <th scope="col"></th>
+                    </Header>
+                    <ChildContent>
+                        @foreach (var key in _keys)
+                        {
+                            <tr>
+                                <td>@key.Label</td>
+                                <td>@key.CreatedAt.ToLocalTime().ToString("g")</td>
+                                <td>@(key.LastUsedAt is { } used ? used.ToLocalTime().ToString("g") : "never")</td>
+                                <td>
+                                    <span class="ui-row-actions">
+                                        <UiButton Variant="danger" Size="sm" OnClick="@(() => RevokeAsync(key.Id))">Revoke</UiButton>
+                                    </span>
+                                </td>
+                            </tr>
+                        }
+                    </ChildContent>
+                </TableShell>
+            }
+
+            <div style="margin-top: var(--ui-space-3);">
+                <UiButton Variant="secondary" Size="sm" OnClick="GenerateAsync">+ Generate new key</UiButton>
+            </div>
+        </UiPanel>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _requireApiKey;
+    private bool _hasActiveKey;
+    private List<ApiKey> _keys = new();
+    private string? _newRawKey;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _loading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _requireApiKey = Config.RequireApiKey;
+        _keys = (await ApiKeys.ListAsync()).ToList();
+        _hasActiveKey = _keys.Count > 0;
+    }
+
+    private async Task OnToggleChangedAsync(bool value)
+    {
+        if (value && !_hasActiveKey)
+        {
+            Toast.Show("Generate an API key before turning this on.", "danger");
+            return;
+        }
+        await Config.SetAsync("security.requireApiKey", value ? "true" : "false");
+        _requireApiKey = value;
+    }
+
+    private async Task GenerateAsync()
+    {
+        var (_, raw) = await ApiKeys.GenerateAsync("default");
+        _newRawKey = raw;
+        await LoadAsync();
+    }
+
+    private async Task RevokeAsync(int id)
+    {
+        await ApiKeys.RevokeAsync(id);
+        // Enforcement can't stay on with no active key left -- it would lock
+        // everyone out, including the owner, with no page left to turn it back off.
+        if (!(await ApiKeys.ListAsync()).Any() && _requireApiKey)
+        {
+            await Config.SetAsync("security.requireApiKey", "false");
+        }
+        await LoadAsync();
+    }
+}

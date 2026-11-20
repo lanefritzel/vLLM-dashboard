@@ -25,6 +25,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
     public DbSet<V2.Recipe> RecipesV2 => Set<V2.Recipe>();
     public DbSet<V2.Deployment> DeploymentsV2 => Set<V2.Deployment>();
     public DbSet<V2.DeploymentEvent> DeploymentEventsV2 => Set<V2.DeploymentEvent>();
+    public DbSet<V2.ApiKey> ApiKeysV2 => Set<V2.ApiKey>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -318,6 +319,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
                 .WithMany()
                 .HasForeignKey(e => e.DeploymentId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<V2.ApiKey>(entity =>
+        {
+            entity.ToTable("api_keys");
+            entity.HasKey(k => k.Id);
+            entity.Property(k => k.Id).UseIdentityAlwaysColumn();
+            entity.Property(k => k.KeyHash).IsRequired();
+            entity.HasIndex(k => k.KeyHash).IsUnique();
+            entity.Property(k => k.Label).IsRequired();
+            entity.Property(k => k.CreatedAt).HasDefaultValueSql("now()");
         });
     }
 }

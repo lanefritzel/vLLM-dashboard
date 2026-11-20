@@ -149,6 +149,7 @@ builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IInstanceS
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IModelService, Dashboard.Infrastructure.Persistence.V2.ModelService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IRecipeService, Dashboard.Infrastructure.Persistence.V2.RecipeService>();
 builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IDeploymentService, Dashboard.Infrastructure.Persistence.V2.DeploymentService>();
+builder.Services.AddSingleton<Dashboard.Infrastructure.Persistence.V2.IApiKeyService, Dashboard.Infrastructure.Persistence.V2.ApiKeyService>();
 
 // Swap orchestration (P10a).
 builder.Services.AddSingleton<Dashboard.Core.Abstractions.ISupervisorClient, Dashboard.Infrastructure.Supervisor.SupervisorClient>();
@@ -250,12 +251,38 @@ app.MapAdditionalIdentityEndpoints();
 // endpoint for API clients, not a dashboard page, and they can't do the
 // interactive cookie login the rest of this app uses. The route segment is
 // always the instance's proxy_slug (invariant: /proxy/<slug>/v1 never changes).
-app.Map("/proxy/{slug}/{**path}", async (HttpContext context, string slug, string? path, Dashboard.Infrastructure.Proxy.IModelProxyService proxy) =>
+// Gated by an API key instead, but only when Security settings has that turned on
+// (off by default, so an existing install isn't locked out on upgrade) -- see
+// IConfigStore.RequireApiKey / IApiKeyService.
+app.Map("/proxy/{slug}/{**path}", async (
+    HttpContext context, string slug, string? path,
+    Dashboard.Infrastructure.Proxy.IModelProxyService proxy,
+    Dashboard.Core.Abstractions.IConfigStore config,
+    Dashboard.Infrastructure.Persistence.V2.IApiKeyService apiKeys) =>
 {
+    if (config.RequireApiKey)
+    {
+        var rawKey = ExtractBearerToken(context.Request.Headers.Authorization);
+        if (await apiKeys.ValidateAsync(rawKey, context.RequestAborted) is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+    }
     await proxy.HandleAsync(context, slug, path ?? "");
 });
 
 app.Run();
+
+// Standard OpenAI-client convention (Authorization: Bearer <key>) rather than a
+// custom header -- every OpenAI-compatible client already has an "API key" field
+// that sends exactly this, so pointing one at /proxy needs no special config.
+static string? ExtractBearerToken(Microsoft.Extensions.Primitives.StringValues authHeader)
+{
+    var value = authHeader.ToString();
+    const string prefix = "Bearer ";
+    return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? value[prefix.Length..] : null;
+}
 
 /// <summary>Standard ASP.NET Core testing marker -- lets the P13 E2E harness
 /// locate this project's own built assembly (<c>typeof(Program).Assembly.Location</c>)

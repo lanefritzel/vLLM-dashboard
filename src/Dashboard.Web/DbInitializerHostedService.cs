@@ -25,6 +25,7 @@ public sealed class DbInitializerHostedService(
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 await db.Database.MigrateAsync(cancellationToken);
                 await SeedConfigDefaultsAsync(db, cancellationToken);
+                await SeedInitialApiKeyAsync(scope.ServiceProvider, cancellationToken);
                 logger.LogInformation("Database initialized (migrations applied, config seeded).");
                 return;
             }
@@ -52,6 +53,7 @@ public sealed class DbInitializerHostedService(
             ["rollups.enabled"] = "true",
             ["ui.updateRateMs"] = "1000",
             ["default.history.windowMinutes"] = "60",
+            ["security.requireApiKey"] = "false",
         };
 
         var existing = await db.Configs.ToDictionaryAsync(c => c.Key, ct);
@@ -63,6 +65,25 @@ public sealed class DbInitializerHostedService(
 
         if (db.ChangeTracker.HasChanges())
             await db.SaveChangesAsync(ct);
+    }
+
+    // Printed to stdout (docker logs), never the DB-backed AppLogs/Logs page -- that
+    // page is a durable, UI-visible history, and a raw API key has no business sitting
+    // there indefinitely (worse once this is multi-user and other accounts can see it).
+    private static async Task SeedInitialApiKeyAsync(IServiceProvider services, CancellationToken ct)
+    {
+        var apiKeys = services.GetRequiredService<Dashboard.Infrastructure.Persistence.V2.IApiKeyService>();
+        if (await apiKeys.AnyActiveAsync(ct))
+            return;
+
+        var (_, rawKey) = await apiKeys.GenerateAsync("default", userId: null, ct);
+        Console.WriteLine("================================================================");
+        Console.WriteLine(" Generated an API key for the inference proxy (/proxy/<slug>/...).");
+        Console.WriteLine(" Copy it now -- it will not be shown again:");
+        Console.WriteLine($"   {rawKey}");
+        Console.WriteLine(" Enforcement is OFF by default. Turn it on from Security once");
+        Console.WriteLine(" you've saved this key somewhere safe.");
+        Console.WriteLine("================================================================");
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
