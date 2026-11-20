@@ -72,6 +72,17 @@ public class ApiKeyServiceTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task RevokeAsync_ReturnsWhetherAnyActiveKeyRemains()
+    {
+        var service = new ApiKeyService(await NewMigratedScopeFactoryAsync());
+        var (first, _) = await service.GenerateAsync("first");
+        var (second, _) = await service.GenerateAsync("second");
+
+        Assert.True(await service.RevokeAsync(first.Id));
+        Assert.False(await service.RevokeAsync(second.Id));
+    }
+
+    [Fact]
     public async Task ListAsync_OmitsRevokedKeys()
     {
         var service = new ApiKeyService(await NewMigratedScopeFactoryAsync());

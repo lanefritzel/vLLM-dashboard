@@ -116,10 +116,10 @@ else
 
     private async Task RevokeAsync(int id)
     {
-        await ApiKeys.RevokeAsync(id);
+        var anyActiveRemain = await ApiKeys.RevokeAsync(id);
         // Enforcement can't stay on with no active key left -- it would lock
         // everyone out, including the owner, with no page left to turn it back off.
-        if (!(await ApiKeys.ListAsync()).Any() && _requireApiKey)
+        if (!anyActiveRemain && _requireApiKey)
         {
             await Config.SetAsync("security.requireApiKey", "false");
         }

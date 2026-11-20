@@ -19,7 +19,8 @@ public interface IApiKeyService
     /// is a write, not just a lookup -- callers on the hot request path should still
     /// treat it as cheap (one indexed lookup, one single-row update).</summary>
     Task<ApiKey?> ValidateAsync(string? rawKey, CancellationToken ct = default);
-    Task RevokeAsync(int id, CancellationToken ct = default);
+    /// <summary>Returns whether any active key remains after the revoke.</summary>
+    Task<bool> RevokeAsync(int id, CancellationToken ct = default);
 }
 
 /// <summary>Credentials for the machine-to-machine inference proxy (P-API-1). Keys are
@@ -90,15 +91,17 @@ public sealed class ApiKeyService : IApiKeyService
         return record;
     }
 
-    public async Task RevokeAsync(int id, CancellationToken ct = default)
+    public async Task<bool> RevokeAsync(int id, CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var record = await db.ApiKeysV2.FirstOrDefaultAsync(k => k.Id == id, ct);
-        if (record is null)
-            return;
-        record.RevokedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
+        if (record is not null)
+        {
+            record.RevokedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
+        return await db.ApiKeysV2.AnyAsync(k => k.RevokedAt == null, ct);
     }
 
     private static string Hash(string raw) =>
